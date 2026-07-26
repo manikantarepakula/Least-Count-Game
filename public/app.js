@@ -81,6 +81,9 @@
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
     document.getElementById(id).classList.add('active');
+    // The game screen locks the page to one viewport (no drag/scroll needed);
+    // other screens (lobby, overlays) are allowed to scroll normally.
+    document.body.classList.toggle('game-active', id === 'screen-game');
   }
 
   function saveSession(roomCode, playerId) {
@@ -227,10 +230,11 @@
 
       const count = game && game.handCounts ? game.handCounts[p.playerId] : undefined;
       const score = game && game.scores ? (game.scores[p.playerId] ?? 0) : 0;
-      const showBack = p.playerId !== myPlayerId && count !== undefined;
 
+      // Every seat (opponent or you) renders the exact same single chip:
+      // name on top, "N cards · M pts" below. No extra icon on top of it,
+      // so every seat looks identical regardless of position on the table.
       seatEl.innerHTML =
-        (showBack ? '<div class="mini-card-back"></div>' : '') +
         '<div class="seat-chip">' +
         `<div class="seat-name">${escapeHtml(p.name)}${p.playerId === myPlayerId ? ' (You)' : ''}</div>` +
         `<div class="seat-meta">${count !== undefined ? count + ' cards · ' : ''}${score} pts</div>` +

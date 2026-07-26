@@ -7,6 +7,18 @@ body {
   min-height: 100vh;
 }
 
+/* On mobile, 100vh can mean the LARGER viewport (as if the address bar were
+   hidden), taller than what's actually visible. That leftover min-height
+   was clamping the game screen upward and forcing a page-level scrollbar
+   even after switching it to 100dvh. Locking body itself to the current
+   dynamic viewport while the game screen is active removes that scroll. */
+body.game-active {
+  min-height: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
 .screen { display: none; min-height: 100vh; padding: 16px; }
 .screen.active { display: block; }
 
@@ -14,6 +26,7 @@ body {
 #screen-game.screen.active {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   height: 100vh;
   height: 100dvh;
   padding: 6px 8px;
