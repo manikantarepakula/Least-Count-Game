@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="te">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Least Count</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="screen-landing" class="screen active">
+  <div class="card-panel">
+    <h1>🃏 Least Count</h1>
+    <p class="subtitle">Family &amp; Friends Card Game</p>
+
+    <label>మీ పేరు / Your name</label>
+    <input id="input-name" type="text" maxlength="20" placeholder="ఉదా: Manikanta" />
+
+    <div class="row">
+      <button id="btn-create" class="primary">కొత్త రూమ్ / Create Room</button>
+    </div>
+
+    <div class="divider">లేదా / OR</div>
+
+    <label>రూమ్ కోడ్ / Room Code</label>
+    <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
+    <div class="row">
+      <button id="btn-join" class="secondary">జాయిన్ / Join Room</button>
+    </div>
+
+    <p id="landing-error" class="error"></p>
+  </div>
+</div>
+
+<div id="screen-lobby" class="screen">
+  <div class="card-panel">
+    <h2>రూమ్ / Room</h2>
+    <div class="room-code-display" id="lobby-roomcode">----</div>
+    <p class="hint">ఈ కోడ్ మీ family/friends కి పంపండి</p>
+
+    <h3>ఆటగాళ్లు / Players</h3>
+    <ul id="lobby-players" class="player-list"></ul>
+
+    <button id="btn-start" class="primary" disabled>గేమ్ మొదలుపెట్టు / Start Game</button>
+    <p id="lobby-hint" class="hint"></p>
+    <p id="lobby-error" class="error"></p>
+  </div>
+</div>
+
+<div id="screen-game" class="screen">
+  <div class="game-top">
+    <div id="round-info">Round -</div>
+    <div id="turn-info">-</div>
+    <button id="btn-scores" class="tiny">Scores</button>
+  </div>
+
+  <div id="opponents-strip" class="opponents-strip"></div>
+
+  <div class="table-area">
+    <div class="pile-group">
+      <div class="pile-label">Stock (<span id="stock-count">0</span>)</div>
+      <div class="card back" id="stock-pile"></div>
+    </div>
+    <div class="pile-group">
+      <div class="pile-label">Open Card</div>
+      <div id="open-card-slot"></div>
+    </div>
+    <div class="pile-group">
+      <div class="pile-label">Round Joker</div>
+      <div id="joker-indicator">-</div>
+    </div>
+  </div>
+
+  <div id="chain-banner" class="chain-banner hidden">
+    🔥 +2 Chain! ఒక 2 వేయండి లేదా పెనాల్టీ తీసుకోండి
+    <button id="btn-take-penalty" class="danger">Take Penalty (<span id="penalty-count">0</span>)</button>
+  </div>
+
+  <div class="hand-header">
+    <span>మీ కార్డులు (Value: <b id="hand-value">0</b>)</span>
+  </div>
+  <div id="hand" class="hand"></div>
+
+  <div class="action-bar">
+    <button id="btn-discard" class="primary" disabled>Discard Selected</button>
+    <button id="btn-declare" class="declare" disabled>Least Count!</button>
+  </div>
+  <p id="game-error" class="error"></p>
+</div>
+
+<div id="overlay-round-result" class="overlay hidden">
+  <div class="card-panel">
+    <h2 id="round-result-title">Round Result</h2>
+    <div id="round-result-body"></div>
+    <button id="btn-next-round" class="primary hidden">Next Round</button>
+    <p id="round-result-hint" class="hint"></p>
+  </div>
+</div>
+
+<div id="overlay-scores" class="overlay hidden">
+  <div class="card-panel">
+    <h2>Scores</h2>
+    <div id="scores-body"></div>
+    <button id="btn-close-scores" class="secondary">Close</button>
+  </div>
+</div>
+
+<div id="overlay-gameover" class="overlay hidden">
+  <div class="card-panel">
+    <h1 id="gameover-title">🏆</h1>
+    <div id="gameover-body"></div>
+    <button id="btn-new-game" class="primary hidden">Play Again (same room)</button>
+    <p id="gameover-hint" class="hint"></p>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

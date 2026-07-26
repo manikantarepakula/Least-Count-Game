@@ -1,0 +1,127 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans Telugu', sans-serif;
+  background: radial-gradient(circle at top, #1e5631, #0b2e1a);
+  color: #f0f0f0;
+  min-height: 100vh;
+}
+
+.screen { display: none; min-height: 100vh; padding: 16px; }
+.screen.active { display: block; }
+
+.card-panel {
+  background: #ffffff;
+  color: #1a1a1a;
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 420px;
+  margin: 24px auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+
+h1 { text-align: center; margin: 0 0 4px; font-size: 28px; }
+h2 { margin-top: 0; }
+.subtitle { text-align: center; color: #666; margin-top: 0; }
+
+label { display: block; font-size: 13px; margin: 14px 0 4px; color: #444; }
+input[type=text] {
+  width: 100%; padding: 12px; font-size: 18px; border-radius: 10px;
+  border: 1px solid #ccc; outline: none;
+}
+input[type=text]:focus { border-color: #1e5631; }
+
+.row { margin-top: 16px; }
+button {
+  width: 100%; padding: 14px; font-size: 16px; border-radius: 10px;
+  border: none; cursor: pointer; font-weight: 600;
+}
+button.primary { background: #1e5631; color: white; }
+button.secondary { background: #e8e8e8; color: #222; }
+button.danger { background: #c0392b; color: white; margin-top: 8px; }
+button.declare { background: #d4a017; color: #1a1a1a; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.tiny { width: auto; padding: 6px 12px; font-size: 12px; }
+
+.divider { text-align: center; margin: 20px 0; color: #999; font-size: 12px; }
+.error { color: #c0392b; font-size: 13px; min-height: 16px; }
+.hint { color: #777; font-size: 12px; text-align: center; }
+
+.room-code-display {
+  font-size: 40px; letter-spacing: 8px; text-align: center; font-weight: 800;
+  background: #f0f0f0; border-radius: 12px; padding: 12px; margin: 8px 0;
+}
+
+.player-list { list-style: none; padding: 0; }
+.player-list li {
+  padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between;
+}
+.player-list .status { font-size: 11px; color: #999; }
+.player-list .host-tag { color: #1e5631; font-weight: 700; font-size: 11px; }
+
+/* ---------------- Game screen ---------------- */
+.game-top {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 14px; padding: 6px 4px;
+}
+.opponents-strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px; }
+.opponent-chip {
+  background: rgba(255,255,255,0.12); border-radius: 10px; padding: 6px 10px;
+  font-size: 12px; min-width: 72px; text-align: center; flex-shrink: 0;
+}
+.opponent-chip.active { background: #d4a017; color: #1a1a1a; font-weight: 700; }
+.opponent-chip.eliminated { opacity: 0.4; text-decoration: line-through; }
+
+.table-area {
+  display: flex; justify-content: space-around; align-items: center;
+  margin: 16px 0; gap: 8px;
+}
+.pile-group { text-align: center; }
+.pile-label { font-size: 11px; color: #cde; margin-bottom: 4px; }
+
+.card {
+  width: 56px; height: 80px; border-radius: 8px; background: white; color: #111;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 18px; position: relative; user-select: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: 2px solid transparent;
+}
+.card.red { color: #c0392b; }
+.card.black { color: #1a1a1a; }
+.card.joker { color: #7d3cff; font-size: 12px; }
+.card.back {
+  background: repeating-linear-gradient(45deg, #234, #234 6px, #1a2f42 6px, #1a2f42 12px);
+  border: 2px solid #0b1a26;
+}
+.card.selected { border-color: #d4a017; transform: translateY(-8px); }
+.card.selectable { cursor: pointer; }
+
+#joker-indicator {
+  background: #7d3cff22; border: 1px solid #7d3cff; border-radius: 8px;
+  padding: 8px 12px; font-weight: 700; font-size: 18px; min-width: 40px;
+}
+
+.chain-banner {
+  background: #c0392b22; border: 1px solid #c0392b; border-radius: 10px;
+  padding: 10px; text-align: center; font-size: 13px; margin-bottom: 8px;
+}
+.chain-banner.hidden { display: none; }
+
+.hand-header { font-size: 13px; margin: 8px 4px; }
+.hand {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 4px;
+  min-height: 90px;
+}
+
+.action-bar { display: flex; gap: 8px; padding: 8px 4px; }
+
+.overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center; z-index: 10;
+  padding: 16px;
+}
+.overlay.hidden { display: none; }
+
+.hidden { display: none !important; }
+
+.result-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 14px; }
+.result-row.winner-row { font-weight: 700; color: #1e5631; }
