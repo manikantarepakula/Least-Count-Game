@@ -50,13 +50,80 @@
       notes.forEach((n) => tone(n[0], n[1], { delay: n[2] || 0, type: n[3], gain: n[4] }));
     }
 
+    // A short burst of filtered white noise -- the actual building block of
+    // every card sound below. A pure tone can't sound like a card no matter
+    // how it's tuned; a snap/flick/riffle is fundamentally a noise transient,
+    // not a pitch, so this generates real noise and shapes it with a filter
+    // sweep + fast envelope instead of an oscillator.
+    function noiseBurst(opts) {
+      opts = opts || {};
+      if (muted) return;
+      const c = ensureCtx();
+      if (!c) return;
+      const duration = opts.duration || 0.08;
+      const t0 = c.currentTime + (opts.delay || 0);
+
+      const bufferSize = Math.max(1, Math.floor(c.sampleRate * duration));
+      const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+      const src = c.createBufferSource();
+      src.buffer = buffer;
+
+      const filter = c.createBiquadFilter();
+      filter.type = opts.filterType || 'bandpass';
+      filter.frequency.setValueAtTime(opts.freqStart || 3000, t0);
+      if (opts.freqEnd !== undefined) {
+        filter.frequency.exponentialRampToValueAtTime(Math.max(60, opts.freqEnd), t0 + duration);
+      }
+      filter.Q.value = opts.q || 1;
+
+      const gain = c.createGain();
+      const peak = opts.gain || 0.25;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.linearRampToValueAtTime(peak, t0 + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+
+      src.connect(filter).connect(gain).connect(c.destination);
+      src.start(t0);
+      src.stop(t0 + duration + 0.02);
+    }
+
+    // One crisp card hitting the table: a sharp high-frequency "flick" with
+    // a touch of low-end "thud" underneath it for body.
+    function cardSnap(opts) {
+      opts = opts || {};
+      const gain = opts.gain || 0.3;
+      const delay = opts.delay || 0;
+      noiseBurst({ duration: 0.05, filterType: 'bandpass', freqStart: 4500, freqEnd: 1200, q: 1.2, gain, delay });
+      noiseBurst({ duration: 0.04, filterType: 'lowpass', freqStart: 350, gain: gain * 0.5, delay });
+    }
+
+    // Several overlapping snaps in quick succession -- a riffle/draw sound
+    // that scales with how many cards are actually moving, so drawing 1
+    // penalty card sounds like a single flick and drawing 6 (a big +2 chain
+    // penalty) sounds like a real handful being pulled off the stock.
+    function cardRiffle(count) {
+      count = Math.max(1, count || 1);
+      const n = Math.min(count, 8); // cap the sound even if the draw itself is huge
+      for (let i = 0; i < n; i++) {
+        const delay = (i / n) * (0.1 + n * 0.02) + Math.random() * 0.015;
+        noiseBurst({
+          duration: 0.04, filterType: 'bandpass',
+          freqStart: 3200 + Math.random() * 1400, freqEnd: 1800, q: 1.5,
+          gain: 0.2, delay,
+        });
+      }
+    }
+
     return {
       isMuted: () => muted,
       setMuted(v) { muted = v; localStorage.setItem('leastcount_muted', v ? '1' : '0'); },
       init() { ensureCtx(); },
-      discard() { tone(520, 0.08, { type: 'triangle', gain: 0.12 }); },
-      penaltyDraw() { tone(180, 0.18, { type: 'sawtooth', gain: 0.12 }); },
-      chainAlert() { seq([[300, 0.12, 0, 'square', 0.1], [220, 0.18, 0.1, 'square', 0.1]]); },
+      discard() { cardSnap({ gain: 0.32 }); },
+      penaltyDraw(count) { cardRiffle(count || 1); },
+      chainAlert() { cardSnap({ gain: 0.4 }); seq([[280, 0.14, 0.05, 'square', 0.08]]); },
       yourTurn() { seq([[660, 0.1, 0], [880, 0.14, 0.1]]); },
       declareCorrect() { seq([[523, 0.12, 0], [659, 0.12, 0.1], [784, 0.22, 0.2]]); },
       declareWrong() { seq([[300, 0.2, 0, 'sawtooth'], [220, 0.28, 0.15, 'sawtooth']]); },
@@ -655,7 +722,7 @@
   let drawRevealTimeout = null;
   function showDrawReveal(cards) {
     if (!cards || cards.length === 0) return;
-    Sound.penaltyDraw();
+    Sound.penaltyDraw(cards.length);
     const overlay = document.getElementById('draw-reveal');
     const container = document.getElementById('draw-reveal-cards');
     const label = document.getElementById('draw-reveal-label');
