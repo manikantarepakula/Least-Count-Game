@@ -112,18 +112,44 @@
         noiseBurst({
           duration: 0.04, filterType: 'bandpass',
           freqStart: 3200 + Math.random() * 1400, freqEnd: 1800, q: 1.5,
-          gain: 0.2, delay,
+          gain: 0.28, delay,
         });
       }
+    }
+
+    // A quick spray of tiny, high-passed noise ticks -- the flutter of a
+    // proper riffle shuffle, as opposed to the slower per-card cardRiffle().
+    function shuffleBurst(n, span, opts) {
+      opts = opts || {};
+      for (let i = 0; i < n; i++) {
+        const t = i / n;
+        const jitter = (Math.random() - 0.5) * (span / n) * 0.6;
+        noiseBurst({
+          duration: opts.dur || 0.018,
+          filterType: 'highpass',
+          freqStart: 2000 + Math.random() * (opts.freqSpread || 3000),
+          gain: (opts.gain || 0.2) * (0.7 + 0.3 * Math.sin(t * Math.PI)),
+          delay: t * span + jitter,
+        });
+      }
+    }
+
+    // The stock reshuffle sound -- two staggered, slightly different-pitched
+    // flutter layers, like someone riffling the pile with both hands. Public
+    // event (doesn't reveal any hand), so every player at the table hears it.
+    function cardReshuffle() {
+      shuffleBurst(35, 0.4, { gain: 0.2, dur: 0.016 });
+      shuffleBurst(35, 0.4, { gain: 0.16, dur: 0.016, freqSpread: 2500 });
     }
 
     return {
       isMuted: () => muted,
       setMuted(v) { muted = v; localStorage.setItem('leastcount_muted', v ? '1' : '0'); },
       init() { ensureCtx(); },
-      discard() { cardSnap({ gain: 0.32 }); },
+      discard() { cardSnap({ gain: 0.42 }); },
       penaltyDraw(count) { cardRiffle(count || 1); },
-      chainAlert() { cardSnap({ gain: 0.4 }); seq([[280, 0.14, 0.05, 'square', 0.08]]); },
+      reshuffle() { cardReshuffle(); },
+      chainAlert() { cardSnap({ gain: 0.5 }); seq([[280, 0.14, 0.05, 'square', 0.08]]); },
       yourTurn() { seq([[660, 0.1, 0], [880, 0.14, 0.1]]); },
       declareCorrect() { seq([[523, 0.12, 0], [659, 0.12, 0.1], [784, 0.22, 0.2]]); },
       declareWrong() { seq([[300, 0.2, 0, 'sawtooth'], [220, 0.28, 0.15, 'sawtooth']]); },
@@ -712,6 +738,11 @@
     }
     if (!prev.gameOver && game.gameOver) {
       Sound.win();
+    }
+    // The stock ran out and got reshuffled from the discard pile -- public
+    // event, so play it for every player at the table, not just whoever drew.
+    if (prev.roundNumber === game.roundNumber && game.reshuffleCount > (prev.reshuffleCount || 0)) {
+      Sound.reshuffle();
     }
   }
 

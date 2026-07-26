@@ -187,10 +187,12 @@ check('stock reshuffles from discard pile when empty', () => {
     { id: 'd3', rank: '5', suit: 'D' },
   ];
   g.stock = [];
+  const reshufflesBefore = g.reshuffleCount;
   const drawn = g._drawFromStock(1);
   assert.strictEqual(drawn.length, 1);
   assert.strictEqual(g.discardPile.length, 1, 'only the top open card remains in discard pile');
   assert.strictEqual(g.discardPile[0].id, 'd3');
+  assert.strictEqual(g.reshuffleCount, reshufflesBefore + 1, 'reshuffleCount should increment so clients can play a sound for it');
 });
 
 // 8. Declare: correct case

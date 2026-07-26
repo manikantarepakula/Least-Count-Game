@@ -47,6 +47,70 @@ body.game-active {
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
 }
 
+/* ---- Landing / lobby "tabletop hero" screens ---- */
+/* Cards fanned out on a felt circle at the top, fading straight into the
+   page's own dark green background, with the form sitting directly on it
+   (no white card-panel here -- these two screens use their own dark theme). */
+#screen-landing.screen.active, #screen-lobby.screen.active { padding: 0; }
+
+.hero-landing { position: relative; height: 210px; overflow: hidden; }
+.hero-landing-sm { height: 150px; }
+.hero-felt {
+  position: absolute; top: -150px; left: 50%; transform: translateX(-50%);
+  width: 420px; height: 420px; border-radius: 50%;
+  background: radial-gradient(circle, #1f6b3a, #0d3319 70%);
+}
+.hero-card {
+  position: absolute; top: 46px; left: 50%;
+  width: 52px; height: 74px; border-radius: 6px; background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 19px;
+  box-shadow: 0 6px 14px rgba(0,0,0,0.4);
+}
+.hero-card span { margin-left: 3px; }
+.hero-card-1 { transform: translate(-84%, 0) rotate(-10deg); color: #c0392b; }
+.hero-card-2 { transform: translate(-16%, 6px) rotate(7deg); color: #1a1a1a; }
+.hero-card-3 { transform: translate(46%, 2px) rotate(-23deg); color: #c0392b; }
+.hero-fade {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(11,46,26,0) 0%, rgba(11,46,26,0.92) 55%, #0b2e1a 78%);
+}
+.hero-content {
+  position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; padding: 0 16px;
+}
+.hero-content h1 { color: #fff; font-size: 27px; font-weight: 700; margin: 0; }
+.hero-subtitle { color: #9fd8b8; font-size: 12px; margin: 4px 0 0; }
+
+.landing-form { max-width: 420px; margin: -6px auto 24px; padding: 0 24px 24px; }
+.landing-form label { color: #9fd8b8; }
+.landing-form input[type=text] {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
+}
+.landing-form input[type=text]::placeholder { color: rgba(255,255,255,0.4); }
+.landing-form input[type=text]:focus { border-color: #d4a017; }
+.landing-form button.primary { background: #d4a017; color: #1a1a1a; }
+.landing-form button.secondary {
+  background: transparent; border: 1.5px solid #d4a017; color: #d4a017;
+}
+.landing-form .divider { color: #6ba889; }
+.landing-form .hint { color: #9fd8b8; }
+.landing-form .error { color: #ff8a80; }
+.landing-form h3 {
+  color: #d4a017; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+  margin: 20px 0 8px;
+}
+.landing-form .room-code-label {
+  color: #9fd8b8; font-size: 11px; text-align: center; text-transform: uppercase; letter-spacing: 1px;
+}
+.landing-form .room-code-display {
+  background: transparent; color: #ffcb6b; font-size: 38px; letter-spacing: 8px;
+  box-shadow: none; text-shadow: 0 2px 10px rgba(0,0,0,0.4); padding: 4px 0;
+}
+.landing-form .player-list li { border-bottom: 1px solid rgba(255,255,255,0.12); }
+.landing-form .player-list .host-tag { color: #ffcb6b; }
+.landing-form .player-list .status { color: #6ba889; }
+.landing-form .leave-btn { border-color: #c0392b; color: #e0736a; }
+
 h1 { text-align: center; margin: 0 0 4px; font-size: 28px; }
 h2 { margin-top: 0; }
 .subtitle { text-align: center; color: #666; margin-top: 0; }

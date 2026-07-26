@@ -89,6 +89,11 @@ class LeastCountGame {
     // so the server can privately reveal it to them. Cleared/reset on every
     // playTurn()/_playDuring2Chain() call.
     this.lastDraw = null;
+    // Increments every time the discard pile gets reshuffled back into the
+    // stock. It's public (doesn't reveal anyone's hand), so every client can
+    // compare this against their last-seen value and play a reshuffle sound
+    // whenever it changes.
+    this.reshuffleCount = 0;
   }
 
   activePlayers() {
@@ -229,6 +234,7 @@ class LeastCountGame {
     const rest = this.discardPile.slice(0, -1);
     this.stock = shuffle(rest);
     this.discardPile = [top];
+    this.reshuffleCount += 1;
     this.log.push({ type: 'reshuffle', round: this.roundNumber });
   }
 
@@ -416,6 +422,7 @@ class LeastCountGame {
       roundJokerRank: this.roundJokerRank,
       chainCount: this.chainCount,
       stockCount: this.stock ? this.stock.length : 0,
+      reshuffleCount: this.reshuffleCount,
       scores: { ...this.scores },
       eliminated: [...this.eliminated],
       quit: [...this.quit],
