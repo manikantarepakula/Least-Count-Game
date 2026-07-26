@@ -202,6 +202,13 @@ class LeastCountGame {
     return this.discardPile[this.discardPile.length - 1].rank;
   }
 
+  // True when the open card is a Joker: either a printed Joker, or a card of
+  // this round's randomly-selected wild rank.
+  _openIsJoker() {
+    const r = this._openRank();
+    return r === 'JOKER' || (this.roundJokerRank !== null && r === this.roundJokerRank);
+  }
+
   _drawFromStock(count) {
     const drawn = [];
     for (let i = 0; i < count; i++) {
@@ -252,11 +259,19 @@ class LeastCountGame {
 
     const openRank = this._openRank();
     const matchesOpen = rank === openRank;
+    const openIsJoker = this._openIsJoker();
+
+    // Open card is a Joker (printed, or this round's wild rank): free pass,
+    // any ONE card can be discarded with no penalty draw.
+    if (openIsJoker && !matchesOpen && discarded.length > 1) {
+      this.hands[playerId].push(...discarded);
+      throw new Error('Open card is a Joker: you may discard only one card');
+    }
 
     for (const c of discarded) this.discardPile.push(c);
 
     let penaltyDrawn = [];
-    if (!matchesOpen) {
+    if (!matchesOpen && !openIsJoker) {
       penaltyDrawn = this._drawFromStock(1);
       this.hands[playerId].push(...penaltyDrawn);
       this.lastDraw = { playerId, cards: penaltyDrawn };
@@ -337,6 +352,12 @@ class LeastCountGame {
     this._assertTurn(playerId);
     if (this.chainCount > 0) {
       throw new Error('Cannot declare while a +2 challenge is pending against you');
+    }
+    // Even after a +2 chain resets (someone accepted the penalty instead of
+    // playing a 2), the open card itself is still a 2 until someone plays a
+    // non-2 discard on top of it. Declaring is blocked for that whole time.
+    if (this._openRank() === '2') {
+      throw new Error('Cannot declare Least Count while the open card is a 2');
     }
     const myValue = handValue(this.hands[playerId], this.roundJokerRank);
     if (myValue > DECLARE_MAX_VALUE) {

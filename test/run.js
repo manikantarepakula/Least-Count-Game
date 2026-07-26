@@ -199,6 +199,7 @@ check('correct Least Count declaration scores 0 for declarer, own value for othe
   g.startRound();
   g.roundJokerRank = null; // pin down randomness so rigged hand values below are deterministic
   g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }]; // pin so a random 2 doesn't block declare()
   const declarer = g.currentPlayer();
   g.hands[declarer] = [{ id: 'v1', rank: 'A', suit: 'S' }, { id: 'v2', rank: '2', suit: 'H' }];
   for (const id of g.turnOrder) {
@@ -219,6 +220,7 @@ check('wrong declaration: 75 penalty to declarer, 0 to actual lowest', () => {
   g.startRound();
   g.roundJokerRank = null;
   g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
   const declarer = g.currentPlayer();
   const other = g.turnOrder.find((id) => id !== declarer);
   g.hands[declarer] = [{ id: 'v1', rank: '4', suit: 'S' }]; // value 4, declares
@@ -235,6 +237,7 @@ check('cannot declare with hand value > 5', () => {
   g.startRound();
   g.roundJokerRank = null;
   g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
   const declarer = g.currentPlayer();
   g.hands[declarer] = [{ id: 'v1', rank: 'K', suit: 'S' }]; // value 10
   assert.throws(() => g.declare(declarer), /too high/);
@@ -247,6 +250,7 @@ check('players eliminated at >=200, game ends with 1 winner', () => {
   g.startRound();
   g.roundJokerRank = null;
   g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
   const declarer = g.currentPlayer();
   const others = g.turnOrder.filter((id) => id !== declarer);
   // rig hands: declarer very low, everyone else high value so declarer wins and
@@ -279,6 +283,7 @@ check('removePlayer only works between rounds, and ends the game at 1 player lef
   // force round over via a low declare so we can test the between-rounds path
   g.roundJokerRank = null;
   g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
   const declarer = g.currentPlayer();
   g.hands[declarer] = [{ id: 'v1', rank: 'A', suit: 'S' }];
   for (const id of g.turnOrder) if (id !== declarer) g.hands[id] = [{ id: `o-${id}`, rank: 'K', suit: 'S' }];
@@ -351,6 +356,74 @@ check('autoPickDiscard: during a +2 chain, plays a 2 if held, else accepts penal
 
   g.hands[p] = [{ id: 'x1', rank: '5', suit: 'C' }];
   assert.deepStrictEqual(g.autoPickDiscard(p), []);
+});
+
+// 15. Open card is a Joker -> free pass, no penalty draw for any single card
+check('open card is a printed Joker: any single non-matching discard is free (no penalty draw)', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  const p = g.currentPlayer();
+  g.discardPile = [{ id: 'open1', rank: 'JOKER', suit: null }];
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.hands[p] = [{ id: 'x1', rank: 'K', suit: 'H' }, ...g.hands[p].slice(1)];
+  const before = g.hands[p].length;
+  g.playTurn(p, ['x1']);
+  assert.strictEqual(g.hands[p].length, before - 1, 'discard 1, NO penalty draw since open is a Joker');
+});
+
+check('open card is this round\'s wild rank: any single non-matching discard is free', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  const p = g.currentPlayer();
+  g.discardPile = [{ id: 'open1', rank: '9', suit: 'S' }];
+  g.roundJokerRank = '9'; // 9 is this round's wild rank, and it's the open card
+  g.chainCount = 0;
+  g.hands[p] = [{ id: 'x1', rank: 'K', suit: 'H' }, ...g.hands[p].slice(1)];
+  const before = g.hands[p].length;
+  g.playTurn(p, ['x1']);
+  assert.strictEqual(g.hands[p].length, before - 1, 'discard 1, NO penalty draw since open is the wild rank');
+});
+
+check('open card is a Joker: cannot discard more than one non-matching card at once', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  const p = g.currentPlayer();
+  g.discardPile = [{ id: 'open1', rank: 'JOKER', suit: null }];
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.hands[p] = [{ id: 'x1', rank: 'K', suit: 'H' }, { id: 'x2', rank: 'K', suit: 'D' }, ...g.hands[p].slice(2)];
+  assert.throws(() => g.playTurn(p, ['x1', 'x2']), /only one card/);
+});
+
+// 16. Declaring is blocked whenever the open card is a 2
+check('cannot declare Least Count while the open card is a 2', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.discardPile = [{ id: 'open1', rank: '2', suit: 'S' }];
+  const p = g.currentPlayer();
+  g.hands[p] = [{ id: 'v1', rank: 'A', suit: 'S' }]; // value 1, would otherwise be a valid declare
+  assert.throws(() => g.declare(p), /open card is a 2/);
+});
+
+check('declare stays blocked on open-card-2 even after a +2 penalty resets the chain', () => {
+  const g = new LeastCountGame(['A', 'B', 'C']);
+  g.startRound();
+  const p1 = g.currentPlayer();
+  g.discardPile = [{ id: 'open1', rank: '9', suit: 'S' }];
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.hands[p1] = [{ id: 't2a', rank: '2', suit: 'H' }, ...g.hands[p1].slice(1)];
+  g.playTurn(p1, ['t2a']); // chainCount=1, open card is now '2'
+  const p2 = g.currentPlayer();
+  g.playTurn(p2, []); // p2 takes penalty, chain resets to 0, open card still '2'
+  assert.strictEqual(g.chainCount, 0);
+  assert.strictEqual(g._openRank(), '2');
+  const p3 = g.currentPlayer();
+  g.hands[p3] = [{ id: 'v1', rank: 'A', suit: 'S' }];
+  assert.throws(() => g.declare(p3), /open card is a 2/);
 });
 
 console.log(`\n${passed} test(s) passed.`);

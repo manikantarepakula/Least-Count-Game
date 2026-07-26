@@ -177,6 +177,29 @@
     return hand.slice().sort((a, b) => RANK_ORDER.indexOf(a.rank) - RANK_ORDER.indexOf(b.rank));
   }
 
+  // Groups same-rank cards into a single tile with a count badge, so a hand
+  // of e.g. four 9s only takes up one card-slot of screen space. Rank '2' is
+  // always kept as separate individual tiles since the +2 chain rule needs
+  // playing exactly one 2 at a time.
+  function groupHand(hand) {
+    const groups = [];
+    const byRank = new Map();
+    hand.forEach((card) => {
+      if (card.rank === '2') {
+        groups.push({ rank: '2', cards: [card] });
+        return;
+      }
+      let g = byRank.get(card.rank);
+      if (!g) {
+        g = { rank: card.rank, cards: [] };
+        byRank.set(card.rank, g);
+        groups.push(g);
+      }
+      g.cards.push(card);
+    });
+    return groups;
+  }
+
   // ---------------- oval table ----------------
   function renderOvalTable(game) {
     const oval = document.getElementById('oval-table');
@@ -262,22 +285,32 @@
     const handDiv = document.getElementById('hand');
     handDiv.innerHTML = '';
     const hand = sortHand(game.yourHand || []);
+    const groups = groupHand(hand);
 
     const duringChain = game.chainCount > 0;
-    hand.forEach((card) => {
+    groups.forEach((g) => {
+      const rep = g.cards[0];
       let selectable = isMyTurn && !game.roundOver;
-      if (duringChain) selectable = selectable && card.rank === '2';
-      const el = cardEl(card, { selectable, selected: selectedIds.has(card.id) });
+      if (duringChain) selectable = selectable && g.rank === '2';
+      const allSelected = g.cards.every((c) => selectedIds.has(c.id));
+      const el = cardEl(rep, { selectable, selected: allSelected });
+      if (g.cards.length > 1) {
+        const badge = document.createElement('span');
+        badge.className = 'card-count-badge';
+        badge.textContent = '×' + g.cards.length;
+        el.appendChild(badge);
+      }
       if (selectable) {
-        el.onclick = duringChain ? () => submitChainTwo(card) : () => toggleSelect(card);
+        el.onclick = duringChain ? () => submitChainTwo(rep) : () => toggleSelectGroup(g);
       }
       handDiv.appendChild(el);
     });
 
     const discardBtn = document.getElementById('btn-discard');
     const declareBtn = document.getElementById('btn-declare');
+    const openIsTwo = game.openCard && game.openCard.rank === '2';
     discardBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && selectedIds.size > 0);
-    declareBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && handValue <= 5);
+    declareBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && !openIsTwo && handValue <= 5);
     discardBtn.classList.toggle('hidden', duringChain);
     declareBtn.classList.toggle('hidden', duringChain);
 
@@ -289,20 +322,19 @@
     }
   }
 
-  function toggleSelect(card) {
-    if (latestGame && latestGame.chainCount > 0) {
-      selectedIds = selectedIds.has(card.id) ? new Set() : new Set([card.id]);
+  // Selecting a grouped tile selects/deselects every card in that rank-group
+  // together (they're always discarded as a set anyway, matching-rank or not).
+  function toggleSelectGroup(group) {
+    const allSelected = group.cards.every((c) => selectedIds.has(c.id));
+    if (allSelected) {
+      group.cards.forEach((c) => selectedIds.delete(c.id));
     } else {
-      if (selectedIds.has(card.id)) {
-        selectedIds.delete(card.id);
-      } else {
-        const firstId = [...selectedIds][0];
-        if (firstId) {
-          const firstCard = (latestGame.yourHand || []).find((c) => c.id === firstId);
-          if (firstCard && firstCard.rank !== card.rank) selectedIds.clear();
-        }
-        selectedIds.add(card.id);
+      const firstId = [...selectedIds][0];
+      if (firstId) {
+        const firstCard = (latestGame.yourHand || []).find((c) => c.id === firstId);
+        if (firstCard && firstCard.rank !== group.rank) selectedIds.clear();
       }
+      group.cards.forEach((c) => selectedIds.add(c.id));
     }
     renderGame(latestGame);
   }

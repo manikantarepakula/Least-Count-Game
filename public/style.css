@@ -10,6 +10,16 @@ body {
 .screen { display: none; min-height: 100vh; padding: 16px; }
 .screen.active { display: block; }
 
+/* Game screen fits one viewport height, no page scroll, on any device */
+#screen-game.screen.active {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  padding: 6px 8px;
+  overflow: hidden;
+}
+
 .card-panel {
   background: #ffffff;
   color: #1a1a1a;
@@ -63,25 +73,29 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 /* ---------------- Game screen ---------------- */
 .game-top {
   display: flex; justify-content: space-between; align-items: center;
-  font-size: 14px; padding: 6px 4px;
+  font-size: 13px; padding: 3px 4px; flex-shrink: 0;
 }
 .top-actions { display: flex; gap: 6px; align-items: center; }
 
 .turn-timer {
-  text-align: center; font-size: 13px; font-weight: 700;
-  background: rgba(0,0,0,0.35); border-radius: 20px; padding: 4px 12px;
-  width: fit-content; margin: 4px auto; transition: color 0.2s;
+  text-align: center; font-size: 12px; font-weight: 700;
+  background: rgba(0,0,0,0.35); border-radius: 20px; padding: 3px 10px;
+  width: fit-content; margin: 2px auto; transition: color 0.2s; flex-shrink: 0;
 }
 .turn-timer.low { color: #ff6b6b; }
 .turn-timer.hidden { display: none; }
 
 /* ---- Oval table ---- */
+/* Height-driven (not width-driven) so it shrinks to fit short phone
+   screens automatically; aspect-ratio derives the matching width. */
 .oval-table {
   position: relative;
-  width: 100%;
-  max-width: 620px;
+  width: auto;
+  height: min(40vh, 340px);
+  max-width: 94vw;
   aspect-ratio: 1 / 1.05;
-  margin: 8px auto 20px;
+  margin: 2px auto 6px;
+  flex-shrink: 0;
 }
 .table-felt {
   position: absolute; inset: 12%;
@@ -91,9 +105,9 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   box-shadow: inset 0 0 30px rgba(0,0,0,0.45);
 }
 .stock-badge {
-  position: absolute; top: 6%; left: 50%; transform: translateX(-50%);
-  background: rgba(0,0,0,0.4); color: #cde; font-size: 12px; font-weight: 600;
-  padding: 4px 10px; border-radius: 20px; z-index: 2;
+  position: absolute; top: 2%; right: 2%;
+  background: rgba(0,0,0,0.4); color: #cde; font-size: 11.5px; font-weight: 600;
+  padding: 4px 9px; border-radius: 20px; z-index: 2;
 }
 .table-center {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -134,7 +148,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 
 /* ---- Realistic playing cards ---- */
 .card {
-  width: 60px; height: 86px; border-radius: 8px; background: white;
+  width: 44px; height: 62px; border-radius: 6px; background: white;
   position: relative; user-select: none; flex-shrink: 0;
   box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: 2px solid transparent;
   display: inline-block;
@@ -146,17 +160,23 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   position: absolute; display: flex; flex-direction: column; align-items: center;
   line-height: 1; font-weight: 700;
 }
-.corner-tl { top: 4px; left: 4px; }
-.corner-br { bottom: 4px; right: 4px; transform: rotate(180deg); }
-.corner-rank { font-size: 12px; }
-.corner-suit { font-size: 10px; margin-top: 1px; }
+.corner-tl { top: 3px; left: 3px; }
+.corner-br { bottom: 3px; right: 3px; transform: rotate(180deg); }
+.corner-rank { font-size: 10px; }
+.corner-suit { font-size: 8px; margin-top: 1px; }
 
 .card-center {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
 }
-.card-center .center-rank { font-size: 19px; font-weight: 800; line-height: 1; }
-.card-center .center-suit { font-size: 24px; line-height: 1; margin-top: 2px; }
+.card-center .center-rank { font-size: 14px; font-weight: 800; line-height: 1; }
+.card-center .center-suit { font-size: 18px; line-height: 1; margin-top: 2px; }
+
+.card-count-badge {
+  position: absolute; top: -6px; right: -6px; background: #c0392b; color: #fff;
+  border-radius: 50%; font-size: 9px; font-weight: 700; width: 17px; height: 17px;
+  display: flex; align-items: center; justify-content: center; z-index: 2;
+}
 
 .card.joker .card-center { font-size: 18px; }
 .card.joker .corner-rank { font-size: 9px; }
@@ -172,17 +192,19 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 
 .chain-banner {
   background: #c0392b22; border: 1px solid #c0392b; border-radius: 10px;
-  padding: 10px; text-align: center; font-size: 13px; margin-bottom: 8px;
+  padding: 6px 10px; text-align: center; font-size: 12px; margin-bottom: 4px;
+  flex-shrink: 0;
 }
 .chain-banner.hidden { display: none; }
 
-.hand-header { font-size: 13px; margin: 8px 4px; }
+.hand-header { font-size: 12px; margin: 2px 4px; flex-shrink: 0; }
 .hand {
-  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 4px;
-  min-height: 90px;
+  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 4px;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
 }
 
-.action-bar { display: flex; gap: 8px; padding: 8px 4px; }
+.action-bar { display: flex; gap: 8px; padding: 4px; flex-shrink: 0; }
+.action-bar button { padding: 10px; font-size: 14px; }
 
 .overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
