@@ -79,42 +79,52 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .oval-table {
   position: relative;
   width: 100%;
-  max-width: 480px;
-  aspect-ratio: 4 / 3.4;
-  margin: 8px auto 16px;
+  max-width: 620px;
+  aspect-ratio: 1 / 1.05;
+  margin: 8px auto 20px;
 }
 .table-felt {
-  position: absolute; inset: 15%;
+  position: absolute; inset: 12%;
   background: radial-gradient(circle, #1f6b3a, #0d3319 75%);
   border-radius: 50%;
   border: 6px solid #0a2314;
   box-shadow: inset 0 0 30px rgba(0,0,0,0.45);
 }
+.stock-badge {
+  position: absolute; top: 6%; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.4); color: #cde; font-size: 12px; font-weight: 600;
+  padding: 4px 10px; border-radius: 20px; z-index: 2;
+}
 .table-center {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  display: flex; gap: 10px; align-items: center; z-index: 2;
+  display: flex; gap: 18px; align-items: center; z-index: 2;
 }
-.table-center .pile-label { font-size: 9px; }
-.table-center .card { width: 44px; height: 62px; }
-#joker-indicator { padding: 6px 8px; font-size: 14px; min-width: 32px; }
+.table-center .pile-label { font-size: 11px; }
+.table-center .card { width: 58px; height: 82px; }
+.table-center .card .card-corner { display: none; }
+.table-center .card .center-rank { font-size: 20px; }
+.table-center .card .center-suit { font-size: 26px; }
+#joker-indicator { padding: 8px 10px; font-size: 16px; min-width: 36px; }
 
 .seat {
   position: absolute; transform: translate(-50%, -50%);
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  z-index: 3; width: 78px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; z-index: 3; width: 96px; text-align: center;
 }
 .seat-chip {
-  background: rgba(255,255,255,0.14); border-radius: 10px; padding: 4px 8px;
-  font-size: 10.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 100%;
+  background: rgba(255,255,255,0.14); border-radius: 10px; padding: 5px 9px;
+  font-size: 11.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%; width: 100%;
 }
 .seat.active .seat-chip { background: #d4a017; color: #1a1a1a; font-weight: 700; }
 .seat.eliminated { opacity: 0.4; }
 .seat.quit { opacity: 0.35; }
-.seat-name { font-weight: 600; }
-.seat-meta { font-size: 9.5px; opacity: 0.85; }
+.seat-name {
+  font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.seat-meta { font-size: 10px; opacity: 0.85; display: block; }
 .mini-card-back {
-  width: 22px; height: 30px; border-radius: 4px;
+  width: 26px; height: 36px; border-radius: 4px;
   background: repeating-linear-gradient(45deg, #234, #234 4px, #1a2f42 4px, #1a2f42 8px);
   border: 1px solid #0b1a26; margin-bottom: 2px;
 }

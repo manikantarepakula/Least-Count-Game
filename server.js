@@ -112,15 +112,15 @@ function handleTurnTimeout(room) {
     console.error(`Turn timeout auto-play failed for room ${room.code}:`, e.message);
   }
 
-  broadcastRoom(room);
-  broadcastGameState(room);
-
   if (game.roundOver || game.gameOver) {
     clearTurnTimer(room);
     if (game.gameOver) room.phase = 'game_over';
   } else {
     scheduleTurnTimer(room);
   }
+
+  broadcastRoom(room);
+  broadcastGameState(room);
 }
 
 io.on('connection', (socket) => {
@@ -207,9 +207,9 @@ io.on('connection', (socket) => {
       room.game = new LeastCountGame(room.order.slice());
       room.game.startRound();
       room.phase = 'playing';
+      scheduleTurnTimer(room);
       broadcastRoom(room);
       broadcastGameState(room);
-      scheduleTurnTimer(room);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -224,9 +224,9 @@ io.on('connection', (socket) => {
       if (!entry) throw new Error('Not in a room.');
       room.game.playTurn(entry.playerId, cardIds || []);
       revealDrawIfAny(room);
-      broadcastGameState(room);
       if (room.game.roundOver || room.game.gameOver) clearTurnTimer(room);
       else scheduleTurnTimer(room);
+      broadcastGameState(room);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -259,8 +259,8 @@ io.on('connection', (socket) => {
       if (!room.game.roundOver) throw new Error('Round is still in progress.');
       if (room.game.gameOver) throw new Error('Game is already over.');
       room.game.startRound();
-      broadcastGameState(room);
       scheduleTurnTimer(room);
+      broadcastGameState(room);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -295,7 +295,11 @@ io.on('connection', (socket) => {
         throw new Error('Cannot leave in the middle of a round. Wait for it to finish.');
       }
 
-      if (room.game) {
+      // Only ask the game engine to remove the player if the game is still
+      // going - if it already ended (e.g. because the last leave dropped the
+      // active count to 1), removePlayer() would throw and wrongly block
+      // this person from leaving a finished game.
+      if (room.game && !room.game.gameOver) {
         room.game.removePlayer(playerId);
         if (room.game.gameOver) room.phase = 'game_over';
       }

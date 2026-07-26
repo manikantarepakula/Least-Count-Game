@@ -191,8 +191,8 @@
 
     seatOrder.forEach((p, i) => {
       const angle = Math.PI / 2 + (i / n) * 2 * Math.PI;
-      const left = 50 + 44 * Math.cos(angle);
-      const top = 50 + 40 * Math.sin(angle);
+      const left = 50 + 43 * Math.cos(angle);
+      const top = 50 + 43 * Math.sin(angle);
 
       const seatEl = document.createElement('div');
       seatEl.className = 'seat';
@@ -560,18 +560,40 @@
   socket.on('cards_drawn', ({ cards }) => showDrawReveal(cards));
 
   // ---------------- socket listeners ----------------
-  socket.on('connect', () => {
-    if (myRoomCode && myPlayerId) {
-      socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId }, (res) => {
-        if (!res.ok) {
-          localStorage.removeItem('leastcount_session');
-          showScreen('screen-landing');
-        } else {
-          loadChatHistory(res.chatHistory);
-          showChatFab();
-        }
-      });
+  function syncWithServer() {
+    if (!myRoomCode || !myPlayerId) return;
+    socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId }, (res) => {
+      if (!res.ok) {
+        localStorage.removeItem('leastcount_session');
+        showScreen('screen-landing');
+      } else {
+        loadChatHistory(res.chatHistory);
+        showChatFab();
+      }
+    });
+  }
+
+  socket.on('connect', syncWithServer);
+
+  // Mobile browsers aggressively suspend background tabs, which can silently
+  // drop or stall the socket connection without the UI ever noticing. When
+  // the tab becomes visible again, force a fresh state sync so nobody has to
+  // manually reload the page mid-game.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      if (socket.connected) {
+        syncWithServer();
+      } else {
+        socket.connect();
+        // 'connect' handler above will run syncWithServer() once reconnected.
+      }
     }
+  });
+
+  // Some mobile browsers fire 'pageshow' (e.g. returning via back-forward
+  // cache) without a matching visibilitychange - cover that path too.
+  window.addEventListener('pageshow', () => {
+    if (document.visibilityState === 'visible') syncWithServer();
   });
 
   socket.on('room_update', (room) => {
