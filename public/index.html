@@ -43,6 +43,7 @@
 
     <button id="btn-start" class="primary" disabled>గేమ్ మొదలుపెట్టు / Start Game</button>
     <p id="lobby-hint" class="hint"></p>
+    <button id="btn-leave-lobby" class="secondary leave-btn">Leave Room</button>
     <p id="lobby-error" class="error"></p>
   </div>
 </div>
@@ -51,24 +52,31 @@
   <div class="game-top">
     <div id="round-info">Round -</div>
     <div id="turn-info">-</div>
-    <button id="btn-scores" class="tiny">Scores</button>
+    <div class="top-actions">
+      <button id="btn-sound-toggle" class="tiny" title="Sound on/off">🔊</button>
+      <button id="btn-scores" class="tiny">Scores</button>
+    </div>
   </div>
 
-  <div id="opponents-strip" class="opponents-strip"></div>
+  <div id="turn-timer" class="turn-timer hidden">⏱ <span id="timer-seconds">30</span>s</div>
 
-  <div class="table-area">
-    <div class="pile-group">
-      <div class="pile-label">Stock (<span id="stock-count">0</span>)</div>
-      <div class="card back" id="stock-pile"></div>
+  <div class="oval-table" id="oval-table">
+    <div class="table-felt"></div>
+    <div class="table-center">
+      <div class="pile-group">
+        <div class="pile-label">Stock (<span id="stock-count">0</span>)</div>
+        <div class="card back" id="stock-pile"></div>
+      </div>
+      <div class="pile-group">
+        <div class="pile-label">Open Card</div>
+        <div id="open-card-slot"></div>
+      </div>
+      <div class="pile-group">
+        <div class="pile-label">Joker</div>
+        <div id="joker-indicator">-</div>
+      </div>
     </div>
-    <div class="pile-group">
-      <div class="pile-label">Open Card</div>
-      <div id="open-card-slot"></div>
-    </div>
-    <div class="pile-group">
-      <div class="pile-label">Round Joker</div>
-      <div id="joker-indicator">-</div>
-    </div>
+    <!-- .seat elements injected by app.js -->
   </div>
 
   <div id="chain-banner" class="chain-banner hidden">
@@ -93,6 +101,7 @@
     <h2 id="round-result-title">Round Result</h2>
     <div id="round-result-body"></div>
     <button id="btn-next-round" class="primary hidden">Next Round</button>
+    <button id="btn-leave-round-result" class="secondary leave-btn">Leave Game</button>
     <p id="round-result-hint" class="hint"></p>
   </div>
 </div>
@@ -110,7 +119,31 @@
     <h1 id="gameover-title">🏆</h1>
     <div id="gameover-body"></div>
     <button id="btn-new-game" class="primary hidden">Play Again (same room)</button>
+    <button id="btn-leave-gameover" class="secondary leave-btn">Leave Room</button>
     <p id="gameover-hint" class="hint"></p>
+  </div>
+</div>
+
+<div id="draw-reveal" class="draw-reveal hidden">
+  <div class="draw-reveal-box">
+    <div class="draw-reveal-label" id="draw-reveal-label">మీకు వచ్చింది... / You drew...</div>
+    <div id="draw-reveal-cards" class="draw-reveal-cards"></div>
+  </div>
+</div>
+
+<div id="chat-fab" class="chat-fab hidden">
+  💬<span id="chat-badge" class="badge hidden">0</span>
+</div>
+
+<div id="chat-panel" class="chat-panel hidden">
+  <div class="chat-header">
+    <span>💬 Chat</span>
+    <button id="btn-chat-close" class="tiny">✕</button>
+  </div>
+  <div id="chat-messages" class="chat-messages"></div>
+  <div class="chat-input-row">
+    <input id="chat-input" type="text" maxlength="300" placeholder="మెసేజ్..." />
+    <button id="btn-chat-send" class="tiny primary">➤</button>
   </div>
 </div>
 

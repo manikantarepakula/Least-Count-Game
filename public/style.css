@@ -42,6 +42,7 @@ button.danger { background: #c0392b; color: white; margin-top: 8px; }
 button.declare { background: #d4a017; color: #1a1a1a; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
 button.tiny { width: auto; padding: 6px 12px; font-size: 12px; }
+button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c0392b; margin-top: 10px; }
 
 .divider { text-align: center; margin: 20px 0; color: #999; font-size: 12px; }
 .error { color: #c0392b; font-size: 13px; min-height: 16px; }
@@ -64,41 +65,100 @@ button.tiny { width: auto; padding: 6px 12px; font-size: 12px; }
   display: flex; justify-content: space-between; align-items: center;
   font-size: 14px; padding: 6px 4px;
 }
-.opponents-strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px; }
-.opponent-chip {
-  background: rgba(255,255,255,0.12); border-radius: 10px; padding: 6px 10px;
-  font-size: 12px; min-width: 72px; text-align: center; flex-shrink: 0;
-}
-.opponent-chip.active { background: #d4a017; color: #1a1a1a; font-weight: 700; }
-.opponent-chip.eliminated { opacity: 0.4; text-decoration: line-through; }
+.top-actions { display: flex; gap: 6px; align-items: center; }
 
-.table-area {
-  display: flex; justify-content: space-around; align-items: center;
-  margin: 16px 0; gap: 8px;
+.turn-timer {
+  text-align: center; font-size: 13px; font-weight: 700;
+  background: rgba(0,0,0,0.35); border-radius: 20px; padding: 4px 12px;
+  width: fit-content; margin: 4px auto; transition: color 0.2s;
 }
+.turn-timer.low { color: #ff6b6b; }
+.turn-timer.hidden { display: none; }
+
+/* ---- Oval table ---- */
+.oval-table {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  aspect-ratio: 4 / 3.4;
+  margin: 8px auto 16px;
+}
+.table-felt {
+  position: absolute; inset: 15%;
+  background: radial-gradient(circle, #1f6b3a, #0d3319 75%);
+  border-radius: 50%;
+  border: 6px solid #0a2314;
+  box-shadow: inset 0 0 30px rgba(0,0,0,0.45);
+}
+.table-center {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; gap: 10px; align-items: center; z-index: 2;
+}
+.table-center .pile-label { font-size: 9px; }
+.table-center .card { width: 44px; height: 62px; }
+#joker-indicator { padding: 6px 8px; font-size: 14px; min-width: 32px; }
+
+.seat {
+  position: absolute; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  z-index: 3; width: 78px;
+}
+.seat-chip {
+  background: rgba(255,255,255,0.14); border-radius: 10px; padding: 4px 8px;
+  font-size: 10.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%;
+}
+.seat.active .seat-chip { background: #d4a017; color: #1a1a1a; font-weight: 700; }
+.seat.eliminated { opacity: 0.4; }
+.seat.quit { opacity: 0.35; }
+.seat-name { font-weight: 600; }
+.seat-meta { font-size: 9.5px; opacity: 0.85; }
+.mini-card-back {
+  width: 22px; height: 30px; border-radius: 4px;
+  background: repeating-linear-gradient(45deg, #234, #234 4px, #1a2f42 4px, #1a2f42 8px);
+  border: 1px solid #0b1a26; margin-bottom: 2px;
+}
+
 .pile-group { text-align: center; }
 .pile-label { font-size: 11px; color: #cde; margin-bottom: 4px; }
 
+/* ---- Realistic playing cards ---- */
 .card {
-  width: 56px; height: 80px; border-radius: 8px; background: white; color: #111;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 18px; position: relative; user-select: none;
+  width: 60px; height: 86px; border-radius: 8px; background: white;
+  position: relative; user-select: none; flex-shrink: 0;
   box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: 2px solid transparent;
+  display: inline-block;
 }
-.card.red { color: #c0392b; }
-.card.black { color: #1a1a1a; }
-.card.joker { color: #7d3cff; font-size: 12px; }
+.card.red .corner-rank, .card.red .corner-suit, .card.red .center-suit, .card.red .center-rank { color: #c0392b; }
+.card.black .corner-rank, .card.black .corner-suit, .card.black .center-suit, .card.black .center-rank { color: #1a1a1a; }
+
+.card-corner {
+  position: absolute; display: flex; flex-direction: column; align-items: center;
+  line-height: 1; font-weight: 700;
+}
+.corner-tl { top: 4px; left: 4px; }
+.corner-br { bottom: 4px; right: 4px; transform: rotate(180deg); }
+.corner-rank { font-size: 12px; }
+.corner-suit { font-size: 10px; margin-top: 1px; }
+
+.card-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.card-center .center-rank { font-size: 19px; font-weight: 800; line-height: 1; }
+.card-center .center-suit { font-size: 24px; line-height: 1; margin-top: 2px; }
+
+.card.joker .card-center { font-size: 18px; }
+.card.joker .corner-rank { font-size: 9px; }
+.card.joker { color: #7d3cff; }
+.card.joker .center-rank, .card.joker .center-suit, .card.joker .corner-rank, .card.joker .corner-suit { color: #7d3cff; }
+
 .card.back {
   background: repeating-linear-gradient(45deg, #234, #234 6px, #1a2f42 6px, #1a2f42 12px);
   border: 2px solid #0b1a26;
 }
 .card.selected { border-color: #d4a017; transform: translateY(-8px); }
 .card.selectable { cursor: pointer; }
-
-#joker-indicator {
-  background: #7d3cff22; border: 1px solid #7d3cff; border-radius: 8px;
-  padding: 8px 12px; font-weight: 700; font-size: 18px; min-width: 40px;
-}
 
 .chain-banner {
   background: #c0392b22; border: 1px solid #c0392b; border-radius: 10px;
@@ -125,3 +185,60 @@ button.tiny { width: auto; padding: 6px 12px; font-size: 12px; }
 
 .result-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 14px; }
 .result-row.winner-row { font-weight: 700; color: #1e5631; }
+
+/* ---- Drawn card reveal ---- */
+.draw-reveal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center; z-index: 30;
+  animation: fadeIn 0.15s ease-out;
+}
+.draw-reveal.hidden { display: none; }
+.draw-reveal-box {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 20px; padding: 24px 28px; text-align: center;
+  animation: popIn 0.25s ease-out;
+}
+.draw-reveal-label { color: #fff; font-size: 14px; margin-bottom: 14px; font-weight: 600; }
+.draw-reveal-cards { display: flex; gap: 10px; justify-content: center; }
+.draw-reveal-cards .card { width: 76px; height: 108px; }
+.draw-reveal-cards .card-center .center-rank { font-size: 26px; }
+.draw-reveal-cards .card-center .center-suit { font-size: 32px; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes popIn { from { transform: scale(0.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* ---- Chat ---- */
+.chat-fab {
+  position: fixed; bottom: 16px; right: 16px; width: 52px; height: 52px; border-radius: 50%;
+  background: #1e5631; color: white; display: flex; align-items: center; justify-content: center;
+  font-size: 22px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); cursor: pointer; z-index: 20;
+}
+.chat-fab.hidden { display: none; }
+.badge {
+  position: absolute; top: -4px; right: -4px; background: #c0392b; color: white;
+  border-radius: 50%; font-size: 10px; min-width: 16px; height: 16px; padding: 0 3px;
+  display: flex; align-items: center; justify-content: center; font-weight: 700;
+}
+.badge.hidden { display: none; }
+
+.chat-panel {
+  position: fixed; bottom: 0; right: 0; left: 0; margin: 0 auto; width: 100%; max-width: 380px;
+  height: 60vh; max-height: 480px;
+  background: white; color: #1a1a1a; border-radius: 16px 16px 0 0; z-index: 25;
+  display: flex; flex-direction: column; box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+}
+.chat-panel.hidden { display: none; }
+.chat-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; border-bottom: 1px solid #eee; font-weight: 700;
+}
+.chat-messages { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 13px; }
+.chat-msg { margin-bottom: 8px; }
+.chat-msg .chat-name { font-weight: 700; color: #1e5631; }
+.chat-msg.me .chat-name { color: #7d3cff; }
+.chat-msg .chat-text { word-break: break-word; }
+.chat-empty { color: #999; font-size: 12px; text-align: center; margin-top: 20px; }
+.chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid #eee; }
+.chat-input-row input {
+  flex: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; font-size: 14px;
+}
+.chat-input-row button.tiny { width: auto; padding: 8px 16px; border-radius: 20px; }
