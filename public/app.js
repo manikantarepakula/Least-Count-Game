@@ -173,6 +173,7 @@
     }
     if (opts.selectable) el.classList.add('selectable');
     if (opts.selected) el.classList.add('selected');
+    if (opts.wild) el.classList.add('wild-zero');
     return el;
   }
 
@@ -259,8 +260,41 @@
     timerInterval = setInterval(tick, 250);
   }
 
+  // Renders one row of grouped-card tiles (used for both the normal hand
+  // row and the separate joker/wild row) into the given container.
+  function renderHandTiles(container, groups, isMyTurn, game, duringChain) {
+    container.innerHTML = '';
+    const wildRank = game.roundJokerRank;
+    groups.forEach((g) => {
+      const rep = g.cards[0];
+      let selectable = isMyTurn && !game.roundOver;
+      if (duringChain) selectable = selectable && g.rank === '2';
+      const allSelected = g.cards.every((c) => selectedIds.has(c.id));
+      const isWild = rep.rank !== 'JOKER' && wildRank && rep.rank === wildRank;
+      const el = cardEl(rep, { selectable, selected: allSelected, wild: isWild });
+      if (g.cards.length > 1) {
+        const badge = document.createElement('span');
+        badge.className = 'card-count-badge';
+        badge.textContent = '×' + g.cards.length;
+        el.appendChild(badge);
+      }
+      if (selectable) {
+        el.onclick = duringChain ? () => submitChainTwo(rep) : () => toggleSelectGroup(g);
+      }
+      container.appendChild(el);
+    });
+  }
+
   // ---------------- main game rendering ----------------
   function renderGame(game) {
+    // The host's "Next Round" click only hides the round-result popup on
+    // their own screen. Everyone else keeps seeing it (blocking the table
+    // underneath, which HAS actually updated) until they manually refresh.
+    // Once a live round is confirmed in progress, force it closed for everyone.
+    if (!game.roundOver) {
+      document.getElementById('overlay-round-result').classList.add('hidden');
+    }
+
     document.getElementById('round-info').textContent = `Round ${game.roundNumber}`;
 
     const isMyTurn = game.currentPlayer === myPlayerId;
@@ -279,44 +313,53 @@
 
     document.getElementById('joker-indicator').textContent = game.roundJokerRank || 'None';
 
+    // The +2 chain status is now visible to EVERYONE at the table (not just
+    // whoever must respond), so the whole table can follow the drama. Only
+    // the player actually facing the chain gets the "Take Penalty" button.
+    const duringChain = game.chainCount > 0;
     const chainBanner = document.getElementById('chain-banner');
-    const showChain = isMyTurn && game.chainCount > 0 && !game.roundOver;
+    const showChain = duringChain && !game.roundOver;
     chainBanner.classList.toggle('hidden', !showChain);
-    if (showChain) document.getElementById('penalty-count').textContent = game.chainCount * 2;
+    if (showChain) {
+      const respondingName = isMyTurn ? 'మీరు / You' : currentName;
+      document.getElementById('chain-banner-text').textContent =
+        `🔥 +2 Chain! ${respondingName} must play a 2 or draw ${game.chainCount * 2} cards`;
+      document.getElementById('penalty-count').textContent = game.chainCount * 2;
+      document.getElementById('btn-take-penalty').classList.toggle('hidden', !isMyTurn);
+    }
 
     const handValue = game.yourHandValue ?? 0;
     document.getElementById('hand-value').textContent = handValue;
-    const handDiv = document.getElementById('hand');
-    handDiv.innerHTML = '';
     const hand = sortHand(game.yourHand || []);
     const groups = groupHand(hand);
 
-    const duringChain = game.chainCount > 0;
-    groups.forEach((g) => {
-      const rep = g.cards[0];
-      let selectable = isMyTurn && !game.roundOver;
-      if (duringChain) selectable = selectable && g.rank === '2';
-      const allSelected = g.cards.every((c) => selectedIds.has(c.id));
-      const el = cardEl(rep, { selectable, selected: allSelected });
-      if (g.cards.length > 1) {
-        const badge = document.createElement('span');
-        badge.className = 'card-count-badge';
-        badge.textContent = '×' + g.cards.length;
-        el.appendChild(badge);
-      }
-      if (selectable) {
-        el.onclick = duringChain ? () => submitChainTwo(rep) : () => toggleSelectGroup(g);
-      }
-      handDiv.appendChild(el);
-    });
+    // Cards worth 0 this round (actual Jokers, and this round's wild rank)
+    // get pulled into their own private row so you can spot them at a
+    // glance -- opponents never see this breakdown, only your total card count.
+    const wildRank = game.roundJokerRank;
+    const isWildGroup = (g) => g.rank === 'JOKER' || (wildRank && g.rank === wildRank);
+    const jokerGroups = groups.filter(isWildGroup);
+    const normalGroups = groups.filter((g) => !isWildGroup(g));
+
+    document.getElementById('hand-jokers-row').classList.toggle('hidden', jokerGroups.length === 0);
+    renderHandTiles(document.getElementById('hand-jokers'), jokerGroups, isMyTurn, game, duringChain);
+    renderHandTiles(document.getElementById('hand'), normalGroups, isMyTurn, game, duringChain);
 
     const discardBtn = document.getElementById('btn-discard');
     const declareBtn = document.getElementById('btn-declare');
+    const declareHint = document.getElementById('declare-hint');
     const openIsTwo = game.openCard && game.openCard.rank === '2';
     discardBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && selectedIds.size > 0);
     declareBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && !openIsTwo && handValue <= 5);
     discardBtn.classList.toggle('hidden', duringChain);
     declareBtn.classList.toggle('hidden', duringChain);
+
+    // The declare button silently disables for several different reasons --
+    // make the "open card is a 2" one visible, since it's the one most likely
+    // to look like a bug (hand value is low enough, but it's still blocked).
+    const showDeclareHint = isMyTurn && !game.roundOver && !duringChain && openIsTwo && handValue <= 5;
+    declareHint.classList.toggle('hidden', !showDeclareHint);
+    if (showDeclareHint) declareHint.textContent = 'ఓపెన్ కార్డ్ 2 ఉన్నంత వరకు Least Count చెప్పలేరు / Can\'t declare while the open card is a 2';
 
     if (game.roundOver && game.lastRoundResult && game.roundNumber !== window.__lastRoundResultShownFor) {
       showRoundResult(game);
@@ -553,6 +596,40 @@
   });
   socket.on('chat_message', (msg) => appendChatMessage(msg));
 
+  // ---------------- +2 chain flash notification ----------------
+  // A brief, table-wide toast every time a 2 lands, the chain escalates, or
+  // someone takes the penalty instead -- so this moment is visible and fun
+  // for everyone, not just whoever's turn it currently is.
+  let chainFlashTimeout = null;
+  function showChainFlash(text) {
+    const el = document.getElementById('chain-flash');
+    el.textContent = text;
+    el.classList.remove('hidden');
+    // restart the pop-in animation even if a flash is already showing
+    el.style.animation = 'none';
+    void el.offsetWidth;
+    el.style.animation = '';
+    if (chainFlashTimeout) clearTimeout(chainFlashTimeout);
+    chainFlashTimeout = setTimeout(() => el.classList.add('hidden'), 2200);
+  }
+
+  function checkChainFlash(prev, game) {
+    // Skip across a round boundary -- if a fresh round happens to deal a 2
+    // as the opening card, that's the shuffle's doing, not a real play by
+    // whoever's stale "prev.currentPlayer" happened to be from last round.
+    if (!prev || prev.roundNumber !== game.roundNumber) return;
+    // The player who just acted is whoever's turn it was a moment ago --
+    // the new currentPlayer is whoever must respond next.
+    const actor = playerName(prev.currentPlayer);
+    if (game.chainCount > 0 && prev.chainCount === 0) {
+      showChainFlash(`🔥 ${actor} played a 2! Draw ${game.chainCount * 2} or answer with a 2`);
+    } else if (game.chainCount > prev.chainCount && prev.chainCount > 0) {
+      showChainFlash(`🔥🔥 ${actor} stacked another 2! Now +${game.chainCount * 2}`);
+    } else if (game.chainCount === 0 && prev.chainCount > 0) {
+      showChainFlash(`${actor} took the +${prev.chainCount * 2} penalty. Back to normal!`);
+    }
+  }
+
   // ---------------- sound event detection (diff previous vs new game state) ----------------
   function playSoundsForTransition(prev, game) {
     if (!prev) return;
@@ -677,6 +754,7 @@
   socket.on('game_state', (game) => {
     const prev = latestGame;
     playSoundsForTransition(prev, game);
+    checkChainFlash(prev, game);
     latestGame = game;
     // Once the turn (or round) has actually moved on, any error message or
     // card selection left over from a previous failed attempt is stale --

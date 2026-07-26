@@ -209,6 +209,27 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   flex-shrink: 0;
 }
 .chain-banner.hidden { display: none; }
+.chain-banner button.hidden { display: none; }
+
+/* Brief flash announcing a 2 was just played/escalated/resolved -- visible
+   to every player at the table, not just whoever's turn it is. */
+.chain-flash {
+  flex-shrink: 0; text-align: center; font-size: 13px; font-weight: 700;
+  background: linear-gradient(90deg, #c0392b, #e67e22); color: #fff;
+  border-radius: 20px; padding: 6px 14px; margin: 0 auto 4px; width: fit-content;
+  max-width: 92%; animation: chainPop 0.25s ease-out;
+}
+.chain-flash.hidden { display: none; }
+@keyframes chainPop {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.hand-jokers { flex-shrink: 0; margin: 2px 4px 0; }
+.hand-jokers.hidden { display: none; }
+.hand-jokers-label { font-size: 10px; color: #d4a017; margin-bottom: 3px; }
+.hand-jokers-cards { display: flex; flex-wrap: wrap; gap: 5px; }
+.card.wild-zero { border-color: #d4a017; }
 
 .hand-header { font-size: 12px; margin: 2px 4px; flex-shrink: 0; }
 .hand {
@@ -218,6 +239,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 
 .action-bar { display: flex; gap: 8px; padding: 4px; flex-shrink: 0; }
 .action-bar button { padding: 10px; font-size: 14px; }
+.declare-hint { text-align: center; font-size: 11px; margin: 2px 4px 0; flex-shrink: 0; color: #d4a017; }
 
 .overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);

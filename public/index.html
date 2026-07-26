@@ -77,8 +77,14 @@
   </div>
 
   <div id="chain-banner" class="chain-banner hidden">
-    🔥 +2 Chain! ఒక 2 వేయండి లేదా పెనాల్టీ తీసుకోండి
-    <button id="btn-take-penalty" class="danger">Take Penalty (<span id="penalty-count">0</span>)</button>
+    <span id="chain-banner-text">🔥 +2 Chain!</span>
+    <button id="btn-take-penalty" class="danger hidden">Take Penalty (<span id="penalty-count">0</span>)</button>
+  </div>
+  <div id="chain-flash" class="chain-flash hidden"></div>
+
+  <div id="hand-jokers-row" class="hand-jokers hidden">
+    <div class="hand-jokers-label">🃏 Jokers / Wild (0 pts) — only you see this</div>
+    <div id="hand-jokers" class="hand-jokers-cards"></div>
   </div>
 
   <div class="hand-header">
@@ -90,6 +96,7 @@
     <button id="btn-discard" class="primary" disabled>Discard Selected</button>
     <button id="btn-declare" class="declare" disabled>Least Count!</button>
   </div>
+  <p id="declare-hint" class="hint declare-hint hidden"></p>
   <p id="game-error" class="error"></p>
 </div>
 
