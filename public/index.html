@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="te">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
@@ -21,19 +21,19 @@
     </div>
   </div>
   <div class="landing-form">
-    <label>మీ పేరు / Your name</label>
-    <input id="input-name" type="text" maxlength="20" placeholder="ఉదా: Manikanta" />
+    <label>Your name (మీ పేరు)</label>
+    <input id="input-name" type="text" maxlength="20" placeholder="e.g. Manikanta" />
 
     <div class="row">
-      <button id="btn-create" class="primary">కొత్త రూమ్ / Create Room</button>
+      <button id="btn-create" class="primary">Create Room (కొత్త రూమ్)</button>
     </div>
 
-    <div class="divider">లేదా / OR</div>
+    <div class="divider">OR (లేదా)</div>
 
-    <label>రూమ్ కోడ్ / Room Code</label>
+    <label>Room Code (రూమ్ కోడ్)</label>
     <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
     <div class="row">
-      <button id="btn-join" class="secondary">జాయిన్ / Join Room</button>
+      <button id="btn-join" class="secondary">Join Room (జాయిన్)</button>
     </div>
 
     <p id="landing-error" class="error"></p>
@@ -49,14 +49,14 @@
     <div class="hero-fade"></div>
   </div>
   <div class="landing-form">
-    <div class="room-code-label">రూమ్ కోడ్ / Room Code</div>
+    <div class="room-code-label">Room Code (రూమ్ కోడ్)</div>
     <div class="room-code-display" id="lobby-roomcode">----</div>
-    <p class="hint">ఈ కోడ్ మీ family/friends కి పంపండి</p>
+    <p class="hint">Send this code to your family/friends</p>
 
     <h3>Players</h3>
     <ul id="lobby-players" class="player-list"></ul>
 
-    <button id="btn-start" class="primary" disabled>గేమ్ మొదలుపెట్టు / Start Game</button>
+    <button id="btn-start" class="primary" disabled>Start Game (గేమ్ మొదలుపెట్టు)</button>
     <p id="lobby-hint" class="hint"></p>
     <button id="btn-leave-lobby" class="secondary leave-btn">Leave Room</button>
     <p id="lobby-error" class="error"></p>
@@ -103,7 +103,7 @@
   </div>
 
   <div class="hand-header">
-    <span>మీ కార్డులు (Value: <b id="hand-value">0</b>)</span>
+    <span>Your cards (మీ కార్డులు) (Value: <b id="hand-value">0</b>)</span>
   </div>
   <div id="hand" class="hand"></div>
 
@@ -111,8 +111,27 @@
     <button id="btn-discard" class="primary" disabled>Discard Selected</button>
     <button id="btn-declare" class="declare" disabled>Least Count!</button>
   </div>
-  <p id="declare-hint" class="hint declare-hint hidden"></p>
   <p id="game-error" class="error"></p>
+</div>
+
+<div id="overlay-start-sequence" class="start-sequence hidden">
+  <div class="start-seq-box">
+    <div id="start-seq-countdown" class="start-seq-countdown">3</div>
+    <div id="start-seq-dealing" class="start-seq-dealing hidden">
+      <div class="start-seq-dealing-title">Dealing cards... (కార్డులు ఇస్తున్నారు)</div>
+      <div id="start-seq-dealing-players" class="start-seq-dealing-players"></div>
+    </div>
+    <div id="start-seq-reveal" class="start-seq-reveal hidden">
+      <div class="start-seq-reveal-row">
+        <div class="start-seq-reveal-label">Joker</div>
+        <div id="start-seq-joker-card"></div>
+      </div>
+      <div class="start-seq-reveal-row">
+        <div class="start-seq-reveal-label">Open Card</div>
+        <div id="start-seq-open-card"></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="overlay-round-result" class="overlay hidden">
@@ -145,7 +164,7 @@
 
 <div id="draw-reveal" class="draw-reveal hidden">
   <div class="draw-reveal-box">
-    <div class="draw-reveal-label" id="draw-reveal-label">మీకు వచ్చింది... / You drew...</div>
+    <div class="draw-reveal-label" id="draw-reveal-label">You drew... (మీకు వచ్చింది...)</div>
     <div id="draw-reveal-cards" class="draw-reveal-cards"></div>
   </div>
 </div>
@@ -161,7 +180,7 @@
   </div>
   <div id="chat-messages" class="chat-messages"></div>
   <div class="chat-input-row">
-    <input id="chat-input" type="text" maxlength="300" placeholder="మెసేజ్..." />
+    <input id="chat-input" type="text" maxlength="300" placeholder="Message..." />
     <button id="btn-chat-send" class="tiny primary">➤</button>
   </div>
 </div>

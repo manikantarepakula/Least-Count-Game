@@ -343,7 +343,7 @@ check('autoPickDiscard: matches open rank for free when possible', () => {
   assert.deepStrictEqual(picked.sort(), ['m1', 'm2'].sort());
 });
 
-check('autoPickDiscard: falls back to lowest-value card when no match', () => {
+check('autoPickDiscard: falls back to the single highest-value card when no match and no groups', () => {
   const g = new LeastCountGame(['A', 'B']);
   g.startRound();
   g.chainCount = 0;
@@ -356,7 +356,24 @@ check('autoPickDiscard: falls back to lowest-value card when no match', () => {
     { id: 'x3', rank: 'A', suit: 'S' },
   ];
   const picked = g.autoPickDiscard(p);
-  assert.deepStrictEqual(picked, ['x3']); // Ace = value 1, the lowest
+  assert.deepStrictEqual(picked, ['x1']); // K = value 10, the highest single card
+});
+
+check('autoPickDiscard: releases the whole highest-value group, not just one card', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  g.chainCount = 0;
+  const p = g.currentPlayer();
+  g.discardPile = [{ id: 'open1', rank: '8', suit: 'S' }]; // no match to 8
+  g.roundJokerRank = null;
+  g.hands[p] = [
+    { id: 'x1', rank: '10', suit: 'C' },
+    { id: 'x2', rank: '10', suit: 'D' },
+    { id: 'x3', rank: '10', suit: 'H' },
+    { id: 'x4', rank: 'A', suit: 'S' },
+  ];
+  const picked = g.autoPickDiscard(p);
+  assert.deepStrictEqual(picked.sort(), ['x1', 'x2', 'x3'].sort(), 'should release all three 10s (value 30) over the single Ace (value 1)');
 });
 
 check('autoPickDiscard: during a +2 chain, plays a 2 if held, else accepts penalty', () => {
@@ -411,19 +428,34 @@ check('open card is a Joker: multiple same-rank cards can be discarded together,
   assert.strictEqual(g.hands[p].length, before - 2, 'discard 2, NO penalty draw since open is a Joker');
 });
 
-// 16. Declaring is blocked whenever the open card is a 2
-check('cannot declare Least Count while the open card is a 2', () => {
+// 16. Declaring is blocked only while a +2 challenge is actively pending
+// (chainCount > 0) -- NOT for the whole time the open card happens to show
+// a 2. Once someone takes the penalty and the chain resets, declaring is
+// allowed again right away, even though the open card is still a 2.
+check('cannot declare while a +2 challenge is actively pending (chainCount > 0)', () => {
   const g = new LeastCountGame(['A', 'B']);
   g.startRound();
   g.roundJokerRank = null;
-  g.chainCount = 0;
   g.discardPile = [{ id: 'open1', rank: '2', suit: 'S' }];
+  g.chainCount = 1; // an active, unanswered +2 challenge
   const p = g.currentPlayer();
   g.hands[p] = [{ id: 'v1', rank: 'A', suit: 'S' }]; // value 1, would otherwise be a valid declare
-  assert.throws(() => g.declare(p), /open card is a 2/);
+  assert.throws(() => g.declare(p), /pending against you/);
 });
 
-check('declare stays blocked on open-card-2 even after a +2 penalty resets the chain', () => {
+check('CAN declare even when the open card is a 2, as long as no chain is active', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  g.roundJokerRank = null;
+  g.chainCount = 0; // no challenge pending, even though open card is a 2
+  g.discardPile = [{ id: 'open1', rank: '2', suit: 'S' }];
+  const p = g.currentPlayer();
+  g.hands[p] = [{ id: 'v1', rank: 'A', suit: 'S' }]; // value 1
+  const state = g.declare(p);
+  assert.strictEqual(state.roundOver, true, 'declare should succeed and end the round');
+});
+
+check('declaring becomes allowed again right after a +2 penalty resets the chain', () => {
   const g = new LeastCountGame(['A', 'B', 'C']);
   g.startRound();
   const p1 = g.currentPlayer();
@@ -438,7 +470,8 @@ check('declare stays blocked on open-card-2 even after a +2 penalty resets the c
   assert.strictEqual(g._openRank(), '2');
   const p3 = g.currentPlayer();
   g.hands[p3] = [{ id: 'v1', rank: 'A', suit: 'S' }];
-  assert.throws(() => g.declare(p3), /open card is a 2/);
+  const state = g.declare(p3); // should succeed -- no chain is pending against p3
+  assert.strictEqual(state.roundOver, true);
 });
 
 console.log(`\n${passed} test(s) passed.`);

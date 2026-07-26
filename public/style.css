@@ -199,7 +199,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .table-center .card .card-corner { display: none; }
 .table-center .card .center-rank { font-size: 20px; }
 .table-center .card .center-suit { font-size: 26px; }
-#joker-indicator { padding: 8px 10px; font-size: 16px; min-width: 36px; }
+#joker-indicator { display: flex; }
 
 .seat {
   position: absolute; transform: translate(-50%, -50%);
@@ -259,10 +259,20 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   display: flex; align-items: center; justify-content: center; z-index: 2;
 }
 
-.card.joker .card-center { font-size: 18px; }
-.card.joker .corner-rank { font-size: 9px; }
-.card.joker { color: #7d3cff; }
-.card.joker .center-rank, .card.joker .center-suit, .card.joker .corner-rank, .card.joker .corner-suit { color: #7d3cff; }
+.card.joker { color: #8b1a1a; }
+.joker-letters {
+  font-size: 7px; font-weight: 700; line-height: 1.15; color: #8b1a1a;
+  letter-spacing: -0.5px;
+}
+.joker-cap {
+  width: 22px; height: 22px; position: relative;
+}
+.joker-cap::before {
+  content: ''; position: absolute; inset: 0;
+  background: #8b1a1a;
+  clip-path: polygon(50% 0%, 20% 45%, 35% 40%, 50% 70%, 65% 40%, 80% 45%);
+}
+.draw-reveal-cards .card.joker .joker-cap, .table-center .card.joker .joker-cap { width: 30px; height: 30px; }
 
 .card.back {
   background: repeating-linear-gradient(45deg, #234, #234 6px, #1a2f42 6px, #1a2f42 12px);
@@ -307,7 +317,6 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 
 .action-bar { display: flex; gap: 8px; padding: 4px; flex-shrink: 0; }
 .action-bar button { padding: 10px; font-size: 14px; }
-.declare-hint { text-align: center; font-size: 11px; margin: 2px 4px 0; flex-shrink: 0; color: #d4a017; }
 
 .overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -340,6 +349,45 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .draw-reveal-cards .card-center .center-suit { font-size: 32px; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes popIn { from { transform: scale(0.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* ---- Game-start sequence: countdown -> live deal -> joker/open reveal ---- */
+.start-sequence {
+  position: fixed; inset: 0; background: rgba(9, 38, 22, 0.92);
+  display: flex; align-items: center; justify-content: center; z-index: 40;
+  animation: fadeIn 0.2s ease-out;
+}
+.start-sequence.hidden { display: none; }
+.start-seq-box { text-align: center; }
+.start-seq-countdown {
+  font-size: 96px; font-weight: 700; color: #d4a017;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.5);
+  animation: popIn 0.3s ease-out;
+}
+.start-seq-countdown.hidden { display: none; }
+.start-seq-dealing {
+  color: #fff; font-size: 18px; font-weight: 600;
+  animation: fadeIn 0.2s ease-out;
+}
+.start-seq-dealing.hidden { display: none; }
+.start-seq-dealing-title { margin-bottom: 16px; }
+.start-seq-dealing-players { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 320px; }
+.deal-chip {
+  padding: 6px 12px; border-radius: 20px; font-size: 13px; font-weight: 600;
+  background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6);
+  border: 1px solid rgba(255,255,255,0.2);
+  transition: background 0.2s, color 0.2s, transform 0.2s;
+}
+.deal-chip.dealt {
+  background: #d4a017; color: #1e5631; border-color: #d4a017;
+  transform: scale(1.08);
+}
+.start-seq-reveal { display: flex; flex-direction: column; gap: 18px; animation: popIn 0.3s ease-out; }
+.start-seq-reveal.hidden { display: none; }
+.start-seq-reveal-row { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.start-seq-reveal-label { color: #d4a017; font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+.start-seq-reveal-row .card { width: 76px; height: 108px; }
+.start-seq-reveal-row .card-center .center-rank { font-size: 26px; }
+.start-seq-reveal-row .card-center .center-suit { font-size: 32px; }
 
 /* ---- Chat ---- */
 .chat-fab {

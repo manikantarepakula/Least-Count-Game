@@ -15,6 +15,15 @@
   let chatUnread = 0;
   let timerInterval = null;
 
+  // Game-start sequence (countdown -> live deal -> joker/open-card reveal).
+  // pendingStartReveal is set true the moment the countdown+deal animation
+  // finishes locally; the very next game_state we receive after that is the
+  // one carrying the freshly-dealt hands/joker/open-card, so that's the
+  // signal to switch the overlay into its "reveal" step -- not a fixed
+  // client-side timer, so it can never fire before the data actually exists.
+  let pendingStartReveal = false;
+  let startSeqTimer = null;
+
   // ---------------- sound effects (Web Audio API, no files needed) ----------------
   const Sound = (() => {
     let ctx = null;
@@ -179,6 +188,96 @@
     document.body.classList.toggle('game-active', id === 'screen-game');
   }
 
+  // ---------------- game-start sequence ----------------
+  // 3-2-1 countdown, then a "dealing cards" animation, then the round's
+  // joker rank + open card are revealed and held for a few seconds. The
+  // real turn timer quietly starts partway into that reveal (server-driven,
+  // see game_state handler below) -- this function only owns the visuals.
+  function runStartSequence(data) {
+    if (startSeqTimer) { clearTimeout(startSeqTimer); startSeqTimer = null; }
+    document.getElementById('overlay-gameover').classList.add('hidden');
+    document.getElementById('overlay-round-result').classList.add('hidden');
+    document.getElementById('overlay-scores').classList.add('hidden');
+    const overlay = document.getElementById('overlay-start-sequence');
+    const countdownEl = document.getElementById('start-seq-countdown');
+    const dealingEl = document.getElementById('start-seq-dealing');
+    const revealEl = document.getElementById('start-seq-reveal');
+    overlay.classList.remove('hidden');
+    revealEl.classList.add('hidden');
+    dealingEl.classList.add('hidden');
+    countdownEl.classList.remove('hidden');
+
+    const countdownMs = data.countdownMs || 3000;
+    const dealMs = data.dealMs || 1500;
+    const steps = 3; // "3", "2", "1"
+    const stepMs = countdownMs / steps;
+
+    function showCountdownStep(n) {
+      if (n <= 0) {
+        countdownEl.classList.add('hidden');
+        dealingEl.classList.remove('hidden');
+        animateDealing(data.players || [], dealMs);
+        startSeqTimer = setTimeout(() => {
+          // Countdown + deal animation are done. The board itself will pop
+          // to life the instant the server's post-deal game_state arrives
+          // (see pendingStartReveal handling below) -- we just flag that
+          // we're now waiting for it.
+          pendingStartReveal = true;
+        }, dealMs);
+        return;
+      }
+      countdownEl.textContent = String(n);
+      startSeqTimer = setTimeout(() => showCountdownStep(n - 1), stepMs);
+    }
+    showCountdownStep(steps);
+  }
+
+  // Lights up each player's name chip in turn over totalMs, giving the
+  // impression cards are actually being dealt around the table one at a
+  // time (rather than a static "please wait" caption).
+  function animateDealing(players, totalMs) {
+    const container = document.getElementById('start-seq-dealing-players');
+    container.innerHTML = '';
+    const chips = players.map((p) => {
+      const chip = document.createElement('div');
+      chip.className = 'deal-chip';
+      chip.textContent = p.name;
+      container.appendChild(chip);
+      return chip;
+    });
+    if (chips.length === 0) return;
+    const perStep = totalMs / chips.length;
+    chips.forEach((chip, i) => {
+      setTimeout(() => chip.classList.add('dealt'), perStep * (i + 1));
+    });
+  }
+
+  // Called once the first post-deal game_state arrives (pendingStartReveal
+  // was set true by runStartSequence above). Shows the joker rank + open
+  // card big or held on screen, then reveals the live board underneath.
+  function showStartReveal(game, revealMs) {
+    const overlay = document.getElementById('overlay-start-sequence');
+    const dealingEl = document.getElementById('start-seq-dealing');
+    const revealEl = document.getElementById('start-seq-reveal');
+    dealingEl.classList.add('hidden');
+    revealEl.classList.remove('hidden');
+
+    const jokerSlot = document.getElementById('start-seq-joker-card');
+    const openSlot = document.getElementById('start-seq-open-card');
+    jokerSlot.innerHTML = '';
+    openSlot.innerHTML = '';
+    jokerSlot.appendChild(game.roundJokerRank
+      ? cardEl({ rank: game.roundJokerRank, suit: null }, { wild: true })
+      : cardEl({ rank: 'JOKER', suit: null }));
+    if (game.openCard) openSlot.appendChild(cardEl(game.openCard));
+
+    if (startSeqTimer) { clearTimeout(startSeqTimer); startSeqTimer = null; }
+    startSeqTimer = setTimeout(() => {
+      overlay.classList.add('hidden');
+      startSeqTimer = null;
+    }, revealMs || 5000);
+  }
+
   function saveSession(roomCode, playerId) {
     myRoomCode = roomCode;
     myPlayerId = playerId;
@@ -192,7 +291,7 @@
   // ---------------- landing screen ----------------
   document.getElementById('btn-create').onclick = () => {
     const name = document.getElementById('input-name').value.trim();
-    if (!name) return setLandingError('పేరు రాయండి / Enter your name');
+    if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
     socket.emit('create_room', { name }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       saveSession(res.roomCode, res.playerId);
@@ -205,8 +304,8 @@
   document.getElementById('btn-join').onclick = () => {
     const name = document.getElementById('input-name').value.trim();
     const roomCode = document.getElementById('input-roomcode').value.trim().toUpperCase();
-    if (!name) return setLandingError('పేరు రాయండి / Enter your name');
-    if (!roomCode) return setLandingError('రూమ్ కోడ్ రాయండి / Enter room code');
+    if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
+    if (!roomCode) return setLandingError('Enter room code (రూమ్ కోడ్ రాయండి)');
     socket.emit('join_room', { roomCode, name }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       saveSession(res.roomCode, res.playerId);
@@ -240,8 +339,8 @@
     btn.classList.toggle('hidden', !isHost);
     btn.disabled = room.players.length < 2;
     document.getElementById('lobby-hint').textContent = isHost
-      ? (room.players.length < 2 ? 'కనీసం 2 మంది కావాలి / Need at least 2 players' : `Ready with ${room.players.length} players`)
-      : 'హోస్ట్ గేమ్ మొదలుపెట్టే వరకు వేచి ఉండండి / Waiting for host to start';
+      ? (room.players.length < 2 ? 'Need at least 2 players (కనీసం 2 మంది కావాలి)' : `Ready with ${room.players.length} players`)
+      : 'Waiting for host to start (హోస్ట్ మొదలుపెట్టే వరకు వేచి ఉండండి)';
   }
 
   // ---------------- realistic card rendering ----------------
@@ -251,10 +350,13 @@
     el.className = 'card';
     if (card.rank === 'JOKER') {
       el.classList.add('joker');
+      const stacked = '<span class="joker-letters">' +
+        'J<br>O<br>K<br>E<br>R' +
+        '</span>';
       el.innerHTML =
-        '<div class="card-corner corner-tl"><span class="corner-rank">JK</span></div>' +
-        '<div class="card-center"><span class="center-rank">🃏</span></div>' +
-        '<div class="card-corner corner-br"><span class="corner-rank">JK</span></div>';
+        `<div class="card-corner corner-tl">${stacked}</div>` +
+        '<div class="card-center"><div class="joker-cap"></div></div>' +
+        `<div class="card-corner corner-br">${stacked}</div>`;
     } else {
       const isRed = RED_SUITS.has(card.suit);
       el.classList.add(isRed ? 'red' : 'black');
@@ -394,7 +496,7 @@
     const currentName = playerName(game.currentPlayer);
     document.getElementById('turn-info').textContent = game.roundOver
       ? 'Round Over'
-      : (isMyTurn ? 'మీ వంతు! Your turn' : `${currentName} వంతు...`);
+      : (isMyTurn ? 'Your turn! (మీ వంతు)' : `${currentName}'s turn... (వంతు)`);
 
     updateTurnTimerDisplay(game.roundOver ? null : game.turnDeadline);
     renderOvalTable(game);
@@ -404,7 +506,16 @@
     openSlot.innerHTML = '';
     if (game.openCard) openSlot.appendChild(cardEl(game.openCard));
 
-    document.getElementById('joker-indicator').textContent = game.roundJokerRank || 'None';
+    // Show the round's wild rank as an actual mini card, same treatment as
+    // the Open Card, instead of bare text -- no suit, gold border to mark
+    // it as "worth 0 this round" (matches the wild-card highlight in hand).
+    const jokerSlot = document.getElementById('joker-indicator');
+    jokerSlot.innerHTML = '';
+    if (game.roundJokerRank) {
+      jokerSlot.appendChild(cardEl({ rank: game.roundJokerRank, suit: null }, { wild: true }));
+    } else {
+      jokerSlot.appendChild(cardEl({ rank: 'JOKER', suit: null }));
+    }
 
     // The +2 chain status is now visible to EVERYONE at the table (not just
     // whoever must respond), so the whole table can follow the drama. Only
@@ -414,7 +525,7 @@
     const showChain = duringChain && !game.roundOver;
     chainBanner.classList.toggle('hidden', !showChain);
     if (showChain) {
-      const respondingName = isMyTurn ? 'మీరు / You' : currentName;
+      const respondingName = isMyTurn ? 'You (మీరు)' : currentName;
       document.getElementById('chain-banner-text').textContent =
         `🔥 +2 Chain! ${respondingName} must play a 2 or draw ${game.chainCount * 2} cards`;
       document.getElementById('penalty-count').textContent = game.chainCount * 2;
@@ -440,19 +551,13 @@
 
     const discardBtn = document.getElementById('btn-discard');
     const declareBtn = document.getElementById('btn-declare');
-    const declareHint = document.getElementById('declare-hint');
-    const openIsTwo = game.openCard && game.openCard.rank === '2';
+    // Declaring is blocked only while a +2 chain is actively pending
+    // (duringChain) -- not just because the open card happens to show a 2.
+    // The chain-banner already explains that case, so no separate hint needed.
     discardBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && selectedIds.size > 0);
-    declareBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && !openIsTwo && handValue <= 5);
+    declareBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && handValue <= 5);
     discardBtn.classList.toggle('hidden', duringChain);
     declareBtn.classList.toggle('hidden', duringChain);
-
-    // The declare button silently disables for several different reasons --
-    // make the "open card is a 2" one visible, since it's the one most likely
-    // to look like a bug (hand value is low enough, but it's still blocked).
-    const showDeclareHint = isMyTurn && !game.roundOver && !duringChain && openIsTwo && handValue <= 5;
-    declareHint.classList.toggle('hidden', !showDeclareHint);
-    if (showDeclareHint) declareHint.textContent = 'ఓపెన్ కార్డ్ 2 ఉన్నంత వరకు Least Count చెప్పలేరు / Can\'t declare while the open card is a 2';
 
     if (game.roundOver && game.lastRoundResult && game.roundNumber !== window.__lastRoundResultShownFor) {
       showRoundResult(game);
@@ -657,7 +762,7 @@
     const container = document.getElementById('chat-messages');
     container.innerHTML = '';
     if (!history || history.length === 0) {
-      container.innerHTML = '<div class="chat-empty">ఇంకా మెసేజ్‌లు లేవు</div>';
+      container.innerHTML = '<div class="chat-empty">No messages yet (ఇంకా మెసేజ్‌లు లేవు)</div>';
       return;
     }
     history.forEach((m) => appendChatMessage(m, { silent: true }));
@@ -758,8 +863,8 @@
     const container = document.getElementById('draw-reveal-cards');
     const label = document.getElementById('draw-reveal-label');
     label.textContent = cards.length > 1
-      ? `మీకు ${cards.length} కార్డులు వచ్చాయి / You drew ${cards.length} cards`
-      : 'మీకు వచ్చింది / You drew';
+      ? `You drew ${cards.length} cards (మీకు ${cards.length} కార్డులు వచ్చాయి)`
+      : 'You drew (మీకు వచ్చింది)';
     container.innerHTML = '';
     cards.forEach((c) => container.appendChild(cardEl(c)));
     overlay.classList.remove('hidden');
@@ -849,10 +954,22 @@
     }
   });
 
+  let lastStartRevealMs = 5000;
+  socket.on('game_starting', (data) => {
+    lastStartRevealMs = data.revealMs || 5000;
+    showScreen('screen-game');
+    runStartSequence(data);
+  });
+
   socket.on('game_state', (game) => {
     const prev = latestGame;
-    playSoundsForTransition(prev, game);
-    checkChainFlash(prev, game);
+    // Skip the normal sound/flash reactions for the very first state of a
+    // fresh round (no meaningful "previous" state to diff against yet), and
+    // don't let a stale error/selection check misfire during the reveal.
+    if (!pendingStartReveal) {
+      playSoundsForTransition(prev, game);
+      checkChainFlash(prev, game);
+    }
     latestGame = game;
     // Once the turn (or round) has actually moved on, any error message or
     // card selection left over from a previous failed attempt is stale --
@@ -863,6 +980,11 @@
     }
     showScreen('screen-game');
     renderGame(game);
+
+    if (pendingStartReveal) {
+      pendingStartReveal = false;
+      showStartReveal(game, lastStartRevealMs);
+    }
   });
 
   socket.on('error_message', (data) => setGameError(data.message));

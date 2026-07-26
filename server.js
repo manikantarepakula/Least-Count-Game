@@ -21,6 +21,19 @@ const socketIndex = new Map(); // socket.id -> { roomCode, playerId }
 const TURN_SECONDS = 30;
 const CHAT_HISTORY_LIMIT = 100;
 
+// ---------------------------------------------------------------------------
+// Game-start sequence timing. When the host clicks "Start Game" the cards
+// aren't just instantly dealt -- everyone sees a 3-2-1 countdown, then a
+// live-dealing animation, then the round's joker rank + open card are
+// revealed and held on screen for a few seconds. The real per-turn timer
+// (and therefore "the start of the game") only begins partway into that
+// reveal, not the instant hands are dealt.
+// ---------------------------------------------------------------------------
+const COUNTDOWN_MS = 3000; // 3-2-1
+const DEAL_MS = 1500; // live-deal animation
+const REVEAL_MS = 5000; // joker/open-card reveal, held on screen
+const REVEAL_TO_TIMER_MS = 2000; // turn timer quietly starts this far into the reveal
+
 function makeRoomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I confusion
   let code;
@@ -87,6 +100,19 @@ function scheduleTurnTimer(room) {
   room.turnTimer = setTimeout(() => handleTurnTimeout(room), TURN_SECONDS * 1000);
 }
 
+// Clears the one-shot timers that drive the countdown -> deal -> reveal
+// game-start sequence (as distinct from the recurring per-turn timer above).
+function clearStartSequenceTimers(room) {
+  if (room.dealTimer) {
+    clearTimeout(room.dealTimer);
+    room.dealTimer = null;
+  }
+  if (room.revealTimer) {
+    clearTimeout(room.revealTimer);
+    room.revealTimer = null;
+  }
+}
+
 // If the player who just acted drew penalty card(s), privately reveal exactly
 // what they drew so they can react to it (before it just merges into their hand).
 function revealDrawIfAny(room) {
@@ -134,10 +160,12 @@ io.on('connection', (socket) => {
         hostPlayerId: playerId,
         players: new Map(),
         order: [],
-        phase: 'lobby', // lobby | playing | game_over
+        phase: 'lobby', // lobby | starting | playing | game_over
         game: null,
         turnTimer: null,
         turnDeadline: null,
+        dealTimer: null,
+        revealTimer: null,
         chatHistory: [],
       };
       room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true });
@@ -185,7 +213,17 @@ io.on('connection', (socket) => {
       socket.join(code);
       ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
       broadcastRoom(room);
-      if (room.game) {
+      // Don't leak hands/joker/open-card to a reconnecting client while the
+      // countdown/deal/reveal sequence is still in progress for everyone
+      // else -- re-play the sequence for them instead so they don't skip it.
+      if (room.game && room.phase === 'starting') {
+        io.to(socket.id).emit('game_starting', {
+          countdownMs: COUNTDOWN_MS,
+          dealMs: DEAL_MS,
+          revealMs: REVEAL_MS,
+          players: room.order.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
+        });
+      } else if (room.game) {
         const state = room.game.getPublicState(playerId);
         state.turnDeadline = room.turnDeadline || null;
         io.to(socket.id).emit('game_state', state);
@@ -204,12 +242,38 @@ io.on('connection', (socket) => {
       if (room.order.length < 2) throw new Error('Need at least 2 players.');
       if (room.order.length > 10) throw new Error('Maximum 10 players.');
 
+      // Cards are dealt on the server right away (the engine has no notion of
+      // "not yet dealt"), but we deliberately withhold the full game_state
+      // broadcast -- which is what actually reveals hands/joker/open card to
+      // clients -- until the countdown + live-deal animation has played out.
       room.game = new LeastCountGame(room.order.slice());
       room.game.startRound();
-      room.phase = 'playing';
-      scheduleTurnTimer(room);
+      room.phase = 'starting';
       broadcastRoom(room);
-      broadcastGameState(room);
+      io.to(roomCode).emit('game_starting', {
+        countdownMs: COUNTDOWN_MS,
+        dealMs: DEAL_MS,
+        revealMs: REVEAL_MS,
+        players: room.order.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
+      });
+
+      clearStartSequenceTimers(room);
+      room.dealTimer = setTimeout(() => {
+        room.dealTimer = null;
+        // Guard against the room having been torn down or reset mid-sequence
+        // (e.g. everyone left, or the host started a new game already).
+        if (!room.game || room.phase !== 'starting') return;
+        room.phase = 'playing';
+        broadcastRoom(room);
+        broadcastGameState(room); // hands, joker rank, open card now visible; turnDeadline still null
+        room.revealTimer = setTimeout(() => {
+          room.revealTimer = null;
+          if (!room.game || room.game.roundOver || room.game.gameOver) return;
+          scheduleTurnTimer(room); // real turn timer quietly starts here, mid-reveal
+          broadcastGameState(room);
+        }, REVEAL_TO_TIMER_MS);
+      }, COUNTDOWN_MS + DEAL_MS);
+
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -274,6 +338,7 @@ io.on('connection', (socket) => {
       const entry = socketIndex.get(socket.id);
       if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can start a new game.');
       clearTurnTimer(room);
+      clearStartSequenceTimers(room);
       room.game = null;
       room.phase = 'lobby';
       broadcastRoom(room);
@@ -291,6 +356,9 @@ io.on('connection', (socket) => {
       if (!entry) throw new Error('Not in a room.');
       const playerId = entry.playerId;
 
+      if (room.phase === 'starting') {
+        throw new Error('Cannot leave while the game is starting. Wait for it to finish.');
+      }
       if (room.phase === 'playing' && room.game && !room.game.roundOver) {
         throw new Error('Cannot leave in the middle of a round. Wait for it to finish.');
       }
@@ -311,6 +379,7 @@ io.on('connection', (socket) => {
 
       if (room.order.length === 0) {
         clearTurnTimer(room);
+        clearStartSequenceTimers(room);
         rooms.delete(roomCode);
         ack && ack({ ok: true });
         return;

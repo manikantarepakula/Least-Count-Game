@@ -346,24 +346,38 @@ class LeastCountGame {
     const matching = hand.filter((c) => c.rank === openRank);
     if (matching.length > 0) return matching.map((c) => c.id);
 
-    // No free match available: give up the single lowest-value card.
-    let lowest = hand[0];
+    // No direct match to the open card. Whether or not this incurs a
+    // penalty draw (it doesn't if the open card is a Joker/wild rank), the
+    // discard penalty is always a fixed 1 card no matter how many cards get
+    // released together -- so the best default is always to unload the
+    // single highest-total-value same-rank group in hand, not just the
+    // lowest single card. E.g. releasing three 10s for one penalty card is
+    // strictly better than giving up one low card and keeping the 10s.
+    const groups = new Map();
     for (const c of hand) {
-      if (cardValue(c, this.roundJokerRank) < cardValue(lowest, this.roundJokerRank)) lowest = c;
+      if (!groups.has(c.rank)) groups.set(c.rank, []);
+      groups.get(c.rank).push(c);
     }
-    return [lowest.id];
+    let bestGroup = null;
+    let bestValue = -1;
+    for (const cards of groups.values()) {
+      const totalValue = cards.reduce((sum, c) => sum + cardValue(c, this.roundJokerRank), 0);
+      if (totalValue > bestValue) {
+        bestValue = totalValue;
+        bestGroup = cards;
+      }
+    }
+    return bestGroup.map((c) => c.id);
   }
 
   declare(playerId) {
     this._assertTurn(playerId);
+    // Declaring is only blocked while a +2 challenge is actively pending
+    // against this player (chainCount > 0). Once someone takes the penalty
+    // and the chain resets, declaring is allowed again immediately, even
+    // though the open card itself still visually shows a 2.
     if (this.chainCount > 0) {
       throw new Error('Cannot declare while a +2 challenge is pending against you');
-    }
-    // Even after a +2 chain resets (someone accepted the penalty instead of
-    // playing a 2), the open card itself is still a 2 until someone plays a
-    // non-2 discard on top of it. Declaring is blocked for that whole time.
-    if (this._openRank() === '2') {
-      throw new Error('Cannot declare Least Count while the open card is a 2');
     }
     const myValue = handValue(this.hands[playerId], this.roundJokerRank);
     if (myValue > DECLARE_MAX_VALUE) {
