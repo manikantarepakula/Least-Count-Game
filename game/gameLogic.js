@@ -167,14 +167,18 @@ class LeastCountGame {
     this.discardPile = [openCard];
 
     // Draw a card to fix this round's wild joker rank. A 2 is never allowed
-    // to become the wild rank (it already has its own +2 rule), so redraw
-    // past any 2s that come up; those burned cards don't return to play.
+    // to become the wild rank (it already has its own +2 rule), and a printed
+    // Joker isn't a rank at all -- so redraw past either of those until a
+    // normal rank card comes up. Every round always gets a designated wild
+    // rank this way; those burned cards don't return to play.
     let jokerRevealCard = shuffled[cursor];
     cursor += 1;
-    while (jokerRevealCard.rank === '2' && cursor < shuffled.length) {
+    while ((jokerRevealCard.rank === '2' || jokerRevealCard.rank === 'JOKER') && cursor < shuffled.length) {
       jokerRevealCard = shuffled[cursor];
       cursor += 1;
     }
+    // Fallback for the practically-impossible case of running out of stock
+    // mid-redraw: leaves roundJokerRank unset (null) rather than crashing.
     this.roundJokerRank = (jokerRevealCard.rank === 'JOKER' || jokerRevealCard.rank === '2')
       ? null
       : jokerRevealCard.rank;

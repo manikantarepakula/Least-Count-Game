@@ -313,6 +313,17 @@ check('round joker rank is never 2, across many rounds', () => {
   }
 });
 
+check('round joker rank is never null either -- every round gets a designated wild rank', () => {
+  for (let p of [2, 3, 4, 6, 10]) {
+    const ids = Array.from({ length: p }, (_, i) => `P${i}`);
+    for (let i = 0; i < 200; i++) {
+      const g = new LeastCountGame(ids);
+      g.startRound();
+      assert.notStrictEqual(g.roundJokerRank, null, `players=${p} attempt ${i}`);
+    }
+  }
+});
+
 // 14. autoPickDiscard sensible defaults
 check('autoPickDiscard: matches open rank for free when possible', () => {
   const g = new LeastCountGame(['A', 'B']);
