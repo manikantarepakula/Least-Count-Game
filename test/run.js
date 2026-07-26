@@ -385,7 +385,7 @@ check('open card is this round\'s wild rank: any single non-matching discard is 
   assert.strictEqual(g.hands[p].length, before - 1, 'discard 1, NO penalty draw since open is the wild rank');
 });
 
-check('open card is a Joker: cannot discard more than one non-matching card at once', () => {
+check('open card is a Joker: multiple same-rank cards can be discarded together, still free', () => {
   const g = new LeastCountGame(['A', 'B']);
   g.startRound();
   const p = g.currentPlayer();
@@ -393,7 +393,9 @@ check('open card is a Joker: cannot discard more than one non-matching card at o
   g.roundJokerRank = null;
   g.chainCount = 0;
   g.hands[p] = [{ id: 'x1', rank: 'K', suit: 'H' }, { id: 'x2', rank: 'K', suit: 'D' }, ...g.hands[p].slice(2)];
-  assert.throws(() => g.playTurn(p, ['x1', 'x2']), /only one card/);
+  const before = g.hands[p].length;
+  g.playTurn(p, ['x1', 'x2']);
+  assert.strictEqual(g.hands[p].length, before - 2, 'discard 2, NO penalty draw since open is a Joker');
 });
 
 // 16. Declaring is blocked whenever the open card is a 2

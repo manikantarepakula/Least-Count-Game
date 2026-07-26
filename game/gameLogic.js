@@ -261,15 +261,11 @@ class LeastCountGame {
     const matchesOpen = rank === openRank;
     const openIsJoker = this._openIsJoker();
 
-    // Open card is a Joker (printed, or this round's wild rank): free pass,
-    // any ONE card can be discarded with no penalty draw.
-    if (openIsJoker && !matchesOpen && discarded.length > 1) {
-      this.hands[playerId].push(...discarded);
-      throw new Error('Open card is a Joker: you may discard only one card');
-    }
-
     for (const c of discarded) this.discardPile.push(c);
 
+    // Open card is a Joker (printed, or this round's wild rank): free pass --
+    // any group of same-rank cards can be discarded together with no penalty
+    // draw, exactly like a normal rank-match, even though the ranks differ.
     let penaltyDrawn = [];
     if (!matchesOpen && !openIsJoker) {
       penaltyDrawn = this._drawFromStock(1);

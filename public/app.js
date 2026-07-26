@@ -632,6 +632,33 @@
     if (document.visibilityState === 'visible') syncWithServer();
   });
 
+  // ---------------- connection watchdog ----------------
+  // Mobile connections can go "zombie": the browser still thinks the socket
+  // is connected, but it has actually stopped delivering anything (common
+  // when the OS briefly throttles the network in the background). No
+  // 'disconnect' event fires in that case, so nothing above ever kicks in,
+  // and the screen just quietly goes stale until the page is manually
+  // reloaded. This checks every few seconds that the connection is truly
+  // alive (a real server round-trip, not just the client's belief about it)
+  // and forces a hard reconnect if it isn't -- self-healing, no refresh needed.
+  let watchdogAwaitingAck = false;
+  setInterval(() => {
+    if (!myRoomCode || !myPlayerId || watchdogAwaitingAck) return;
+    watchdogAwaitingAck = true;
+    const bail = setTimeout(() => {
+      if (!watchdogAwaitingAck) return;
+      watchdogAwaitingAck = false;
+      socket.disconnect();
+      socket.connect();
+    }, 4000);
+    socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId }, () => {
+      // A fresh room_update/game_state has already been emitted by the
+      // server as a side effect of this rejoin -- just confirms we're alive.
+      watchdogAwaitingAck = false;
+      clearTimeout(bail);
+    });
+  }, 7000);
+
   socket.on('room_update', (room) => {
     latestRoom = room;
     if (room.phase === 'lobby') {
@@ -651,6 +678,13 @@
     const prev = latestGame;
     playSoundsForTransition(prev, game);
     latestGame = game;
+    // Once the turn (or round) has actually moved on, any error message or
+    // card selection left over from a previous failed attempt is stale --
+    // clear both so they don't linger on screen through later turns.
+    if (!prev || prev.currentPlayer !== game.currentPlayer || prev.roundNumber !== game.roundNumber) {
+      selectedIds = new Set();
+      setGameError('');
+    }
     showScreen('screen-game');
     renderGame(game);
   });
