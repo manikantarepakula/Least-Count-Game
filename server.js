@@ -30,9 +30,16 @@ const CHAT_HISTORY_LIMIT = 100;
 // reveal, not the instant hands are dealt.
 // ---------------------------------------------------------------------------
 const COUNTDOWN_MS = 3000; // 3-2-1
-const DEAL_MS = 1500; // live-deal animation
+const DEAL_MS = 2600; // live-deal animation (long enough for a multi-pass circular deal)
 const REVEAL_MS = 5000; // joker/open-card reveal, held on screen
 const REVEAL_TO_TIMER_MS = 2000; // turn timer quietly starts this far into the reveal
+// Minimum penalty-cards-in-one-go and discard-group-size that count as
+// "big" enough to trigger a seat reaction (items 9/10). The client decides
+// which emoji(s) each reaction type maps to and whether it's shown at the
+// affected player's own seat, everyone else's seats, or both.
+const PENALTY_REACTION_THRESHOLD = 6;
+const BIG_DISCARD_THRESHOLD = 4;
+const LOW_CARDS_THRESHOLD = 4;
 
 function makeRoomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I confusion
@@ -124,6 +131,77 @@ function revealDrawIfAny(room) {
   }
 }
 
+// Kicks off the countdown -> live-deal -> joker/open-card reveal sequence
+// for the round that was just dealt (startRound() must already have been
+// called). Shared by both start_game (first round) and next_round (every
+// round after), so the same playful sequence plays every time, not just once.
+function beginStartSequence(room, roomCode) {
+  room.lowCardNotified = new Set(); // reset item-10 "look out" tracking for the new round
+  room.phase = 'starting';
+  broadcastRoom(room);
+  io.to(roomCode).emit('game_starting', {
+    countdownMs: COUNTDOWN_MS,
+    dealMs: DEAL_MS,
+    revealMs: REVEAL_MS,
+    players: room.order.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
+  });
+
+  clearStartSequenceTimers(room);
+  room.dealTimer = setTimeout(() => {
+    room.dealTimer = null;
+    // Guard against the room having been torn down or reset mid-sequence
+    // (e.g. everyone left, or the host started a new game already).
+    if (!room.game || room.phase !== 'starting') return;
+    room.phase = 'playing';
+    broadcastRoom(room);
+    broadcastGameState(room); // hands, joker rank, open card now visible; turnDeadline still null
+    room.revealTimer = setTimeout(() => {
+      room.revealTimer = null;
+      if (!room.game || room.game.roundOver || room.game.gameOver) return;
+      scheduleTurnTimer(room); // real turn timer quietly starts here, mid-reveal
+      broadcastGameState(room);
+    }, REVEAL_TO_TIMER_MS);
+  }, COUNTDOWN_MS + DEAL_MS);
+}
+
+// ---------------------------------------------------------------------------
+// Seat-reaction emojis (items 9 & 10) -- little playful, non-mechanical
+// reactions that pop up at a player's seat on the client. The server only
+// decides WHEN something reaction-worthy happened; the client decides which
+// emoji(s) to show and at whose seat(s) (self, others, or both).
+// ---------------------------------------------------------------------------
+function emitSeatReaction(roomCode, type, affectedPlayerId) {
+  io.to(roomCode).emit('seat_reaction', { type, affectedPlayerId });
+}
+
+// Inspects the log entry a playTurn() call just pushed and fires the
+// matching reaction, if any. Covers normal discards, +2 chain extends, and
+// +2 chain penalty draws uniformly (all three go through playTurn()).
+function emitLogBasedReactions(room, roomCode) {
+  if (!room.game || !room.game.log.length) return;
+  const entry = room.game.log[room.game.log.length - 1];
+  if (entry.type === 'discard' && entry.count >= BIG_DISCARD_THRESHOLD) {
+    emitSeatReaction(roomCode, 'bigdiscard', entry.playerId);
+  } else if (entry.type === '2-chain-extend') {
+    emitSeatReaction(roomCode, 'chainextend', entry.playerId);
+  } else if (entry.type === '2-chain-penalty' && entry.penalty > PENALTY_REACTION_THRESHOLD) {
+    emitSeatReaction(roomCode, 'penalty6', entry.playerId);
+  }
+}
+
+// Fires the "look out" reaction the first time (per round) a player's hand
+// drops below the threshold -- tracked per-round so it doesn't re-fire on
+// every subsequent turn while they stay low.
+function checkLowCardReaction(room, roomCode, playerId) {
+  if (!room.game || !room.game.hands || !room.game.hands[playerId]) return;
+  if (!room.lowCardNotified) room.lowCardNotified = new Set();
+  const len = room.game.hands[playerId].length;
+  if (len > 0 && len < LOW_CARDS_THRESHOLD && !room.lowCardNotified.has(playerId)) {
+    room.lowCardNotified.add(playerId);
+    emitSeatReaction(roomCode, 'lowcards', playerId);
+  }
+}
+
 function handleTurnTimeout(room) {
   const game = room.game;
   if (!game || game.roundOver || game.gameOver) return;
@@ -133,7 +211,9 @@ function handleTurnTimeout(room) {
     const cardIds = game.autoPickDiscard(pid);
     game.playTurn(pid, cardIds);
     revealDrawIfAny(room);
-    room.log = room.log || [];
+    emitLogBasedReactions(room, room.code);
+    checkLowCardReaction(room, room.code, pid);
+    emitSeatReaction(room.code, 'timeout', pid);
   } catch (e) {
     console.error(`Turn timeout auto-play failed for room ${room.code}:`, e.message);
   }
@@ -248,32 +328,7 @@ io.on('connection', (socket) => {
       // clients -- until the countdown + live-deal animation has played out.
       room.game = new LeastCountGame(room.order.slice());
       room.game.startRound();
-      room.phase = 'starting';
-      broadcastRoom(room);
-      io.to(roomCode).emit('game_starting', {
-        countdownMs: COUNTDOWN_MS,
-        dealMs: DEAL_MS,
-        revealMs: REVEAL_MS,
-        players: room.order.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
-      });
-
-      clearStartSequenceTimers(room);
-      room.dealTimer = setTimeout(() => {
-        room.dealTimer = null;
-        // Guard against the room having been torn down or reset mid-sequence
-        // (e.g. everyone left, or the host started a new game already).
-        if (!room.game || room.phase !== 'starting') return;
-        room.phase = 'playing';
-        broadcastRoom(room);
-        broadcastGameState(room); // hands, joker rank, open card now visible; turnDeadline still null
-        room.revealTimer = setTimeout(() => {
-          room.revealTimer = null;
-          if (!room.game || room.game.roundOver || room.game.gameOver) return;
-          scheduleTurnTimer(room); // real turn timer quietly starts here, mid-reveal
-          broadcastGameState(room);
-        }, REVEAL_TO_TIMER_MS);
-      }, COUNTDOWN_MS + DEAL_MS);
-
+      beginStartSequence(room, roomCode);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -288,6 +343,8 @@ io.on('connection', (socket) => {
       if (!entry) throw new Error('Not in a room.');
       room.game.playTurn(entry.playerId, cardIds || []);
       revealDrawIfAny(room);
+      emitLogBasedReactions(room, roomCode);
+      checkLowCardReaction(room, roomCode, entry.playerId);
       if (room.game.roundOver || room.game.gameOver) clearTurnTimer(room);
       else scheduleTurnTimer(room);
       broadcastGameState(room);
@@ -306,6 +363,8 @@ io.on('connection', (socket) => {
       room.game.declare(entry.playerId);
       clearTurnTimer(room);
       if (room.game.gameOver) room.phase = 'game_over';
+      const newlyEliminated = (room.game.lastRoundResult && room.game.lastRoundResult.newlyEliminated) || [];
+      for (const id of newlyEliminated) emitSeatReaction(roomCode, 'eliminated', id);
       broadcastRoom(room);
       broadcastGameState(room);
       ack && ack({ ok: true });
@@ -323,8 +382,7 @@ io.on('connection', (socket) => {
       if (!room.game.roundOver) throw new Error('Round is still in progress.');
       if (room.game.gameOver) throw new Error('Game is already over.');
       room.game.startRound();
-      scheduleTurnTimer(room);
-      broadcastGameState(room);
+      beginStartSequence(room, roomCode);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });

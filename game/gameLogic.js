@@ -69,6 +69,9 @@ function handValue(hand, roundJokerRank) {
 const ELIMINATION_SCORE = 200;
 const WRONG_DECLARE_PENALTY = 75;
 const DECLARE_MAX_VALUE = 5;
+// A losing player's round score is never more than this, no matter how high
+// their hand value actually is -- they pay the lower of the two.
+const ROUND_SCORE_CAP = 75;
 
 class LeastCountGame {
   constructor(playerIds) {
@@ -167,8 +170,17 @@ class LeastCountGame {
       }
     }
 
-    const openCard = shuffled[cursor];
+    let openCard = shuffled[cursor];
     cursor += 1;
+    // A 2 as the very first open card forces the first player straight into
+    // a +2 challenge with no real turn of their own -- not banned outright
+    // (it's still a normal rank), but redraw once to make it noticeably
+    // rarer (roughly 1-in-170 instead of 1-in-13). Whatever comes up on the
+    // redraw is accepted either way, even if it's a 2 again.
+    if (openCard.rank === '2' && cursor < shuffled.length) {
+      openCard = shuffled[cursor];
+      cursor += 1;
+    }
     this.discardPile = [openCard];
 
     // Draw a card to fix this round's wild joker rank. A 2 is never allowed
@@ -389,18 +401,38 @@ class LeastCountGame {
       values[id] = handValue(this.hands[id], this.roundJokerRank);
     }
     const minValue = Math.min(...Object.values(values));
-    const correct = myValue === minValue && Object.values(values).filter((v) => v === minValue).length === 1;
+    const minHolderCount = Object.values(values).filter((v) => v === minValue).length;
+    const correct = myValue === minValue && minHolderCount === 1;
+    // A wrong declare where the declarer actually tied with someone else at
+    // the true minimum (rather than being nowhere close to it at all).
+    const tiedWrongDeclare = !correct && myValue === minValue;
 
     const roundScores = {};
     if (correct) {
+      // Sole minimum holder: declarer scores 0, everyone else pays their own
+      // hand value (capped -- see ROUND_SCORE_CAP).
       for (const id of this.turnOrder) {
-        roundScores[id] = id === playerId ? 0 : values[id];
+        roundScores[id] = id === playerId ? 0 : Math.min(ROUND_SCORE_CAP, values[id]);
+      }
+    } else if (tiedWrongDeclare) {
+      // Tied with at least one other player at the true minimum -- still a
+      // wrong declare (you must be the SOLE minimum to win), but gentler
+      // than a genuinely bad declare: the declarer pays their own (small,
+      // since declaring itself requires hand value <= DECLARE_MAX_VALUE)
+      // hand value instead of the flat penalty, while whoever they tied
+      // with still gets the usual reward of 0.
+      for (const id of this.turnOrder) {
+        if (id === playerId) roundScores[id] = myValue;
+        else if (values[id] === minValue) roundScores[id] = 0;
+        else roundScores[id] = Math.min(ROUND_SCORE_CAP, values[id]);
       }
     } else {
+      // Genuinely bad declare: the declarer's hand wasn't even tied for the
+      // true minimum, so the flat wrong-declare penalty applies.
       for (const id of this.turnOrder) {
         if (values[id] === minValue) roundScores[id] = 0;
         else if (id === playerId) roundScores[id] = WRONG_DECLARE_PENALTY;
-        else roundScores[id] = values[id];
+        else roundScores[id] = Math.min(ROUND_SCORE_CAP, values[id]);
       }
     }
 
@@ -461,5 +493,5 @@ module.exports = {
   deckCountForPlayers, createShoe, shuffle,
   rankValue, cardValue, handValue,
   LeastCountGame,
-  ELIMINATION_SCORE, WRONG_DECLARE_PENALTY, DECLARE_MAX_VALUE,
+  ELIMINATION_SCORE, WRONG_DECLARE_PENALTY, DECLARE_MAX_VALUE, ROUND_SCORE_CAP,
 };

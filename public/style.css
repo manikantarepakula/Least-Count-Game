@@ -81,7 +81,7 @@ body.game-active {
 .hero-content h1 { color: #fff; font-size: 27px; font-weight: 700; margin: 0; }
 .hero-subtitle { color: #9fd8b8; font-size: 12px; margin: 4px 0 0; }
 
-.landing-form { max-width: 420px; margin: -6px auto 24px; padding: 0 24px 24px; }
+.landing-form { max-width: 420px; margin: 10px auto 24px; padding: 0 24px 24px; }
 .landing-form label { color: #9fd8b8; }
 .landing-form input[type=text] {
   background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
@@ -100,7 +100,8 @@ body.game-active {
   margin: 20px 0 8px;
 }
 .landing-form .room-code-label {
-  color: #9fd8b8; font-size: 11px; text-align: center; text-transform: uppercase; letter-spacing: 1px;
+  color: #d4e8da; font-size: 11px; text-align: center; text-transform: uppercase; letter-spacing: 1px;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.6); margin-top: 4px;
 }
 .landing-form .room-code-display {
   background: transparent; color: #ffcb6b; font-size: 38px; letter-spacing: 8px;
@@ -214,6 +215,18 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .seat.active .seat-chip { background: #d4a017; color: #1a1a1a; font-weight: 700; }
 .seat.eliminated { opacity: 0.4; }
 .seat.quit { opacity: 0.35; }
+.seat-emoji-bubble {
+  position: absolute; top: 0; left: 50%; width: 40px; height: 40px; border-radius: 50%;
+  background: #1a4a2c; border: 2px solid #d4a017; display: flex; align-items: center; justify-content: center;
+  font-size: 26px; z-index: 4; animation: seatReactionPop 3.4s ease both;
+}
+@keyframes seatReactionPop {
+  0% { transform: translate(-50%, -40%) scale(0); opacity: 0; }
+  10% { transform: translate(-50%, -60%) scale(1.25); opacity: 1; }
+  18% { transform: translate(-50%, -55%) scale(1); opacity: 1; }
+  85% { transform: translate(-50%, -55%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -55%) scale(0.85); opacity: 0; }
+}
 .seat-name {
   font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -327,8 +340,17 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 
 .hidden { display: none !important; }
 
+.round-result-emoji { text-align: center; font-size: 48px; line-height: 1; margin-bottom: 4px; }
+@keyframes scoreCardEmojiPop {
+  0% { transform: scale(0); opacity: 0; }
+  12% { transform: scale(1.25); opacity: 1; }
+  22% { transform: scale(1); opacity: 1; }
+  85% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(0.85); opacity: 0; }
+}
 .result-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 14px; }
 .result-row.winner-row { font-weight: 700; color: #1e5631; }
+.final-round-delta { font-weight: 700; color: #b8860b; background: #fff3d6; padding: 1px 6px; border-radius: 6px; }
 
 /* ---- Drawn card reveal ---- */
 .draw-reveal {
@@ -351,6 +373,11 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 @keyframes popIn { from { transform: scale(0.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
 /* ---- Game-start sequence: countdown -> live deal -> joker/open reveal ---- */
+.confetti-canvas {
+  position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 50; pointer-events: none;
+}
+.confetti-canvas.hidden { display: none; }
+
 .start-sequence {
   position: fixed; inset: 0; background: rgba(9, 38, 22, 0.92);
   display: flex; align-items: center; justify-content: center; z-index: 40;
@@ -370,16 +397,30 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .start-seq-dealing.hidden { display: none; }
 .start-seq-dealing-title { margin-bottom: 16px; }
-.start-seq-dealing-players { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 320px; }
+.start-seq-dealing-players {
+  display: flex; flex-wrap: wrap; gap: 22px 14px; justify-content: center; align-content: center;
+  max-width: 340px; min-height: 140px; position: relative;
+}
 .deal-chip {
-  padding: 6px 12px; border-radius: 20px; font-size: 13px; font-weight: 600;
-  background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6);
+  padding: 8px 14px; border-radius: 12px; font-size: 13px; font-weight: 600; text-align: center;
+  background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7);
   border: 1px solid rgba(255,255,255,0.2);
   transition: background 0.2s, color 0.2s, transform 0.2s;
 }
+.deal-chip-count { color: #d4a017; font-size: 12px; margin-top: 2px; font-weight: 700; }
 .deal-chip.dealt {
   background: #d4a017; color: #1e5631; border-color: #d4a017;
-  transform: scale(1.08);
+  transform: scale(1.06);
+}
+.deal-chip.dealt .deal-chip-count { color: #1e5631; }
+.deal-deck {
+  width: 26px; height: 36px; border-radius: 4px; background: #12321f;
+  border: 1px solid rgba(255,255,255,0.25);
+}
+.deal-flyer {
+  position: absolute; top: 50%; left: 50%; width: 22px; height: 30px; border-radius: 4px;
+  background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,0.4);
+  transform: translate(-50%, -50%); opacity: 0;
 }
 .start-seq-reveal { display: flex; flex-direction: column; gap: 18px; animation: popIn 0.3s ease-out; }
 .start-seq-reveal.hidden { display: none; }

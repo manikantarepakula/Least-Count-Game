@@ -23,6 +23,42 @@
   // client-side timer, so it can never fire before the data actually exists.
   let pendingStartReveal = false;
   let startSeqTimer = null;
+  let dealAnimationCancel = null;
+
+  // ---------------- seat emoji reactions (items 9 & 10) ----------------
+  // playerId -> { emoji, startedAt }. Seats get fully torn down and rebuilt
+  // on every renderOvalTable() call, so instead of animating a persistent
+  // DOM node we just track "what's active and since when" here and have
+  // renderOvalTable() re-inject the bubble every time, using a negative
+  // animation-delay (= how long it's already been showing) so the pop/hold/
+  // fade animation looks continuous across re-renders instead of restarting.
+  const seatReactions = {};
+  const REACTION_HOLD_MS = 3000;
+  const REACTION_FADE_MS = 400;
+  const REACTION_TOTAL_MS = REACTION_HOLD_MS + REACTION_FADE_MS;
+
+  function triggerSeatReaction(playerId, emoji) {
+    const startedAt = Date.now();
+    seatReactions[playerId] = { emoji, startedAt };
+    renderOvalTable(latestGame);
+    setTimeout(() => {
+      if (seatReactions[playerId] && seatReactions[playerId].startedAt === startedAt) {
+        delete seatReactions[playerId];
+        renderOvalTable(latestGame);
+      }
+    }, REACTION_TOTAL_MS + 60);
+  }
+
+  // Big and playful on purpose -- it's fine if it briefly covers the name,
+  // since a subtle reaction nobody notices defeats the point.
+  const SEAT_REACTION_RULES = {
+    penalty6: { self: '😅', others: '😂' },
+    lowcards: { self: null, others: '👀' },
+    bigdiscard: { self: '🔥', others: null },
+    timeout: { self: '😴', others: null },
+    chainextend: { self: '😈', others: null },
+    eliminated: { self: '👋', others: null },
+  };
 
   // ---------------- sound effects (Web Audio API, no files needed) ----------------
   const Sound = (() => {
@@ -195,6 +231,7 @@
   // see game_state handler below) -- this function only owns the visuals.
   function runStartSequence(data) {
     if (startSeqTimer) { clearTimeout(startSeqTimer); startSeqTimer = null; }
+    if (dealAnimationCancel) { dealAnimationCancel(); dealAnimationCancel = null; }
     document.getElementById('overlay-gameover').classList.add('hidden');
     document.getElementById('overlay-round-result').classList.add('hidden');
     document.getElementById('overlay-scores').classList.add('hidden');
@@ -232,24 +269,75 @@
     showCountdownStep(steps);
   }
 
-  // Lights up each player's name chip in turn over totalMs, giving the
-  // impression cards are actually being dealt around the table one at a
-  // time (rather than a static "please wait" caption).
+  // A small "flying card" travels from a center deck marker to each player's
+  // chip in turn, looping around the table for several passes (mirroring
+  // how a real dealer hands out one card at a time, round and round) --
+  // rather than just lighting up each name once. Chip counters tick up with
+  // every card that "lands". Always fits within totalMs regardless of
+  // player count, since flight speed scales with the total number of
+  // flights (players x passes).
   function animateDealing(players, totalMs) {
     const container = document.getElementById('start-seq-dealing-players');
     container.innerHTML = '';
+    if (players.length === 0) return;
+    container.style.position = 'relative';
+
     const chips = players.map((p) => {
       const chip = document.createElement('div');
       chip.className = 'deal-chip';
-      chip.textContent = p.name;
+      chip.innerHTML = `<div class="deal-chip-name">${escapeHtml(p.name)}</div><div class="deal-chip-count">0</div>`;
       container.appendChild(chip);
       return chip;
     });
-    if (chips.length === 0) return;
-    const perStep = totalMs / chips.length;
-    chips.forEach((chip, i) => {
-      setTimeout(() => chip.classList.add('dealt'), perStep * (i + 1));
-    });
+
+    const deck = document.createElement('div');
+    deck.className = 'deal-deck';
+    container.appendChild(deck);
+
+    const flyer = document.createElement('div');
+    flyer.className = 'deal-flyer';
+    container.appendChild(flyer);
+
+    const passes = 3; // compressed stand-in for the real 13-cards-each deal
+    const totalFlights = players.length * passes;
+    const flightMs = totalMs / totalFlights;
+    let flight = 0;
+    let cancelled = false;
+    dealAnimationCancel = () => { cancelled = true; };
+
+    function centerOf(el) {
+      const cRect = container.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return { x: r.left - cRect.left + r.width / 2, y: r.top - cRect.top + r.height / 2 };
+    }
+
+    function flyNext() {
+      if (cancelled) return;
+      if (flight >= totalFlights) { flyer.style.opacity = '0'; return; }
+      const chip = chips[flight % chips.length];
+      const from = centerOf(deck);
+      const to = centerOf(chip);
+      flyer.style.transition = 'none';
+      flyer.style.left = from.x + 'px';
+      flyer.style.top = from.y + 'px';
+      flyer.style.opacity = '1';
+      const travelMs = flightMs * 0.7;
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        flyer.style.transition = `left ${travelMs}ms ease, top ${travelMs}ms ease`;
+        flyer.style.left = to.x + 'px';
+        flyer.style.top = to.y + 'px';
+      });
+      setTimeout(() => {
+        if (cancelled) return;
+        const countEl = chip.querySelector('.deal-chip-count');
+        countEl.textContent = String(parseInt(countEl.textContent, 10) + 1);
+        chip.classList.add('dealt');
+        flight += 1;
+        setTimeout(flyNext, flightMs * 0.3);
+      }, travelMs);
+    }
+    flyNext();
   }
 
   // Called once the first post-deal game_state arrives (pendingStartReveal
@@ -435,9 +523,35 @@
         `<div class="seat-name">${escapeHtml(p.name)}${p.playerId === myPlayerId ? ' (You)' : ''}</div>` +
         `<div class="seat-meta">${count !== undefined ? count + ' cards · ' : ''}${score} pts</div>` +
         '</div>';
+
+      const reaction = seatReactions[p.playerId];
+      if (reaction) {
+        const elapsed = Date.now() - reaction.startedAt;
+        if (elapsed < REACTION_TOTAL_MS) {
+          const bubble = document.createElement('div');
+          bubble.className = 'seat-emoji-bubble';
+          bubble.textContent = reaction.emoji;
+          bubble.style.animationDelay = (-elapsed) + 'ms';
+          seatEl.appendChild(bubble);
+        } else {
+          delete seatReactions[p.playerId];
+        }
+      }
+
       oval.appendChild(seatEl);
     });
   }
+
+  socket.on('seat_reaction', ({ type, affectedPlayerId }) => {
+    const rule = SEAT_REACTION_RULES[type];
+    if (!rule || !latestRoom) return;
+    if (rule.self) triggerSeatReaction(affectedPlayerId, rule.self);
+    if (rule.others) {
+      latestRoom.players.forEach((p) => {
+        if (p.playerId !== affectedPlayerId) triggerSeatReaction(p.playerId, rule.others);
+      });
+    }
+  });
 
   // ---------------- turn timer ----------------
   function updateTurnTimerDisplay(deadline) {
@@ -625,10 +739,23 @@
   function showRoundResult(game) {
     window.__lastRoundResultShownFor = game.roundNumber;
     const r = game.lastRoundResult;
+    // The declarer's own penalty is no longer always a flat 75 (a tied
+    // wrong declare now costs just their own hand value) -- show whatever
+    // it actually was instead of hardcoding the old flat number.
+    const declarerScore = r.roundScores[r.declaredBy];
     const title = r.correct
-      ? `✅ ${playerName(r.declaredBy)} correctly declared Least Count!`
-      : `❌ ${playerName(r.declaredBy)} declared wrong! (+75 penalty)`;
+      ? `${playerName(r.declaredBy)} correctly declared Least Count!`
+      : `${playerName(r.declaredBy)} declared wrong! (+${declarerScore} penalty)`;
     document.getElementById('round-result-title').textContent = title;
+
+    // Declare emojis show here (not at a seat) since the game redirects to
+    // this screen almost instantly after a declare -- a seat reaction
+    // would barely be visible before getting covered by this overlay.
+    const emojiEl = document.getElementById('round-result-emoji');
+    emojiEl.textContent = r.correct ? '🎉' : '😬';
+    emojiEl.style.animation = 'none';
+    void emojiEl.offsetWidth;
+    emojiEl.style.animation = 'scoreCardEmojiPop 3.4s ease 1 both';
 
     const body = document.getElementById('round-result-body');
     body.innerHTML = '';
@@ -674,21 +801,89 @@
   };
   document.getElementById('btn-close-scores').onclick = () => document.getElementById('overlay-scores').classList.add('hidden');
 
+  // ---------------- confetti celebration (item 7) ----------------
+  // Pure canvas + requestAnimationFrame, no external library or assets --
+  // a burst of colored rectangles falling with gravity and a little spin,
+  // fading out near the end. Fires once when the game-over screen appears.
+  let confettiRunning = false;
+  function launchConfetti() {
+    if (confettiRunning) return;
+    const canvas = document.getElementById('confetti-canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    confettiRunning = true;
+    canvas.classList.remove('hidden');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const colors = ['#d4a017', '#ffcb6b', '#1e5631', '#9fd8b8', '#ffffff', '#c0392b'];
+    const pieces = Array.from({ length: 140 }, () => ({
+      x: Math.random() * canvas.width,
+      y: -20 - Math.random() * canvas.height * 0.5,
+      w: 6 + Math.random() * 6,
+      h: 8 + Math.random() * 10,
+      vx: -1.5 + Math.random() * 3,
+      vy: 2 + Math.random() * 3,
+      rot: Math.random() * Math.PI * 2,
+      vrot: -0.2 + Math.random() * 0.4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+    }));
+
+    const durationMs = 3200;
+    const startedAt = Date.now();
+
+    function frame() {
+      const elapsed = Date.now() - startedAt;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (elapsed >= durationMs) {
+        canvas.classList.add('hidden');
+        confettiRunning = false;
+        return;
+      }
+      const fadeStart = durationMs - 500;
+      const alpha = elapsed > fadeStart ? Math.max(0, 1 - (elapsed - fadeStart) / 500) : 1;
+      ctx.globalAlpha = alpha;
+      pieces.forEach((p) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.03;
+        p.rot += p.vrot;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.restore();
+      });
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
   function showGameOver(game) {
     document.getElementById('overlay-round-result').classList.add('hidden');
     document.getElementById('gameover-title').textContent = `🏆 ${playerName(game.winner)} wins!`;
     const body = document.getElementById('gameover-body');
     body.innerHTML = '';
+    // The final round's score change is what actually ended the game --
+    // call it out distinctly next to each player's cumulative total instead
+    // of only showing the (less interesting, by itself) running total.
+    const lastRoundScores = (game.lastRoundResult && game.lastRoundResult.roundScores) || {};
     Object.entries(game.scores).sort((a,b) => a[1]-b[1]).forEach(([pid, score]) => {
       const row = document.createElement('div');
       row.className = 'result-row' + (pid === game.winner ? ' winner-row' : '');
-      row.innerHTML = `<span>${escapeHtml(playerName(pid))}</span><span>${score} pts</span>`;
+      const delta = lastRoundScores[pid];
+      const deltaHtml = delta !== undefined
+        ? `<span class="final-round-delta">${delta === 0 ? '+0' : '+' + delta}</span> this round · `
+        : '';
+      row.innerHTML = `<span>${escapeHtml(playerName(pid))}</span><span>${deltaHtml}${score} pts total</span>`;
       body.appendChild(row);
     });
     const isHost = latestRoom && latestRoom.hostPlayerId === myPlayerId;
     document.getElementById('btn-new-game').classList.toggle('hidden', !isHost);
     document.getElementById('gameover-hint').textContent = isHost ? '' : 'Waiting for host to start a new game...';
     document.getElementById('overlay-gameover').classList.remove('hidden');
+    launchConfetti();
   }
 
   document.getElementById('btn-new-game').onclick = () => {

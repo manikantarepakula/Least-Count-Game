@@ -1,7 +1,7 @@
 const assert = require('assert');
 const {
   deckCountForPlayers, createShoe, cardValue, handValue, LeastCountGame,
-  ELIMINATION_SCORE, WRONG_DECLARE_PENALTY,
+  ELIMINATION_SCORE, WRONG_DECLARE_PENALTY, ROUND_SCORE_CAP,
 } = require('../game/gameLogic');
 
 let passed = 0;
@@ -159,8 +159,11 @@ check('player right after a penalty-taker faces a normal single-card rule (open 
 });
 
 check('if the very first open card (revealed at dealing) is a 2, first player faces the +2 challenge immediately', () => {
+  // Item 6 made this noticeably rarer on purpose (single redraw on a 2, down
+  // from ~1-in-13 to ~1-in-170) -- needs many more attempts than before to
+  // reliably reproduce it at all, or this test would flake intermittently.
   let found = false;
-  for (let attempt = 0; attempt < 500 && !found; attempt++) {
+  for (let attempt = 0; attempt < 6000 && !found; attempt++) {
     const g = new LeastCountGame(['A', 'B']);
     g.startRound();
     if (g._openRank() === '2') {
@@ -173,7 +176,22 @@ check('if the very first open card (revealed at dealing) is a 2, first player fa
       assert.strictEqual(g.chainCount, 0, 'chain resets after the penalty is taken');
     }
   }
-  assert.ok(found, 'expected to eventually deal a 2 as the opening card across 500 attempts');
+  assert.ok(found, 'expected to eventually deal a 2 as the opening card across 6000 attempts');
+});
+
+check('open card being a 2 is now noticeably rarer than a naive 1-in-13 rate', () => {
+  const trials = 5000;
+  let twos = 0;
+  for (let i = 0; i < trials; i++) {
+    const g = new LeastCountGame(['A', 'B']);
+    g.startRound();
+    if (g._openRank() === '2') twos += 1;
+  }
+  const rate = twos / trials;
+  // Naive (no redraw) rate would be ~1/13 = 7.7%; the single-redraw rule
+  // should land closer to ~1/169 = 0.6%. Leave generous headroom (< 3%)
+  // so this doesn't flake, while still catching a real regression.
+  assert.ok(rate < 0.03, `expected open-card-is-2 rate well under 3%, got ${(rate * 100).toFixed(2)}%`);
 });
 
 // 7. Stock reshuffle when empty
@@ -231,6 +249,42 @@ check('wrong declaration: 75 penalty to declarer, 0 to actual lowest', () => {
   assert.strictEqual(state.lastRoundResult.correct, false);
   assert.strictEqual(state.scores[declarer], WRONG_DECLARE_PENALTY);
   assert.strictEqual(state.scores[other], 0);
+});
+
+check('tied wrong declare: declarer pays own (small) value, tied opponent gets 0', () => {
+  const g = new LeastCountGame(['A', 'B', 'C']);
+  g.startRound();
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
+  const declarer = g.currentPlayer();
+  const others = g.turnOrder.filter((id) => id !== declarer);
+  const tiedWith = others[0];
+  const highOne = others[1];
+  g.hands[declarer] = [{ id: 'v1', rank: '3', suit: 'S' }]; // value 3
+  g.hands[tiedWith] = [{ id: 'v2', rank: '3', suit: 'H' }]; // also value 3 -- a tie
+  g.hands[highOne] = [{ id: 'v3', rank: 'K', suit: 'D' }]; // value 10, not tied
+  const state = g.declare(declarer);
+  assert.strictEqual(state.lastRoundResult.correct, false, 'tie is never a correct declare');
+  assert.strictEqual(state.scores[declarer], 3, 'declarer pays their own hand value, not the flat 75 penalty');
+  assert.strictEqual(state.scores[tiedWith], 0, 'the tied opponent still gets rewarded with 0');
+  assert.strictEqual(state.scores[highOne], 10, 'unrelated player just pays their own value');
+});
+
+check('round-loss score is capped at 75 even if hand value is higher', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
+  const declarer = g.currentPlayer();
+  const other = g.turnOrder.find((id) => id !== declarer);
+  g.hands[declarer] = [{ id: 'v1', rank: 'A', suit: 'S' }]; // value 1
+  // 9 face cards = hand value 90, well above the cap
+  g.hands[other] = Array.from({ length: 9 }, (_, i) => ({ id: `o${i}`, rank: 'K', suit: 'D' }));
+  const state = g.declare(declarer);
+  assert.strictEqual(state.lastRoundResult.values[other], 90, 'actual hand value is uncapped in the raw values');
+  assert.strictEqual(state.scores[other], ROUND_SCORE_CAP, 'but the score added is capped at 75');
 });
 
 // 10. Declaration blocked above value 5
