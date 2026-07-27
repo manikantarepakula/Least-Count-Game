@@ -253,7 +253,7 @@
       if (n <= 0) {
         countdownEl.classList.add('hidden');
         dealingEl.classList.remove('hidden');
-        animateDealing(data.players || [], dealMs);
+        animateDealing(data.players || [], dealMs, data.dealPasses || 13);
         startSeqTimer = setTimeout(() => {
           // Countdown + deal animation are done. The board itself will pop
           // to life the instant the server's post-deal game_state arrives
@@ -270,13 +270,13 @@
   }
 
   // A small "flying card" travels from a center deck marker to each player's
-  // chip in turn, looping around the table for several passes (mirroring
-  // how a real dealer hands out one card at a time, round and round) --
-  // rather than just lighting up each name once. Chip counters tick up with
-  // every card that "lands". Always fits within totalMs regardless of
-  // player count, since flight speed scales with the total number of
-  // flights (players x passes).
-  function animateDealing(players, totalMs) {
+  // chip in turn, looping around the table for a full 13 passes (matching
+  // the real hand size dealt underneath -- not a shortened stand-in),
+  // mirroring how a real dealer hands out one card at a time, round and
+  // round. Chip counters tick up with every card that "lands". totalMs is
+  // computed server-side to scale with player count, so per-flight speed
+  // stays consistent (~90ms) regardless of table size.
+  function animateDealing(players, totalMs, passes) {
     const container = document.getElementById('start-seq-dealing-players');
     container.innerHTML = '';
     if (players.length === 0) return;
@@ -298,7 +298,7 @@
     flyer.className = 'deal-flyer';
     container.appendChild(flyer);
 
-    const passes = 3; // compressed stand-in for the real 13-cards-each deal
+    passes = passes || 13;
     const totalFlights = players.length * passes;
     const flightMs = totalMs / totalFlights;
     let flight = 0;
@@ -762,7 +762,10 @@
     Object.keys(r.values).forEach((pid) => {
       const row = document.createElement('div');
       row.className = 'result-row';
-      row.innerHTML = `<span>${escapeHtml(playerName(pid))}</span><span>value ${r.values[pid]} · +${r.roundScores[pid]} pts · total ${game.scores[pid]}</span>`;
+      // This round's score change is the whole point of this screen -- make
+      // it visually pop (same gold badge used on the final gameover screen)
+      // instead of blending in with the value/total text around it.
+      row.innerHTML = `<span>${escapeHtml(playerName(pid))}</span><span>value ${r.values[pid]} · <span class="final-round-delta">+${r.roundScores[pid]}</span> pts · total ${game.scores[pid]}</span>`;
       body.appendChild(row);
     });
     if (r.newlyEliminated && r.newlyEliminated.length) {
@@ -866,15 +869,25 @@
     const body = document.getElementById('gameover-body');
     body.innerHTML = '';
     // The final round's score change is what actually ended the game --
-    // call it out distinctly next to each player's cumulative total instead
-    // of only showing the (less interesting, by itself) running total.
+    // call it out distinctly (a dedicated banner, not just a small inline
+    // badge easy to miss) next to each player's cumulative total.
     const lastRoundScores = (game.lastRoundResult && game.lastRoundResult.roundScores) || {};
+    const hasDeltas = Object.keys(lastRoundScores).length > 0;
+    if (hasDeltas) {
+      const banner = document.createElement('div');
+      banner.className = 'final-round-banner';
+      const parts = Object.entries(lastRoundScores).map(([pid, delta]) =>
+        `${escapeHtml(playerName(pid))} <b>+${delta}</b>`
+      );
+      banner.innerHTML = `<div class="final-round-banner-label">Final round</div><div>${parts.join(' &nbsp;·&nbsp; ')}</div>`;
+      body.appendChild(banner);
+    }
     Object.entries(game.scores).sort((a,b) => a[1]-b[1]).forEach(([pid, score]) => {
       const row = document.createElement('div');
       row.className = 'result-row' + (pid === game.winner ? ' winner-row' : '');
       const delta = lastRoundScores[pid];
       const deltaHtml = delta !== undefined
-        ? `<span class="final-round-delta">${delta === 0 ? '+0' : '+' + delta}</span> this round · `
+        ? `<span class="final-round-delta">+${delta}</span> this round · `
         : '';
       row.innerHTML = `<span>${escapeHtml(playerName(pid))}</span><span>${deltaHtml}${score} pts total</span>`;
       body.appendChild(row);

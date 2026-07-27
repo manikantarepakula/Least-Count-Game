@@ -216,16 +216,21 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .seat.eliminated { opacity: 0.4; }
 .seat.quit { opacity: 0.35; }
 .seat-emoji-bubble {
-  position: absolute; top: 0; left: 50%; width: 40px; height: 40px; border-radius: 50%;
+  /* Centered squarely on the seat chip itself (covering the name, as
+     intended) rather than floating above it -- staying within the seat's
+     own footprint avoids any risk of the popup being clipped by the
+     screen's overflow:hidden on cramped mobile layouts, especially for
+     seats near the top of the table. */
+  position: absolute; top: 50%; left: 50%; width: 44px; height: 44px; border-radius: 50%;
   background: #1a4a2c; border: 2px solid #d4a017; display: flex; align-items: center; justify-content: center;
-  font-size: 26px; z-index: 4; animation: seatReactionPop 3.4s ease both;
+  font-size: 28px; z-index: 5; animation: seatReactionPop 3.4s ease both;
 }
 @keyframes seatReactionPop {
-  0% { transform: translate(-50%, -40%) scale(0); opacity: 0; }
-  10% { transform: translate(-50%, -60%) scale(1.25); opacity: 1; }
-  18% { transform: translate(-50%, -55%) scale(1); opacity: 1; }
-  85% { transform: translate(-50%, -55%) scale(1); opacity: 1; }
-  100% { transform: translate(-50%, -55%) scale(0.85); opacity: 0; }
+  0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+  10% { transform: translate(-50%, -50%) scale(1.3); opacity: 1; }
+  18% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  85% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(0.85); opacity: 0; }
 }
 .seat-name {
   font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -351,6 +356,15 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .result-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 14px; }
 .result-row.winner-row { font-weight: 700; color: #1e5631; }
 .final-round-delta { font-weight: 700; color: #b8860b; background: #fff3d6; padding: 1px 6px; border-radius: 6px; }
+.final-round-banner {
+  background: #fff3d6; border: 1.5px solid #d4a017; border-radius: 10px;
+  padding: 10px 14px; margin-bottom: 14px; text-align: center; font-size: 14px; color: #6b4a00;
+}
+.final-round-banner-label {
+  text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; font-weight: 700;
+  color: #b8860b; margin-bottom: 4px;
+}
+.final-round-banner b { color: #8a5c00; }
 
 /* ---- Drawn card reveal ---- */
 .draw-reveal {

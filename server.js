@@ -30,7 +30,13 @@ const CHAT_HISTORY_LIMIT = 100;
 // reveal, not the instant hands are dealt.
 // ---------------------------------------------------------------------------
 const COUNTDOWN_MS = 3000; // 3-2-1
-const DEAL_MS = 2600; // live-deal animation (long enough for a multi-pass circular deal)
+// The deal animation does one visual "flight" per card per player -- 13
+// passes each, matching the real hand size, not a shortened stand-in.
+// Total deal time scales with player count (a bigger table really does
+// take longer to deal) rather than being a fixed duration split thinner
+// and thinner as more players join.
+const DEAL_PASSES = 13;
+const DEAL_FLIGHT_MS = 90; // time per individual card flight (travel + brief pause)
 const REVEAL_MS = 5000; // joker/open-card reveal, held on screen
 const REVEAL_TO_TIMER_MS = 2000; // turn timer quietly starts this far into the reveal
 // Minimum penalty-cards-in-one-go and discard-group-size that count as
@@ -138,10 +144,13 @@ function revealDrawIfAny(room) {
 function beginStartSequence(room, roomCode) {
   room.lowCardNotified = new Set(); // reset item-10 "look out" tracking for the new round
   room.phase = 'starting';
+  const dealMs = DEAL_PASSES * room.order.length * DEAL_FLIGHT_MS;
+  room.currentDealMs = dealMs; // remembered so a mid-sequence rejoin replays with the same timing
   broadcastRoom(room);
   io.to(roomCode).emit('game_starting', {
     countdownMs: COUNTDOWN_MS,
-    dealMs: DEAL_MS,
+    dealMs,
+    dealPasses: DEAL_PASSES,
     revealMs: REVEAL_MS,
     players: room.order.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
   });
@@ -161,7 +170,7 @@ function beginStartSequence(room, roomCode) {
       scheduleTurnTimer(room); // real turn timer quietly starts here, mid-reveal
       broadcastGameState(room);
     }, REVEAL_TO_TIMER_MS);
-  }, COUNTDOWN_MS + DEAL_MS);
+  }, COUNTDOWN_MS + dealMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +308,8 @@ io.on('connection', (socket) => {
       if (room.game && room.phase === 'starting') {
         io.to(socket.id).emit('game_starting', {
           countdownMs: COUNTDOWN_MS,
-          dealMs: DEAL_MS,
+          dealMs: room.currentDealMs || DEAL_PASSES * room.order.length * DEAL_FLIGHT_MS,
+          dealPasses: DEAL_PASSES,
           revealMs: REVEAL_MS,
           players: room.order.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
         });
