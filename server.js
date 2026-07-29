@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { LeastCountGame } = require('./game/gameLogic');
+const { LeastCountGame, MAX_SCORE_OPTIONS } = require('./game/gameLogic');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,8 +18,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 const rooms = new Map(); // roomCode -> Room
 const socketIndex = new Map(); // socket.id -> { roomCode, playerId }
 
-const TURN_SECONDS = 30;
+// Reduced from 30s -> 20s: with the sound-only "your turn" cue proving easy
+// to miss, a snappier timer keeps a distracted player from stalling the
+// table for too long even before the new visual pulse (client-side) kicks in.
+const TURN_SECONDS = 20;
 const CHAT_HISTORY_LIMIT = 100;
+const DEFAULT_ELIMINATION_SCORE = 200;
 
 // ---------------------------------------------------------------------------
 // Game-start sequence timing. When the host clicks "Start Game" the cards
@@ -144,7 +148,19 @@ function revealDrawIfAny(room) {
 function beginStartSequence(room, roomCode) {
   room.lowCardNotified = new Set(); // reset item-10 "look out" tracking for the new round
   room.phase = 'starting';
-  const dealMs = DEAL_PASSES * room.order.length * DEAL_FLIGHT_MS;
+  // The dealing animation's player list must reflect who is ACTUALLY being
+  // dealt into this round -- room.game.turnOrder (set by startRound(), which
+  // already excludes anyone eliminated or who quit, and is in the real,
+  // dealer-rotated play order) -- not room.order, which is plain join order
+  // and still includes players who are out but haven't left the room. Using
+  // turnOrder here fixes two things at once: eliminated players no longer
+  // appear to receive cards in the dealing animation, and the seats the
+  // animation deals to (and the seating the client then keeps) match actual
+  // turn order instead of join order.
+  const dealOrder = (room.game && room.game.turnOrder && room.game.turnOrder.length)
+    ? room.game.turnOrder
+    : room.order;
+  const dealMs = DEAL_PASSES * dealOrder.length * DEAL_FLIGHT_MS;
   room.currentDealMs = dealMs; // remembered so a mid-sequence rejoin replays with the same timing
   broadcastRoom(room);
   io.to(roomCode).emit('game_starting', {
@@ -152,7 +168,7 @@ function beginStartSequence(room, roomCode) {
     dealMs,
     dealPasses: DEAL_PASSES,
     revealMs: REVEAL_MS,
-    players: room.order.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
+    players: dealOrder.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
   });
 
   clearStartSequenceTimers(room);
@@ -296,22 +312,33 @@ io.on('connection', (socket) => {
       const room = rooms.get(code);
       if (!room || !room.players.has(playerId)) throw new Error('Session expired, please join again.');
       const p = room.players.get(playerId);
+      // The mobile watchdog on the client calls 'rejoin' every few seconds
+      // as a routine "are we still connected" ping, even while the socket
+      // never actually dropped. If we replayed the game_starting sequence
+      // on every one of those pings, a deal animation running longer than
+      // the ping interval would get interrupted and restarted mid-flight --
+      // exactly the "distributes 6-7 cards, then restarts and does 13"
+      // symptom. Only replay the sequence (or resend state) when this is a
+      // genuinely NEW connection for this player, not a same-socket ping.
+      const isFreshReconnect = p.socketId !== socket.id || !p.connected;
       p.socketId = socket.id;
       p.connected = true;
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
       ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
       broadcastRoom(room);
+      if (!isFreshReconnect) return; // just a keepalive ping -- client already has everything
       // Don't leak hands/joker/open-card to a reconnecting client while the
       // countdown/deal/reveal sequence is still in progress for everyone
       // else -- re-play the sequence for them instead so they don't skip it.
       if (room.game && room.phase === 'starting') {
+        const dealOrder = (room.game.turnOrder && room.game.turnOrder.length) ? room.game.turnOrder : room.order;
         io.to(socket.id).emit('game_starting', {
           countdownMs: COUNTDOWN_MS,
-          dealMs: room.currentDealMs || DEAL_PASSES * room.order.length * DEAL_FLIGHT_MS,
+          dealMs: room.currentDealMs || DEAL_PASSES * dealOrder.length * DEAL_FLIGHT_MS,
           dealPasses: DEAL_PASSES,
           revealMs: REVEAL_MS,
-          players: room.order.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
+          players: dealOrder.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
         });
       } else if (room.game) {
         const state = room.game.getPublicState(playerId);
@@ -323,7 +350,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('start_game', ({ roomCode }, ack) => {
+  socket.on('start_game', ({ roomCode, eliminationScore }, ack) => {
     try {
       const room = rooms.get(roomCode);
       if (!room) throw new Error('Room not found.');
@@ -332,11 +359,17 @@ io.on('connection', (socket) => {
       if (room.order.length < 2) throw new Error('Need at least 2 players.');
       if (room.order.length > 10) throw new Error('Maximum 10 players.');
 
+      let maxScore = DEFAULT_ELIMINATION_SCORE;
+      if (eliminationScore !== undefined && eliminationScore !== null) {
+        if (!MAX_SCORE_OPTIONS.includes(Number(eliminationScore))) throw new Error('Invalid max score option.');
+        maxScore = Number(eliminationScore);
+      }
+
       // Cards are dealt on the server right away (the engine has no notion of
       // "not yet dealt"), but we deliberately withhold the full game_state
       // broadcast -- which is what actually reveals hands/joker/open card to
       // clients -- until the countdown + live-deal animation has played out.
-      room.game = new LeastCountGame(room.order.slice());
+      room.game = new LeastCountGame(room.order.slice(), maxScore);
       room.game.startRound();
       beginStartSequence(room, roomCode);
       ack && ack({ ok: true });
@@ -383,7 +416,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('next_round', ({ roomCode }, ack) => {
+  socket.on('next_round', ({ roomCode, eliminationScore }, ack) => {
     try {
       const room = rooms.get(roomCode);
       if (!room || !room.game) throw new Error('Game not active.');
@@ -391,6 +424,19 @@ io.on('connection', (socket) => {
       if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can start the next round.');
       if (!room.game.roundOver) throw new Error('Round is still in progress.');
       if (room.game.gameOver) throw new Error('Game is already over.');
+
+      // The host may optionally change the max score before starting the
+      // next round (to extend or shorten the game). Only touch it if a
+      // different value was actually picked -- setEliminationScore() itself
+      // enforces that it's still above the current highest score on the board.
+      if (eliminationScore !== undefined && eliminationScore !== null) {
+        const n = Number(eliminationScore);
+        if (n !== room.game.eliminationScore) {
+          if (!MAX_SCORE_OPTIONS.includes(n)) throw new Error('Invalid max score option.');
+          room.game.setEliminationScore(n);
+        }
+      }
+
       room.game.startRound();
       beginStartSequence(room, roomCode);
       ack && ack({ ok: true });

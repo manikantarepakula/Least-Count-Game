@@ -112,6 +112,19 @@ body.game-active {
 .landing-form .player-list .status { color: #6ba889; }
 .landing-form .leave-btn { border-color: #c0392b; color: #e0736a; }
 
+select {
+  width: 100%; padding: 12px; font-size: 16px; border-radius: 10px;
+  border: 1px solid #ccc; background: #fff; color: #1a1a1a; outline: none;
+}
+select:focus { border-color: #1e5631; }
+.landing-form select {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
+}
+.landing-form select option { color: #1a1a1a; }
+.lobby-maxscore-row { margin: 14px 0; }
+.lobby-maxscore-row.hidden { display: none; }
+.lobby-maxscore-row label { color: #9fd8b8; }
+
 h1 { text-align: center; margin: 0 0 4px; font-size: 28px; }
 h2 { margin-top: 0; }
 .subtitle { text-align: center; color: #666; margin-top: 0; }
@@ -215,6 +228,36 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .seat.active .seat-chip { background: #d4a017; color: #1a1a1a; font-weight: 700; }
 .seat.eliminated { opacity: 0.4; }
 .seat.quit { opacity: 0.35; }
+
+/* Your-turn visual pulse: only ever applied to your OWN seat, and only once
+   you've gone quiet for 5+ seconds on your own turn (see app.js) -- a purely
+   local, self-only nudge, no vibration, no broadcast to anyone else. */
+@keyframes turnPulseRing {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212,160,23,0.65); }
+  50% { box-shadow: 0 0 0 12px rgba(212,160,23,0); }
+}
+.seat.my-turn-pulse .seat-chip { animation: turnPulseRing 1.1s ease-in-out infinite; }
+
+/* Chat speech-bubble at the sender's seat -- shown alongside (not instead
+   of) the separate chat panel, for 5-10s scaled by message length. */
+.seat-chat-bubble {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  max-width: 150px; background: #fff; color: #1a1a1a; font-size: 11.5px;
+  padding: 6px 9px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+  z-index: 6; word-break: break-word; animation: chatBubbleIn 0.18s ease-out;
+}
+.seat-chat-bubble.below { top: 100%; margin-top: 6px; }
+.seat-chat-bubble.above { bottom: 100%; margin-bottom: 6px; }
+.seat-chat-bubble::after {
+  content: ''; position: absolute; left: 50%; transform: translateX(-50%);
+  width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent;
+}
+.seat-chat-bubble.below::after { top: -6px; border-bottom: 6px solid #fff; }
+.seat-chat-bubble.above::after { bottom: -6px; border-top: 6px solid #fff; }
+@keyframes chatBubbleIn {
+  from { transform: translateX(-50%) scale(0.7); opacity: 0; }
+  to { transform: translateX(-50%) scale(1); opacity: 1; }
+}
 .seat-emoji-bubble {
   /* Centered squarely on the seat chip itself (covering the name, as
      intended) rather than floating above it -- staying within the seat's
@@ -355,6 +398,55 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .result-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 14px; }
 .result-row.winner-row { font-weight: 700; color: #1e5631; }
+
+/* ---- Podium-style score card (shown every round) ---- */
+.podium-panel { max-width: 480px; width: 92vw; }
+.round-result-maxscore {
+  text-align: center; font-size: 12px; color: #8a5c00; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;
+}
+.round-result-note { text-align: center; font-size: 12.5px; color: #c0392b; margin-bottom: 8px; }
+.podium {
+  display: flex; align-items: flex-end; justify-content: center; gap: 10px;
+  margin: 8px 0 16px;
+}
+.podium-slot {
+  background: #fff8e6; border: 1.5px solid #d4a017; border-radius: 12px;
+  padding: 10px 12px; text-align: center; flex: 1; min-width: 0;
+}
+.podium-medal { font-size: 26px; line-height: 1; }
+.podium-name {
+  font-weight: 700; font-size: 12.5px; margin-top: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.podium-score { font-size: 12px; color: #8a5c00; margin-top: 2px; font-weight: 700; }
+/* 1st place sits centered (order: 2, flanked by 2nd/3rd) and visibly higher
+   than the other two -- via extra padding/scale + the other two carrying
+   their own bottom margin, not a bar-chart height. */
+.podium-place-1 {
+  order: 2; padding-top: 18px; padding-bottom: 18px;
+  background: #ffe9ad; border-width: 2px; transform: scale(1.06);
+  box-shadow: 0 4px 14px rgba(212,160,23,0.35);
+}
+.podium-place-1 .podium-medal { font-size: 32px; }
+.podium-place-2 { order: 1; margin-bottom: 8px; }
+.podium-place-3 { order: 3; margin-bottom: 14px; }
+
+.scoreboard-table { border-top: 1.5px solid #f0dfa8; padding-top: 6px; max-height: 34vh; overflow-y: auto; }
+.scoreboard-row {
+  display: grid; grid-template-columns: 26px 1fr 54px 70px; align-items: center;
+  gap: 4px; padding: 7px 2px; border-bottom: 1px solid #f2f2f2; font-size: 13px;
+}
+.scoreboard-row.me { background: #fffaf0; font-weight: 700; }
+.scoreboard-row.eliminated { opacity: 0.55; }
+.scoreboard-rank { color: #999; font-size: 11px; font-weight: 700; }
+.scoreboard-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scoreboard-delta { color: #b8860b; font-weight: 700; text-align: right; }
+.scoreboard-total { text-align: right; font-weight: 700; color: #1e5631; }
+
+.round-maxscore-row { margin: 14px 0; }
+.round-maxscore-row.hidden { display: none; }
+.round-maxscore-row label { color: #666; font-size: 12px; }
 .final-round-delta { font-weight: 700; color: #b8860b; background: #fff3d6; padding: 1px 6px; border-radius: 6px; }
 .final-round-banner {
   background: #fff3d6; border: 1.5px solid #d4a017; border-radius: 10px;
@@ -392,6 +484,41 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .confetti-canvas.hidden { display: none; }
 
+/* Countdown + "dealing" label -- a small floating, non-blocking badge (NOT
+   a full-screen takeover) so the real oval table underneath stays visible
+   while cards fly to the actual chair positions during dealing. */
+.deal-phase-badge {
+  position: fixed; top: 12%; left: 50%; transform: translateX(-50%);
+  z-index: 45; text-align: center; pointer-events: none;
+}
+.deal-phase-badge.hidden { display: none; }
+.deal-phase-badge .start-seq-countdown { font-size: 64px; }
+.start-seq-countdown {
+  font-weight: 700; color: #d4a017;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+  animation: popIn 0.3s ease-out;
+}
+.start-seq-countdown.hidden { display: none; }
+.deal-phase-label {
+  color: #fff; font-size: 14px; font-weight: 600;
+  background: rgba(9,38,22,0.6); border-radius: 20px; padding: 6px 16px;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.5); animation: fadeIn 0.2s ease-out;
+}
+.deal-phase-label.hidden { display: none; }
+
+/* The flying "card" itself lives inside the real #oval-table and travels
+   from the table's center to each actual seat in turn -- a real chair-to-
+   chair deal, not an abstract side-panel animation. */
+.deal-flyer {
+  position: absolute; top: 50%; left: 50%; width: 24px; height: 34px; border-radius: 4px;
+  background: repeating-linear-gradient(45deg, #234, #234 5px, #1a2f42 5px, #1a2f42 10px);
+  border: 1px solid #0b1a26; box-shadow: 0 3px 8px rgba(0,0,0,0.45);
+  transform: translate(-50%, -50%); opacity: 0; z-index: 6;
+}
+.deal-flyer.hidden { display: none; }
+/* Brief highlight the instant a card "lands" at a seat. */
+.seat.dealt-flash .seat-chip { background: #d4a017; color: #1a1a1a; transition: background 0.1s; }
+
 .start-sequence {
   position: fixed; inset: 0; background: rgba(9, 38, 22, 0.92);
   display: flex; align-items: center; justify-content: center; z-index: 40;
@@ -399,43 +526,6 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .start-sequence.hidden { display: none; }
 .start-seq-box { text-align: center; }
-.start-seq-countdown {
-  font-size: 96px; font-weight: 700; color: #d4a017;
-  text-shadow: 0 2px 12px rgba(0,0,0,0.5);
-  animation: popIn 0.3s ease-out;
-}
-.start-seq-countdown.hidden { display: none; }
-.start-seq-dealing {
-  color: #fff; font-size: 18px; font-weight: 600;
-  animation: fadeIn 0.2s ease-out;
-}
-.start-seq-dealing.hidden { display: none; }
-.start-seq-dealing-title { margin-bottom: 16px; }
-.start-seq-dealing-players {
-  display: flex; flex-wrap: wrap; gap: 22px 14px; justify-content: center; align-content: center;
-  max-width: 340px; min-height: 140px; position: relative;
-}
-.deal-chip {
-  padding: 8px 14px; border-radius: 12px; font-size: 13px; font-weight: 600; text-align: center;
-  background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7);
-  border: 1px solid rgba(255,255,255,0.2);
-  transition: background 0.2s, color 0.2s, transform 0.2s;
-}
-.deal-chip-count { color: #d4a017; font-size: 12px; margin-top: 2px; font-weight: 700; }
-.deal-chip.dealt {
-  background: #d4a017; color: #1e5631; border-color: #d4a017;
-  transform: scale(1.06);
-}
-.deal-chip.dealt .deal-chip-count { color: #1e5631; }
-.deal-deck {
-  width: 26px; height: 36px; border-radius: 4px; background: #12321f;
-  border: 1px solid rgba(255,255,255,0.25);
-}
-.deal-flyer {
-  position: absolute; top: 50%; left: 50%; width: 22px; height: 30px; border-radius: 4px;
-  background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,0.4);
-  transform: translate(-50%, -50%); opacity: 0;
-}
 .start-seq-reveal { display: flex; flex-direction: column; gap: 18px; animation: popIn 0.3s ease-out; }
 .start-seq-reveal.hidden { display: none; }
 .start-seq-reveal-row { display: flex; flex-direction: column; align-items: center; gap: 8px; }

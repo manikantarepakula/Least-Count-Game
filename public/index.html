@@ -56,6 +56,11 @@
     <h3>Players</h3>
     <ul id="lobby-players" class="player-list"></ul>
 
+    <div id="lobby-maxscore-row" class="lobby-maxscore-row hidden">
+      <label for="input-maxscore">Max Score (గరిష్ట స్కోర్)</label>
+      <select id="input-maxscore"></select>
+    </div>
+
     <button id="btn-start" class="primary" disabled>Start Game (గేమ్ మొదలుపెట్టు)</button>
     <p id="lobby-hint" class="hint"></p>
     <button id="btn-leave-lobby" class="secondary leave-btn">Leave Room</button>
@@ -89,6 +94,7 @@
       </div>
     </div>
     <!-- .seat elements injected by app.js -->
+    <div id="deal-flyer" class="deal-flyer hidden"></div>
   </div>
 
   <div id="chain-banner" class="chain-banner hidden">
@@ -116,13 +122,16 @@
 
 <canvas id="confetti-canvas" class="confetti-canvas hidden"></canvas>
 
+<!-- Countdown + "dealing" label float over the real oval table (now visible
+     underneath) instead of a full-screen takeover, since the deal animation
+     itself flies cards to the actual chair positions on that table. -->
+<div id="deal-phase-badge" class="deal-phase-badge hidden">
+  <div id="start-seq-countdown" class="start-seq-countdown">3</div>
+  <div id="deal-phase-label" class="deal-phase-label hidden">Dealing cards... (కార్డులు ఇస్తున్నారు)</div>
+</div>
+
 <div id="overlay-start-sequence" class="start-sequence hidden">
   <div class="start-seq-box">
-    <div id="start-seq-countdown" class="start-seq-countdown">3</div>
-    <div id="start-seq-dealing" class="start-seq-dealing hidden">
-      <div class="start-seq-dealing-title">Dealing cards... (కార్డులు ఇస్తున్నారు)</div>
-      <div id="start-seq-dealing-players" class="start-seq-dealing-players"></div>
-    </div>
     <div id="start-seq-reveal" class="start-seq-reveal hidden">
       <div class="start-seq-reveal-row">
         <div class="start-seq-reveal-label">Joker</div>
@@ -137,10 +146,20 @@
 </div>
 
 <div id="overlay-round-result" class="overlay hidden">
-  <div class="card-panel">
+  <div class="card-panel podium-panel">
     <div id="round-result-emoji" class="round-result-emoji"></div>
     <h2 id="round-result-title">Round Result</h2>
-    <div id="round-result-body"></div>
+    <div id="round-result-maxscore" class="round-result-maxscore"></div>
+
+    <div id="podium" class="podium"></div>
+    <div id="round-result-note" class="round-result-note"></div>
+    <div id="round-result-table" class="scoreboard-table"></div>
+
+    <div id="round-maxscore-row" class="round-maxscore-row hidden">
+      <label for="round-maxscore-select">Change Max Score</label>
+      <select id="round-maxscore-select"></select>
+    </div>
+
     <button id="btn-next-round" class="primary hidden">Next Round</button>
     <button id="btn-leave-round-result" class="secondary leave-btn">Leave Game</button>
     <p id="round-result-hint" class="hint"></p>

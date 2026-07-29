@@ -72,14 +72,23 @@ const DECLARE_MAX_VALUE = 5;
 // A losing player's round score is never more than this, no matter how high
 // their hand value actually is -- they pay the lower of the two.
 const ROUND_SCORE_CAP = 75;
+// The fixed set of elimination-score choices offered to the host, both when
+// creating the game and again after every round. Kept as a small fixed list
+// (rather than free-form input) since it's picked from a dropdown on a
+// phone screen.
+const MAX_SCORE_OPTIONS = [100, 150, 200, 250, 300, 350, 400, 450, 500];
 
 class LeastCountGame {
-  constructor(playerIds) {
+  constructor(playerIds, eliminationScore) {
     if (playerIds.length < 2 || playerIds.length > 10) {
       throw new Error('Least Count supports 2-10 players');
     }
     this.playerIds = playerIds.slice();
     this.scores = Object.fromEntries(this.playerIds.map((id) => [id, 0]));
+    // Configurable per-game "max score" -- reaching or passing this ends a
+    // player's game. Defaults to the original fixed value if the host didn't
+    // pick one (e.g. older clients, or direct engine use in tests).
+    this.eliminationScore = eliminationScore || ELIMINATION_SCORE;
     this.eliminated = new Set(); // out due to reaching the score limit
     this.quit = new Set(); // voluntarily left between rounds
     this.roundNumber = 0;
@@ -130,6 +139,25 @@ class LeastCountGame {
       this.gameOver = true;
       this.winner = stillActive[0] || null;
     }
+    return this.getPublicState();
+  }
+
+  /**
+   * Changes the elimination ("max") score between rounds, so the host can
+   * extend or shorten the game based on how it's going. Must be strictly
+   * greater than every score on the board right now (including already-
+   * eliminated players) -- otherwise raising it to something at or below an
+   * existing score would retroactively make no sense (or, for an active
+   * player, would eliminate them out of nowhere without a round being played).
+   */
+  setEliminationScore(newScore) {
+    const n = Number(newScore);
+    if (!Number.isFinite(n) || n <= 0) throw new Error('Invalid max score.');
+    const maxCurrentScore = Math.max(0, ...Object.values(this.scores));
+    if (n <= maxCurrentScore) {
+      throw new Error(`Max score must be greater than the current highest score (${maxCurrentScore}).`);
+    }
+    this.eliminationScore = n;
     return this.getPublicState();
   }
 
@@ -439,7 +467,7 @@ class LeastCountGame {
     const preScores = { ...this.scores };
     for (const id of this.turnOrder) {
       this.scores[id] += roundScores[id];
-      if (this.scores[id] >= ELIMINATION_SCORE) this.eliminated.add(id);
+      if (this.scores[id] >= this.eliminationScore) this.eliminated.add(id);
     }
 
     this.lastRoundResult = {
@@ -470,6 +498,7 @@ class LeastCountGame {
       stockCount: this.stock ? this.stock.length : 0,
       reshuffleCount: this.reshuffleCount,
       scores: { ...this.scores },
+      eliminationScore: this.eliminationScore,
       eliminated: [...this.eliminated],
       quit: [...this.quit],
       roundOver: this.roundOver,
@@ -494,4 +523,5 @@ module.exports = {
   rankValue, cardValue, handValue,
   LeastCountGame,
   ELIMINATION_SCORE, WRONG_DECLARE_PENALTY, DECLARE_MAX_VALUE, ROUND_SCORE_CAP,
+  MAX_SCORE_OPTIONS,
 };

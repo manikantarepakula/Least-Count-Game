@@ -15,6 +15,72 @@
   let chatUnread = 0;
   let timerInterval = null;
 
+  // Fixed max-score choices offered to the host, both at game creation and
+  // again after every round (mirrors MAX_SCORE_OPTIONS in game/gameLogic.js --
+  // the server independently validates against its own copy of this list).
+  const MAX_SCORE_OPTIONS = [100, 150, 200, 250, 300, 350, 400, 450, 500];
+  const DEFAULT_MAX_SCORE = 200;
+
+  // Fills a <select> with every option strictly greater than minExclusive
+  // (plus the current value even if it wouldn't otherwise qualify, so the
+  // dropdown always has something sensible pre-selected).
+  function populateMaxScoreSelect(selectEl, currentValue, minExclusive) {
+    selectEl.innerHTML = '';
+    MAX_SCORE_OPTIONS.filter((v) => v > minExclusive || v === currentValue).forEach((v) => {
+      const opt = document.createElement('option');
+      opt.value = String(v);
+      opt.textContent = String(v);
+      if (v === currentValue) opt.selected = true;
+      selectEl.appendChild(opt);
+    });
+  }
+
+  // ---------------- your-turn visual pulse ----------------
+  // A subtle pulsing highlight at YOUR OWN seat only -- never broadcast, never
+  // shown at anyone else's seat -- that kicks in only after 5 seconds of your
+  // own turn going by with no action. The existing sound cue still plays the
+  // instant it becomes your turn; this is purely an additional, local nudge
+  // for when that gets missed. No vibration (per explicit request -- players
+  // rest their hands on the phone and constant buzzing would be irritating).
+  const TURN_PULSE_DELAY_MS = 5000;
+  let myTurnPulseTimer = null;
+  let myTurnPulseActive = false;
+
+  function updateMyTurnPulseTimer(prev, game) {
+    const isMyActiveTurn = game.currentPlayer === myPlayerId && !game.roundOver;
+    const turnJustChanged = !prev || prev.currentPlayer !== game.currentPlayer || prev.roundNumber !== game.roundNumber;
+    if (isMyActiveTurn) {
+      if (turnJustChanged) {
+        if (myTurnPulseTimer) clearTimeout(myTurnPulseTimer);
+        myTurnPulseActive = false;
+        myTurnPulseTimer = setTimeout(() => {
+          myTurnPulseActive = true;
+          renderOvalTable(latestGame);
+        }, TURN_PULSE_DELAY_MS);
+      }
+    } else {
+      if (myTurnPulseTimer) { clearTimeout(myTurnPulseTimer); myTurnPulseTimer = null; }
+      myTurnPulseActive = false;
+    }
+  }
+
+  // ---------------- chat speech bubbles at the sender's seat ----------------
+  // playerId -> { text, startedAt, durationMs }. Shown IN ADDITION to the
+  // separate chat panel (unchanged), for 5-10s scaled by message length.
+  const chatBubbles = {};
+  function triggerChatBubble(playerId, text) {
+    const durationMs = Math.max(5000, Math.min(10000, 5000 + text.length * 80));
+    const startedAt = Date.now();
+    chatBubbles[playerId] = { text, startedAt, durationMs };
+    renderOvalTable(latestGame);
+    setTimeout(() => {
+      if (chatBubbles[playerId] && chatBubbles[playerId].startedAt === startedAt) {
+        delete chatBubbles[playerId];
+        renderOvalTable(latestGame);
+      }
+    }, durationMs + 60);
+  }
+
   // Game-start sequence (countdown -> live deal -> joker/open-card reveal).
   // pendingStartReveal is set true the moment the countdown+deal animation
   // finishes locally; the very next game_state we receive after that is the
@@ -235,14 +301,33 @@
     document.getElementById('overlay-gameover').classList.add('hidden');
     document.getElementById('overlay-round-result').classList.add('hidden');
     document.getElementById('overlay-scores').classList.add('hidden');
-    const overlay = document.getElementById('overlay-start-sequence');
+
+    // The solid full-screen overlay is reserved for the joker/open-card
+    // reveal step only -- during countdown + dealing, the real oval table
+    // stays fully visible (cards fly to the actual chair positions), with
+    // just a small floating badge for the "3-2-1" / "Dealing..." text.
+    document.getElementById('overlay-start-sequence').classList.add('hidden');
+    document.getElementById('start-seq-reveal').classList.add('hidden');
+
+    const badge = document.getElementById('deal-phase-badge');
     const countdownEl = document.getElementById('start-seq-countdown');
-    const dealingEl = document.getElementById('start-seq-dealing');
-    const revealEl = document.getElementById('start-seq-reveal');
-    overlay.classList.remove('hidden');
-    revealEl.classList.add('hidden');
-    dealingEl.classList.add('hidden');
+    const dealingLabel = document.getElementById('deal-phase-label');
+    badge.classList.remove('hidden');
     countdownEl.classList.remove('hidden');
+    dealingLabel.classList.add('hidden');
+
+    // Build the real seats now, in the actual turn order the server just
+    // dealt this round with (see beginStartSequence in server.js), each
+    // starting at 0 cards -- so the dealing animation has real chairs to fly
+    // cards to instead of an abstract side panel.
+    const dealOrderIds = (data.players || []).map((p) => p.playerId);
+    renderOvalTable(null, dealOrderIds);
+    document.getElementById('turn-info').textContent = 'Dealing cards... (పంచుతున్నారు)';
+    document.getElementById('open-card-slot').innerHTML = '';
+    document.getElementById('joker-indicator').innerHTML = '';
+    document.getElementById('stock-count').textContent = '';
+    document.getElementById('chain-banner').classList.add('hidden');
+    document.getElementById('turn-timer').classList.add('hidden');
 
     const countdownMs = data.countdownMs || 3000;
     const dealMs = data.dealMs || 1500;
@@ -252,7 +337,7 @@
     function showCountdownStep(n) {
       if (n <= 0) {
         countdownEl.classList.add('hidden');
-        dealingEl.classList.remove('hidden');
+        dealingLabel.classList.remove('hidden');
         animateDealing(data.players || [], dealMs, data.dealPasses || 13);
         startSeqTimer = setTimeout(() => {
           // Countdown + deal animation are done. The board itself will pop
@@ -269,54 +354,47 @@
     showCountdownStep(steps);
   }
 
-  // A small "flying card" travels from a center deck marker to each player's
-  // chip in turn, looping around the table for a full 13 passes (matching
-  // the real hand size dealt underneath -- not a shortened stand-in),
-  // mirroring how a real dealer hands out one card at a time, round and
-  // round. Chip counters tick up with every card that "lands". totalMs is
-  // computed server-side to scale with player count, so per-flight speed
-  // stays consistent (~90ms) regardless of table size.
+  // A small "flying card" travels from the table's center to each player's
+  // ACTUAL seat in turn, looping around the real oval table for a full 13
+  // passes (matching the real hand size dealt underneath -- not a shortened
+  // stand-in), mirroring how a real dealer hands out one card at a time,
+  // round and round. Each seat's card-count ticks up as cards land on it.
+  // totalMs is computed server-side to scale with player count, so
+  // per-flight speed stays consistent (~90ms) regardless of table size.
   function animateDealing(players, totalMs, passes) {
-    const container = document.getElementById('start-seq-dealing-players');
-    container.innerHTML = '';
-    if (players.length === 0) return;
-    container.style.position = 'relative';
+    const oval = document.getElementById('oval-table');
+    const flyer = document.getElementById('deal-flyer');
+    if (players.length === 0) { flyer.classList.add('hidden'); return; }
+    flyer.classList.remove('hidden');
 
-    const chips = players.map((p) => {
-      const chip = document.createElement('div');
-      chip.className = 'deal-chip';
-      chip.innerHTML = `<div class="deal-chip-name">${escapeHtml(p.name)}</div><div class="deal-chip-count">0</div>`;
-      container.appendChild(chip);
-      return chip;
-    });
-
-    const deck = document.createElement('div');
-    deck.className = 'deal-deck';
-    container.appendChild(deck);
-
-    const flyer = document.createElement('div');
-    flyer.className = 'deal-flyer';
-    container.appendChild(flyer);
+    function centerOf(el) {
+      const cRect = oval.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return { x: r.left - cRect.left + r.width / 2, y: r.top - cRect.top + r.height / 2 };
+    }
+    function tableCenter() {
+      const cRect = oval.getBoundingClientRect();
+      return { x: cRect.width / 2, y: cRect.height / 2 };
+    }
+    function seatFor(playerId) {
+      return oval.querySelector(`.seat[data-player-id="${CSS.escape(playerId)}"]`);
+    }
 
     passes = passes || 13;
     const totalFlights = players.length * passes;
     const flightMs = totalMs / totalFlights;
     let flight = 0;
     let cancelled = false;
-    dealAnimationCancel = () => { cancelled = true; };
-
-    function centerOf(el) {
-      const cRect = container.getBoundingClientRect();
-      const r = el.getBoundingClientRect();
-      return { x: r.left - cRect.left + r.width / 2, y: r.top - cRect.top + r.height / 2 };
-    }
+    dealAnimationCancel = () => { cancelled = true; flyer.classList.add('hidden'); };
 
     function flyNext() {
       if (cancelled) return;
       if (flight >= totalFlights) { flyer.style.opacity = '0'; return; }
-      const chip = chips[flight % chips.length];
-      const from = centerOf(deck);
-      const to = centerOf(chip);
+      const p = players[flight % players.length];
+      const seatEl = seatFor(p.playerId);
+      if (!seatEl) { flight += 1; flyNext(); return; }
+      const from = tableCenter();
+      const to = centerOf(seatEl);
       flyer.style.transition = 'none';
       flyer.style.left = from.x + 'px';
       flyer.style.top = from.y + 'px';
@@ -330,9 +408,13 @@
       });
       setTimeout(() => {
         if (cancelled) return;
-        const countEl = chip.querySelector('.deal-chip-count');
-        countEl.textContent = String(parseInt(countEl.textContent, 10) + 1);
-        chip.classList.add('dealt');
+        const metaEl = seatEl.querySelector('.seat-meta');
+        if (metaEl) {
+          const cur = parseInt(metaEl.textContent, 10) || 0;
+          metaEl.textContent = (cur + 1) + ' cards';
+        }
+        seatEl.classList.add('dealt-flash');
+        setTimeout(() => seatEl.classList.remove('dealt-flash'), Math.max(80, flightMs * 0.3 - 10));
         flight += 1;
         setTimeout(flyNext, flightMs * 0.3);
       }, travelMs);
@@ -344,10 +426,11 @@
   // was set true by runStartSequence above). Shows the joker rank + open
   // card big or held on screen, then reveals the live board underneath.
   function showStartReveal(game, revealMs) {
+    document.getElementById('deal-phase-badge').classList.add('hidden');
+    document.getElementById('deal-flyer').classList.add('hidden');
     const overlay = document.getElementById('overlay-start-sequence');
-    const dealingEl = document.getElementById('start-seq-dealing');
     const revealEl = document.getElementById('start-seq-reveal');
-    dealingEl.classList.add('hidden');
+    overlay.classList.remove('hidden');
     revealEl.classList.remove('hidden');
 
     const jokerSlot = document.getElementById('start-seq-joker-card');
@@ -406,8 +489,11 @@
   function setLandingError(msg) { document.getElementById('landing-error').textContent = msg || ''; }
 
   // ---------------- lobby screen ----------------
+  populateMaxScoreSelect(document.getElementById('input-maxscore'), DEFAULT_MAX_SCORE, 0);
+
   document.getElementById('btn-start').onclick = () => {
-    socket.emit('start_game', { roomCode: myRoomCode }, (res) => {
+    const eliminationScore = Number(document.getElementById('input-maxscore').value) || undefined;
+    socket.emit('start_game', { roomCode: myRoomCode, eliminationScore }, (res) => {
       if (!res.ok) document.getElementById('lobby-error').textContent = res.error;
     });
   };
@@ -426,6 +512,7 @@
     const btn = document.getElementById('btn-start');
     btn.classList.toggle('hidden', !isHost);
     btn.disabled = room.players.length < 2;
+    document.getElementById('lobby-maxscore-row').classList.toggle('hidden', !isHost);
     document.getElementById('lobby-hint').textContent = isHost
       ? (room.players.length < 2 ? 'Need at least 2 players (కనీసం 2 మంది కావాలి)' : `Ready with ${room.players.length} players`)
       : 'Waiting for host to start (హోస్ట్ మొదలుపెట్టే వరకు వేచి ఉండండి)';
@@ -488,16 +575,30 @@
   }
 
   // ---------------- oval table ----------------
-  function renderOvalTable(game) {
+  // orderOverride: an explicit array of playerIds (used only during the
+  // countdown/dealing phase, before any `game` object exists yet -- see
+  // runStartSequence) to pre-build the real seats in the exact order the
+  // server just dealt this round with, each starting at 0 cards.
+  //
+  // Otherwise seating always follows game.turnOrder -- the engine's actual,
+  // dealer-rotated play order (which also already excludes anyone eliminated
+  // or quit) -- rather than plain join order, so who's sitting next to you
+  // on screen always matches who you actually play after/before.
+  function renderOvalTable(game, orderOverride) {
     const oval = document.getElementById('oval-table');
     oval.querySelectorAll('.seat').forEach((el) => el.remove());
     if (!latestRoom) return;
 
-    const players = latestRoom.players;
-    const me = players.find((p) => p.playerId === myPlayerId);
-    const others = players.filter((p) => p.playerId !== myPlayerId);
-    const seatOrder = me ? [me, ...others] : players.slice();
+    const dealing = !!orderOverride;
+    const playerById = new Map(latestRoom.players.map((p) => [p.playerId, p]));
+    const orderIds = orderOverride
+      || ((game && game.turnOrder && game.turnOrder.length) ? game.turnOrder : latestRoom.players.map((p) => p.playerId));
+
+    const meIdx = orderIds.indexOf(myPlayerId);
+    const rotatedIds = meIdx > 0 ? [...orderIds.slice(meIdx), ...orderIds.slice(0, meIdx)] : orderIds.slice();
+    const seatOrder = rotatedIds.map((id) => playerById.get(id)).filter(Boolean);
     const n = seatOrder.length;
+    if (n === 0) return;
 
     seatOrder.forEach((p, i) => {
       const angle = Math.PI / 2 + (i / n) * 2 * Math.PI;
@@ -506,22 +607,25 @@
 
       const seatEl = document.createElement('div');
       seatEl.className = 'seat';
+      seatEl.dataset.playerId = p.playerId;
       if (game && !game.roundOver && game.currentPlayer === p.playerId) seatEl.classList.add('active');
       if (game && game.eliminated && game.eliminated.includes(p.playerId)) seatEl.classList.add('eliminated');
       if (game && game.quit && game.quit.includes(p.playerId)) seatEl.classList.add('quit');
+      if (p.playerId === myPlayerId && myTurnPulseActive) seatEl.classList.add('my-turn-pulse');
       seatEl.style.left = left + '%';
       seatEl.style.top = top + '%';
 
-      const count = game && game.handCounts ? game.handCounts[p.playerId] : undefined;
+      const count = game && game.handCounts ? game.handCounts[p.playerId] : (dealing ? 0 : undefined);
       const score = game && game.scores ? (game.scores[p.playerId] ?? 0) : 0;
 
       // Every seat (opponent or you) renders the exact same single chip:
       // name on top, "N cards · M pts" below. No extra icon on top of it,
       // so every seat looks identical regardless of position on the table.
+      // While dealing, only the running card count is shown (no score yet).
       seatEl.innerHTML =
         '<div class="seat-chip">' +
         `<div class="seat-name">${escapeHtml(p.name)}${p.playerId === myPlayerId ? ' (You)' : ''}</div>` +
-        `<div class="seat-meta">${count !== undefined ? count + ' cards · ' : ''}${score} pts</div>` +
+        `<div class="seat-meta">${count !== undefined ? count + ' cards' + (dealing ? '' : ' · ' + score + ' pts') : ''}</div>` +
         '</div>';
 
       const reaction = seatReactions[p.playerId];
@@ -535,6 +639,22 @@
           seatEl.appendChild(bubble);
         } else {
           delete seatReactions[p.playerId];
+        }
+      }
+
+      const chatBubble = chatBubbles[p.playerId];
+      if (chatBubble) {
+        const elapsed = Date.now() - chatBubble.startedAt;
+        if (elapsed < chatBubble.durationMs) {
+          const bubbleEl = document.createElement('div');
+          // Seats in the top half of the table show the bubble below
+          // themselves instead of above, so it never gets clipped by the
+          // screen's overflow:hidden near the top edge on mobile.
+          bubbleEl.className = 'seat-chat-bubble ' + (top < 50 ? 'below' : 'above');
+          bubbleEl.textContent = chatBubble.text;
+          seatEl.appendChild(bubbleEl);
+        } else {
+          delete chatBubbles[p.playerId];
         }
       }
 
@@ -736,6 +856,90 @@
   }
 
   // ---------------- round result / scores / game over overlays ----------------
+  // Ranks everyone by cumulative total score, ascending -- lowest total is
+  // rank 1, since Least Count rewards staying low. Re-derived fresh every
+  // round, so the podium/table are always re-sorted by the latest totals.
+  function rankedPlayers(game) {
+    return (latestRoom.players || [])
+      .map((p) => ({ ...p, total: game.scores[p.playerId] ?? 0 }))
+      .sort((a, b) => a.total - b.total);
+  }
+
+  // Podium: 1st place centered and visibly higher (via extra padding/scale,
+  // not a bar chart), 2nd/3rd flanking lower. Only the top 3 appear here --
+  // everyone (including 4th place and below) still appears in the full
+  // sorted table underneath.
+  function renderPodium(game, ranked) {
+    const podium = document.getElementById('podium');
+    podium.innerHTML = '';
+    const top3 = ranked.slice(0, 3);
+    if (top3.length === 0) return;
+    const order = [];
+    if (top3[1]) order.push({ p: top3[1], place: 2 });
+    order.push({ p: top3[0], place: 1 });
+    if (top3[2]) order.push({ p: top3[2], place: 3 });
+
+    order.forEach(({ p, place }) => {
+      const slot = document.createElement('div');
+      slot.className = `podium-slot podium-place-${place}`;
+      const medal = place === 1 ? '🥇' : place === 2 ? '🥈' : '🥉';
+      const elim = game.eliminated && game.eliminated.includes(p.playerId) ? ' (out)' : '';
+      slot.innerHTML =
+        `<div class="podium-medal">${medal}</div>` +
+        `<div class="podium-name">${escapeHtml(p.name)}${p.playerId === myPlayerId ? ' (You)' : ''}${elim}</div>` +
+        `<div class="podium-score">${p.total} pts</div>`;
+      podium.appendChild(slot);
+    });
+  }
+
+  // Full sorted table below the podium -- everyone, this round's delta, and
+  // the running total, Tabletop-Gold style. Auto re-sorted (via rankedPlayers)
+  // every time this screen is shown, i.e. every round.
+  function renderScoreboardTable(game, ranked) {
+    const body = document.getElementById('round-result-table');
+    body.innerHTML = '';
+    const r = game.lastRoundResult;
+    ranked.forEach((p, i) => {
+      const delta = r && r.roundScores ? r.roundScores[p.playerId] : undefined;
+      const elim = game.eliminated && game.eliminated.includes(p.playerId);
+      const row = document.createElement('div');
+      row.className = 'scoreboard-row' + (p.playerId === myPlayerId ? ' me' : '') + (elim ? ' eliminated' : '');
+      row.innerHTML =
+        `<span class="scoreboard-rank">#${i + 1}</span>` +
+        `<span class="scoreboard-name">${escapeHtml(p.name)}${p.playerId === myPlayerId ? ' (You)' : ''}${elim ? ' (out)' : ''}</span>` +
+        `<span class="scoreboard-delta">${delta !== undefined ? '+' + delta : ''}</span>` +
+        `<span class="scoreboard-total">${p.total} pts</span>`;
+      body.appendChild(row);
+    });
+  }
+
+  // Re-applies the Next-Round button + max-score dropdown visibility for
+  // WHOEVER is currently host. Split out from showRoundResult() (which only
+  // runs once per round) so it can also be re-run from the room_update
+  // handler -- fixing the bug where, if the host who was showing this screen
+  // got eliminated and left (handing host to someone else), the remaining
+  // players' already-open popup never found out they were now the host and
+  // the Next Round button stayed hidden for everyone.
+  function updateRoundResultHostControls() {
+    const overlay = document.getElementById('overlay-round-result');
+    if (!latestGame || overlay.classList.contains('hidden')) return;
+    const game = latestGame;
+    const isHost = latestRoom && latestRoom.hostPlayerId === myPlayerId;
+
+    const nextBtn = document.getElementById('btn-next-round');
+    nextBtn.classList.toggle('hidden', !isHost || game.gameOver);
+    document.getElementById('round-result-hint').textContent = isHost || game.gameOver ? '' : 'Waiting for host to start next round...';
+
+    const maxScoreRow = document.getElementById('round-maxscore-row');
+    if (isHost && !game.gameOver) {
+      const maxCurrentScore = Math.max(0, ...Object.values(game.scores));
+      populateMaxScoreSelect(document.getElementById('round-maxscore-select'), game.eliminationScore, maxCurrentScore);
+      maxScoreRow.classList.remove('hidden');
+    } else {
+      maxScoreRow.classList.add('hidden');
+    }
+  }
+
   function showRoundResult(game) {
     window.__lastRoundResultShownFor = game.roundNumber;
     const r = game.lastRoundResult;
@@ -747,6 +951,7 @@
       ? `${playerName(r.declaredBy)} correctly declared Least Count!`
       : `${playerName(r.declaredBy)} declared wrong! (+${declarerScore} penalty)`;
     document.getElementById('round-result-title').textContent = title;
+    document.getElementById('round-result-maxscore').textContent = `Playing to ${game.eliminationScore} pts`;
 
     // Declare emojis show here (not at a seat) since the game redirects to
     // this screen almost instantly after a declare -- a seat reaction
@@ -757,34 +962,26 @@
     void emojiEl.offsetWidth;
     emojiEl.style.animation = 'scoreCardEmojiPop 3.4s ease 1 both';
 
-    const body = document.getElementById('round-result-body');
-    body.innerHTML = '';
-    Object.keys(r.values).forEach((pid) => {
-      const row = document.createElement('div');
-      row.className = 'result-row';
-      // This round's score change is the whole point of this screen -- make
-      // it visually pop (same gold badge used on the final gameover screen)
-      // instead of blending in with the value/total text around it.
-      row.innerHTML = `<span>${escapeHtml(playerName(pid))}</span><span>value ${r.values[pid]} · <span class="final-round-delta">+${r.roundScores[pid]}</span> pts · total ${game.scores[pid]}</span>`;
-      body.appendChild(row);
-    });
-    if (r.newlyEliminated && r.newlyEliminated.length) {
-      const elim = document.createElement('p');
-      elim.className = 'error';
-      elim.textContent = `Eliminated: ${r.newlyEliminated.map(playerName).join(', ')}`;
-      body.appendChild(elim);
-    }
+    const ranked = rankedPlayers(game);
+    renderPodium(game, ranked);
+    renderScoreboardTable(game, ranked);
 
-    const isHost = latestRoom && latestRoom.hostPlayerId === myPlayerId;
-    const nextBtn = document.getElementById('btn-next-round');
-    nextBtn.classList.toggle('hidden', !isHost || game.gameOver);
-    document.getElementById('round-result-hint').textContent = isHost || game.gameOver ? '' : 'Waiting for host to start next round...';
+    const noteEl = document.getElementById('round-result-note');
+    noteEl.textContent = (r.newlyEliminated && r.newlyEliminated.length)
+      ? `Eliminated: ${r.newlyEliminated.map(playerName).join(', ')}`
+      : '';
+
     document.getElementById('overlay-round-result').classList.remove('hidden');
+    updateRoundResultHostControls();
   }
 
   document.getElementById('btn-next-round').onclick = () => {
     document.getElementById('overlay-round-result').classList.add('hidden');
-    socket.emit('next_round', { roomCode: myRoomCode }, (res) => {
+    const maxScoreRow = document.getElementById('round-maxscore-row');
+    const sel = document.getElementById('round-maxscore-select');
+    const eliminationScore = !maxScoreRow.classList.contains('hidden') && sel.value
+      ? Number(sel.value) : undefined;
+    socket.emit('next_round', { roomCode: myRoomCode, eliminationScore }, (res) => {
       if (!res.ok) setGameError(res.error);
     });
   };
@@ -1000,7 +1197,12 @@
   document.getElementById('chat-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendChat();
   });
-  socket.on('chat_message', (msg) => appendChatMessage(msg));
+  socket.on('chat_message', (msg) => {
+    appendChatMessage(msg);
+    // Speech bubble at the sender's seat, in addition to the panel above --
+    // only meaningful once seats actually exist (mid-game), not lobby chat.
+    if (latestGame) triggerChatBubble(msg.playerId, msg.text);
+  });
 
   // ---------------- +2 chain flash notification ----------------
   // A brief, table-wide toast every time a 2 lands, the chain escalates, or
@@ -1159,6 +1361,11 @@
     } else if (latestGame) {
       showScreen('screen-game');
       renderGame(latestGame);
+      // Keep the round-result popup's host controls (Next Round button,
+      // max-score dropdown) in sync even when the popup itself isn't being
+      // freshly shown -- e.g. a host who was eliminated leaves mid-popup and
+      // hands host to someone else; this re-evaluates who can now act.
+      updateRoundResultHostControls();
     }
   });
 
@@ -1178,6 +1385,7 @@
       playSoundsForTransition(prev, game);
       checkChainFlash(prev, game);
     }
+    updateMyTurnPulseTimer(prev, game);
     latestGame = game;
     // Once the turn (or round) has actually moved on, any error message or
     // card selection left over from a previous failed attempt is stale --

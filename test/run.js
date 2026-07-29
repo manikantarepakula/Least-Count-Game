@@ -1,7 +1,7 @@
 const assert = require('assert');
 const {
   deckCountForPlayers, createShoe, cardValue, handValue, LeastCountGame,
-  ELIMINATION_SCORE, WRONG_DECLARE_PENALTY, ROUND_SCORE_CAP,
+  ELIMINATION_SCORE, WRONG_DECLARE_PENALTY, ROUND_SCORE_CAP, MAX_SCORE_OPTIONS,
 } = require('../game/gameLogic');
 
 let passed = 0;
@@ -526,6 +526,75 @@ check('declaring becomes allowed again right after a +2 penalty resets the chain
   g.hands[p3] = [{ id: 'v1', rank: 'A', suit: 'S' }];
   const state = g.declare(p3); // should succeed -- no chain is pending against p3
   assert.strictEqual(state.roundOver, true);
+});
+
+// 17. Configurable max score (item: host-chosen elimination score)
+check('game defaults to the standard 200 elimination score when none is given', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  assert.strictEqual(g.eliminationScore, ELIMINATION_SCORE);
+});
+
+check('constructor accepts a custom elimination score and uses it instead of the default', () => {
+  const g = new LeastCountGame(['A', 'B'], 100);
+  assert.strictEqual(g.eliminationScore, 100);
+  // Both start at the same score so the test doesn't care which of A/B ends
+  // up as declarer vs. "other" (turnOrder/dealer rotation decides that).
+  g.scores = { A: 85, B: 85 };
+  g.startRound();
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
+  const declarer = g.currentPlayer();
+  const other = g.turnOrder.find((id) => id !== declarer);
+  g.hands[declarer] = [{ id: 'v1', rank: 'A', suit: 'S' }]; // value 1, correct declare
+  g.hands[other] = [{ id: 'o1', rank: '9', suit: 'D' }, { id: 'o2', rank: '9', suit: 'H' }]; // value 18, well under the 75 round cap
+  const state = g.declare(declarer);
+  assert.strictEqual(state.scores[other], 103, '85 + 18 = 103');
+  assert.ok(state.eliminated.includes(other), 'should be eliminated at the custom 100 threshold, not the default 200');
+});
+
+check('setEliminationScore changes the threshold used by future declares', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.scores = { A: 85, B: 85 };
+  g.setEliminationScore(100);
+  assert.strictEqual(g.eliminationScore, 100);
+  g.startRound();
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
+  const declarer = g.currentPlayer();
+  const other = g.turnOrder.find((id) => id !== declarer);
+  g.hands[declarer] = [{ id: 'v1', rank: 'A', suit: 'S' }];
+  g.hands[other] = [{ id: 'o1', rank: '9', suit: 'D' }, { id: 'o2', rank: '9', suit: 'H' }]; // value 18
+  const state = g.declare(declarer);
+  assert.strictEqual(state.scores[other], 103, '85 + 18 = 103');
+  assert.ok(state.eliminated.includes(other), 'should be eliminated once past the newly-lowered 100 threshold');
+});
+
+check('setEliminationScore rejects a value at or below the current highest score on the board', () => {
+  const g = new LeastCountGame(['A', 'B', 'C']);
+  g.scores = { A: 120, B: 40, C: 0 };
+  assert.throws(() => g.setEliminationScore(100), /greater than the current highest score/);
+  assert.throws(() => g.setEliminationScore(120), /greater than the current highest score/);
+  g.setEliminationScore(150); // strictly greater -- should succeed
+  assert.strictEqual(g.eliminationScore, 150);
+});
+
+check('setEliminationScore rejects non-numeric or non-positive values', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  assert.throws(() => g.setEliminationScore('not-a-number'), /Invalid max score/);
+  assert.throws(() => g.setEliminationScore(0), /Invalid max score/);
+  assert.throws(() => g.setEliminationScore(-50), /Invalid max score/);
+});
+
+check('getPublicState exposes the current eliminationScore', () => {
+  const g = new LeastCountGame(['A', 'B'], 300);
+  const state = g.startRound();
+  assert.strictEqual(state.eliminationScore, 300);
+});
+
+check('MAX_SCORE_OPTIONS is the expected fixed dropdown list', () => {
+  assert.deepStrictEqual(MAX_SCORE_OPTIONS, [100, 150, 200, 250, 300, 350, 400, 450, 500]);
 });
 
 console.log(`\n${passed} test(s) passed.`);
