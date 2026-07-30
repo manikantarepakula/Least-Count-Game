@@ -12,6 +12,37 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --------------------------------------------------------------------------
+// GIF search (chat). Proxies to Giphy so the API key stays server-side only
+// -- never shipped to the browser, where anyone could read it out of the
+// page source and drain the quota. Set GIPHY_API_KEY as an environment
+// variable (Render.com: Environment tab) to enable this; without it, the
+// endpoint just tells the client GIF search isn't configured yet.
+// --------------------------------------------------------------------------
+const GIPHY_API_KEY = process.env.GIPHY_API_KEY || '';
+
+app.get('/api/gif-search', async (req, res) => {
+  if (!GIPHY_API_KEY) {
+    return res.status(501).json({ ok: false, error: 'GIF search is not set up yet.' });
+  }
+  const q = (req.query.q || '').toString().trim().slice(0, 60);
+  try {
+    const endpoint = q
+      ? `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(GIPHY_API_KEY)}&q=${encodeURIComponent(q)}&limit=18&rating=pg-13`
+      : `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(GIPHY_API_KEY)}&limit=18&rating=pg-13`;
+    const giphyRes = await fetch(endpoint);
+    const data = await giphyRes.json();
+    const gifs = (data.data || []).map((g) => ({
+      id: g.id,
+      preview: (g.images && (g.images.fixed_width_small || g.images.fixed_width) || {}).url,
+      full: (g.images && (g.images.fixed_width || g.images.original) || {}).url,
+    })).filter((g) => g.preview && g.full);
+    res.json({ ok: true, gifs });
+  } catch (e) {
+    res.status(502).json({ ok: false, error: 'GIF search failed. Try again.' });
+  }
+});
+
+// --------------------------------------------------------------------------
 // In-memory room store. Fine for a small private game among family/friends;
 // state simply resets if the server restarts.
 // --------------------------------------------------------------------------
@@ -41,8 +72,8 @@ const COUNTDOWN_MS = 3000; // 3-2-1
 // and thinner as more players join.
 const DEAL_PASSES = 13;
 const DEAL_FLIGHT_MS = 90; // time per individual card flight (travel + brief pause)
-const REVEAL_MS = 5000; // joker/open-card reveal, held on screen
-const REVEAL_TO_TIMER_MS = 2000; // turn timer quietly starts this far into the reveal
+const REVEAL_MS = 2500; // joker/open-card reveal, held on screen
+const REVEAL_TO_TIMER_MS = 1200; // turn timer quietly starts this far into the reveal
 // Minimum penalty-cards-in-one-go and discard-group-size that count as
 // "big" enough to trigger a seat reaction (items 9/10). The client decides
 // which emoji(s) each reaction type maps to and whether it's shown at the
@@ -509,23 +540,35 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('chat_message', ({ roomCode, text }, ack) => {
+  socket.on('chat_message', ({ roomCode, type, text, gifUrl }, ack) => {
     try {
       const room = rooms.get(roomCode);
       if (!room) throw new Error('Room not found.');
       const entry = socketIndex.get(socket.id);
       if (!entry) throw new Error('Not in a room.');
-      const cleanText = (text || '').toString().trim().slice(0, 300);
-      if (!cleanText) throw new Error('Empty message.');
 
       const player = room.players.get(entry.playerId);
       const msg = {
         id: crypto.randomUUID(),
         playerId: entry.playerId,
         name: player ? player.name : '?',
-        text: cleanText,
         ts: Date.now(),
       };
+
+      if (type === 'gif') {
+        const cleanUrl = (gifUrl || '').toString().trim().slice(0, 500);
+        if (!cleanUrl) throw new Error('No GIF selected.');
+        // Only allow actual Giphy media links through, not arbitrary URLs.
+        if (!/^https:\/\/media\d*\.giphy\.com\//.test(cleanUrl)) throw new Error('Invalid GIF link.');
+        msg.type = 'gif';
+        msg.gifUrl = cleanUrl;
+      } else {
+        const cleanText = (text || '').toString().trim().slice(0, 300);
+        if (!cleanText) throw new Error('Empty message.');
+        msg.type = 'text';
+        msg.text = cleanText;
+      }
+
       room.chatHistory.push(msg);
       if (room.chatHistory.length > CHAT_HISTORY_LIMIT) room.chatHistory.shift();
       io.to(roomCode).emit('chat_message', msg);

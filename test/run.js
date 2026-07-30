@@ -330,6 +330,33 @@ check('game continues until exactly one active player remains', () => {
   assert.strictEqual(state.winner, 'B');
 });
 
+check('getPublicState exposes finalHands/finalHandValues once gameOver, and never before', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  // Both near the cap -- a correct declare leaves the declarer's own score
+  // untouched, so whichever of A/B ends up as "other" (and gets +13) is the
+  // one who needs to cross 200; starting both at 195 makes that true no
+  // matter which one the random dealer rotation picks as declarer.
+  g.scores = { A: 195, B: 195 };
+  g.startRound();
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
+  const declarer = g.currentPlayer();
+  const other = g.turnOrder.find((id) => id !== declarer);
+  g.hands[declarer] = [{ id: 'v1', rank: 'A', suit: 'S' }];
+  g.hands[other] = [{ id: 'o1', rank: '9', suit: 'D' }, { id: 'o2', rank: '4', suit: 'H' }];
+
+  const midState = g.getPublicState();
+  assert.strictEqual(midState.finalHands, undefined, 'should not reveal hands before the game is over');
+
+  const state = g.declare(declarer);
+  assert.strictEqual(state.gameOver, true);
+  assert.ok(state.finalHands, 'finalHands should be present once gameOver');
+  assert.deepStrictEqual(state.finalHands[other].map((c) => c.id).sort(), ['o1', 'o2']);
+  assert.strictEqual(state.finalHandValues[other], 13, 'value 9 + 4 = 13');
+  assert.strictEqual(state.finalHandValues[declarer], 1);
+});
+
 // 12. Quit / leave-between-rounds
 check('removePlayer only works between rounds, and ends the game at 1 player left', () => {
   const g = new LeastCountGame(['A', 'B', 'C']);

@@ -65,13 +65,16 @@
   }
 
   // ---------------- chat speech bubbles at the sender's seat ----------------
-  // playerId -> { text, startedAt, durationMs }. Shown IN ADDITION to the
-  // separate chat panel (unchanged), for 5-10s scaled by message length.
+  // playerId -> { type, text, gifUrl, startedAt, durationMs }. Shown IN
+  // ADDITION to the separate chat panel (unchanged), for 5-10s scaled by
+  // message length (GIFs get a flat mid-range duration).
   const chatBubbles = {};
-  function triggerChatBubble(playerId, text) {
-    const durationMs = Math.max(5000, Math.min(10000, 5000 + text.length * 80));
+  function triggerChatBubble(playerId, msg) {
+    const isGif = msg.type === 'gif';
+    const lengthFactor = isGif ? 30 : (msg.text || '').length;
+    const durationMs = Math.max(5000, Math.min(10000, 5000 + lengthFactor * 80));
     const startedAt = Date.now();
-    chatBubbles[playerId] = { text, startedAt, durationMs };
+    chatBubbles[playerId] = { type: msg.type, text: msg.text, gifUrl: msg.gifUrl, startedAt, durationMs };
     renderOvalTable(latestGame);
     setTimeout(() => {
       if (chatBubbles[playerId] && chatBubbles[playerId].startedAt === startedAt) {
@@ -328,6 +331,18 @@
     document.getElementById('stock-count').textContent = '';
     document.getElementById('chain-banner').classList.add('hidden');
     document.getElementById('turn-timer').classList.add('hidden');
+    // The player's own hand tray previously kept showing last round's cards
+    // (whatever was left in it when that round ended) all the way through
+    // the countdown and the entire dealing animation, since nothing ever
+    // cleared it until the new hand actually arrived. Wipe it immediately so
+    // no stale cards are visible while the new deal is in progress.
+    document.getElementById('hand').innerHTML = '';
+    document.getElementById('hand-jokers').innerHTML = '';
+    document.getElementById('hand-jokers-row').classList.add('hidden');
+    document.getElementById('hand-value').textContent = '0';
+    selectedIds = new Set();
+    document.getElementById('btn-discard').disabled = true;
+    document.getElementById('btn-declare').disabled = true;
 
     const countdownMs = data.countdownMs || 3000;
     const dealMs = data.dealMs || 1500;
@@ -651,7 +666,23 @@
           // themselves instead of above, so it never gets clipped by the
           // screen's overflow:hidden near the top edge on mobile.
           bubbleEl.className = 'seat-chat-bubble ' + (top < 50 ? 'below' : 'above');
-          bubbleEl.textContent = chatBubble.text;
+          if (chatBubble.type === 'gif' && chatBubble.gifUrl) {
+            const img = document.createElement('img');
+            img.src = chatBubble.gifUrl;
+            img.className = 'seat-chat-gif';
+            img.alt = 'GIF';
+            bubbleEl.appendChild(img);
+          } else {
+            bubbleEl.textContent = chatBubble.text;
+          }
+          // Same negative-animation-delay trick used for the emoji bubble
+          // above: renderOvalTable rebuilds every seat from scratch on every
+          // game update, which was restarting the little "pop in" animation
+          // each time and making the bubble look like it was blinking. A
+          // negative delay equal to how long it's already been showing makes
+          // the animation render as already-finished on every re-render
+          // after the first, instead of replaying from scratch.
+          bubbleEl.style.animationDelay = (-elapsed) + 'ms';
           seatEl.appendChild(bubbleEl);
         } else {
           delete chatBubbles[p.playerId];
@@ -793,11 +824,18 @@
     discardBtn.classList.toggle('hidden', duringChain);
     declareBtn.classList.toggle('hidden', duringChain);
 
+    // On a normal round, show the podium/scorecard popup as before. On the
+    // FINAL round (game just ended), skip straight past it -- the dramatic
+    // final-hand reveal takes its place, then leads into the gameover screen.
     if (game.roundOver && game.lastRoundResult && game.roundNumber !== window.__lastRoundResultShownFor) {
-      showRoundResult(game);
+      if (!game.gameOver) {
+        showRoundResult(game);
+      }
+      window.__lastRoundResultShownFor = game.roundNumber;
     }
-    if (game.gameOver) {
-      showGameOver(game);
+    if (game.gameOver && game.roundNumber !== window.__finalRevealShownFor) {
+      window.__finalRevealShownFor = game.roundNumber;
+      showFinalHandReveal(game, () => showGameOver(game));
     }
   }
 
@@ -874,6 +912,7 @@
     podium.innerHTML = '';
     const top3 = ranked.slice(0, 3);
     if (top3.length === 0) return;
+    const r = game.lastRoundResult;
     const order = [];
     if (top3[1]) order.push({ p: top3[1], place: 2 });
     order.push({ p: top3[0], place: 1 });
@@ -884,9 +923,12 @@
       slot.className = `podium-slot podium-place-${place}`;
       const medal = place === 1 ? '🥇' : place === 2 ? '🥈' : '🥉';
       const elim = game.eliminated && game.eliminated.includes(p.playerId) ? ' (out)' : '';
+      const delta = r && r.roundScores ? r.roundScores[p.playerId] : undefined;
+      const deltaHtml = delta !== undefined ? `<div class="podium-delta">+${delta} this round</div>` : '';
       slot.innerHTML =
         `<div class="podium-medal">${medal}</div>` +
         `<div class="podium-name">${escapeHtml(p.name)}${p.playerId === myPlayerId ? ' (You)' : ''}${elim}</div>` +
+        deltaHtml +
         `<div class="podium-score">${p.total} pts</div>`;
       podium.appendChild(slot);
     });
@@ -898,6 +940,14 @@
   function renderScoreboardTable(game, ranked) {
     const body = document.getElementById('round-result-table');
     body.innerHTML = '';
+    const header = document.createElement('div');
+    header.className = 'scoreboard-row scoreboard-header';
+    header.innerHTML =
+      '<span class="scoreboard-rank">#</span>' +
+      '<span class="scoreboard-name">Player</span>' +
+      '<span class="scoreboard-delta">Round</span>' +
+      '<span class="scoreboard-total">Total</span>';
+    body.appendChild(header);
     const r = game.lastRoundResult;
     ranked.forEach((p, i) => {
       const delta = r && r.roundScores ? r.roundScores[p.playerId] : undefined;
@@ -1060,6 +1110,50 @@
     requestAnimationFrame(frame);
   }
 
+  // ---------------- final-hand reveal (game over) ----------------
+  // Instead of jumping straight to the scorecard the instant the game ends,
+  // flip every player's actual last hand face-up at their own seat (plus its
+  // point value), hold it for a beat, then move on to the scorecard -- a
+  // showdown moment instead of an abrupt cut.
+  const FINAL_REVEAL_MS = 5000;
+
+  function renderFinalHandsAtSeats(finalHands, finalHandValues) {
+    const oval = document.getElementById('oval-table');
+    Object.keys(finalHands || {}).forEach((pid) => {
+      const seatEl = oval.querySelector(`.seat[data-player-id="${CSS.escape(pid)}"]`);
+      if (!seatEl) return;
+      const topPct = parseFloat(seatEl.style.top);
+      const fan = document.createElement('div');
+      fan.className = 'seat-final-hand ' + (Number.isFinite(topPct) && topPct < 50 ? 'below' : 'above');
+      const cardsRow = document.createElement('div');
+      cardsRow.className = 'seat-final-hand-cards';
+      sortHand(finalHands[pid] || []).forEach((c) => {
+        const el = cardEl(c);
+        el.classList.add('mini');
+        cardsRow.appendChild(el);
+      });
+      fan.appendChild(cardsRow);
+      const valueEl = document.createElement('div');
+      valueEl.className = 'seat-final-hand-value';
+      valueEl.textContent = `Value: ${finalHandValues && finalHandValues[pid] !== undefined ? finalHandValues[pid] : 0}`;
+      fan.appendChild(valueEl);
+      seatEl.appendChild(fan);
+    });
+  }
+
+  function showFinalHandReveal(game, onDone) {
+    document.getElementById('overlay-round-result').classList.add('hidden');
+    document.getElementById('overlay-gameover').classList.add('hidden');
+    if (!game.finalHands) {
+      // Defensive fallback (e.g. an older cached client) -- don't block the
+      // gameover screen from ever appearing if this field is ever missing.
+      onDone();
+      return;
+    }
+    renderFinalHandsAtSeats(game.finalHands, game.finalHandValues);
+    setTimeout(onDone, FINAL_REVEAL_MS);
+  }
+
   function showGameOver(game) {
     document.getElementById('overlay-round-result').classList.add('hidden');
     document.getElementById('gameover-title').textContent = `🏆 ${playerName(game.winner)} wins!`;
@@ -1116,6 +1210,7 @@
       latestRoom = null;
       latestGame = null;
       window.__lastRoundResultShownFor = null;
+      window.__finalRevealShownFor = null;
       hideChatUI();
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
@@ -1132,6 +1227,7 @@
   function hideChatUI() {
     document.getElementById('chat-fab').classList.add('hidden');
     document.getElementById('chat-panel').classList.add('hidden');
+    document.getElementById('gif-picker').classList.add('hidden');
     chatUnread = 0;
   }
 
@@ -1152,7 +1248,16 @@
     if (emptyEl) emptyEl.remove();
     const div = document.createElement('div');
     div.className = 'chat-msg' + (msg.playerId === myPlayerId ? ' me' : '');
-    div.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}:</span> <span class="chat-text">${escapeHtml(msg.text)}</span>`;
+    if (msg.type === 'gif' && msg.gifUrl) {
+      div.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}:</span>`;
+      const img = document.createElement('img');
+      img.src = msg.gifUrl;
+      img.className = 'chat-gif';
+      img.alt = 'GIF';
+      div.appendChild(img);
+    } else {
+      div.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}:</span> <span class="chat-text">${escapeHtml(msg.text)}</span>`;
+    }
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
 
@@ -1188,7 +1293,7 @@
     const input = document.getElementById('chat-input');
     const text = input.value.trim();
     if (!text) return;
-    socket.emit('chat_message', { roomCode: myRoomCode, text }, (res) => {
+    socket.emit('chat_message', { roomCode: myRoomCode, type: 'text', text }, (res) => {
       if (!res.ok) setGameError(res.error);
     });
     input.value = '';
@@ -1201,8 +1306,68 @@
     appendChatMessage(msg);
     // Speech bubble at the sender's seat, in addition to the panel above --
     // only meaningful once seats actually exist (mid-game), not lobby chat.
-    if (latestGame) triggerChatBubble(msg.playerId, msg.text);
+    if (latestGame) triggerChatBubble(msg.playerId, msg);
   });
+
+  // ---------------- GIF picker (Giphy search) ----------------
+  let gifSearchTimer = null;
+  function openGifPicker() {
+    document.getElementById('gif-picker').classList.remove('hidden');
+    const input = document.getElementById('gif-search-input');
+    input.value = '';
+    input.focus();
+    loadGifResults('');
+  }
+  function closeGifPicker() {
+    document.getElementById('gif-picker').classList.add('hidden');
+  }
+  document.getElementById('btn-gif-open').onclick = () => {
+    const picker = document.getElementById('gif-picker');
+    if (picker.classList.contains('hidden')) openGifPicker();
+    else closeGifPicker();
+  };
+  document.getElementById('btn-gif-close').onclick = closeGifPicker;
+  document.getElementById('gif-search-input').addEventListener('input', (e) => {
+    const q = e.target.value;
+    if (gifSearchTimer) clearTimeout(gifSearchTimer);
+    gifSearchTimer = setTimeout(() => loadGifResults(q), 350);
+  });
+
+  function loadGifResults(query) {
+    const results = document.getElementById('gif-results');
+    results.innerHTML = '<div class="gif-results-hint">Searching...</div>';
+    fetch('/api/gif-search?q=' + encodeURIComponent(query || ''))
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.ok) {
+          results.innerHTML = `<div class="gif-results-hint">${escapeHtml(data.error || 'GIF search unavailable')}</div>`;
+          return;
+        }
+        results.innerHTML = '';
+        if (!data.gifs || data.gifs.length === 0) {
+          results.innerHTML = '<div class="gif-results-hint">No GIFs found</div>';
+          return;
+        }
+        data.gifs.forEach((g) => {
+          const img = document.createElement('img');
+          img.src = g.preview;
+          img.loading = 'lazy';
+          img.alt = 'GIF result';
+          img.onclick = () => sendGif(g.full);
+          results.appendChild(img);
+        });
+      })
+      .catch(() => {
+        results.innerHTML = '<div class="gif-results-hint">GIF search failed</div>';
+      });
+  }
+
+  function sendGif(url) {
+    socket.emit('chat_message', { roomCode: myRoomCode, type: 'gif', gifUrl: url }, (res) => {
+      if (!res.ok) setGameError(res.error);
+    });
+    closeGifPicker();
+  }
 
   // ---------------- +2 chain flash notification ----------------
   // A brief, table-wide toast every time a 2 lands, the chain escalates, or
@@ -1354,10 +1519,22 @@
     if (room.phase === 'lobby') {
       latestGame = null;
       window.__lastRoundResultShownFor = null;
+      window.__finalRevealShownFor = null;
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
       renderLobby(room);
       showScreen('screen-lobby');
+    } else if (room.phase === 'starting') {
+      // The countdown/dealing sequence (driven entirely by the separate
+      // 'game_starting' event, via runStartSequence) owns the screen during
+      // this phase. room_update for 'starting' arrives an instant BEFORE
+      // 'game_starting' every time a new round begins -- calling
+      // renderGame(latestGame) here would briefly redraw the board using
+      // last round's already-finished data (its real joker/open card still
+      // sitting in latestGame), flashing it on screen before the new deal
+      // even starts. Just make sure we're on the game screen and let
+      // runStartSequence take it from here.
+      showScreen('screen-game');
     } else if (latestGame) {
       showScreen('screen-game');
       renderGame(latestGame);

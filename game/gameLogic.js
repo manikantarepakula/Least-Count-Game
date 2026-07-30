@@ -513,6 +513,15 @@ class LeastCountGame {
       state.yourHand = this.hands[forPlayerId];
       state.yourHandValue = handValue(this.hands[forPlayerId], this.roundJokerRank);
     }
+    // Once the whole game is truly over, there's no more strategic reason to
+    // keep hands private -- reveal everyone's actual final cards (and their
+    // point value) to every player, for the dramatic end-of-game reveal.
+    if (this.gameOver && this.hands) {
+      state.finalHands = this.hands;
+      state.finalHandValues = Object.fromEntries(
+        Object.entries(this.hands).map(([id, h]) => [id, handValue(h, this.roundJokerRank)])
+      );
+    }
     return state;
   }
 }

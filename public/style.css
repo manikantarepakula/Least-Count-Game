@@ -239,21 +239,48 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .seat.my-turn-pulse .seat-chip { animation: turnPulseRing 1.1s ease-in-out infinite; }
 
 /* Chat speech-bubble at the sender's seat -- shown alongside (not instead
-   of) the separate chat panel, for 5-10s scaled by message length. */
+   of) the separate chat panel, for 5-10s scaled by message length.
+   A comic-style bubble with a tail pointing straight at the seat, sitting
+   tight against it so it visually reads as "this came from their chair".
+   Width is a fixed value (not shrink-to-fit) -- an auto/max-width-only box
+   combined with word-break:break-word was computing down to a near-zero
+   width on some phones, wrapping text to 2-3 letters per line. A fixed
+   width sidesteps that shrink-to-fit ambiguity entirely. */
 .seat-chat-bubble {
   position: absolute; left: 50%; transform: translateX(-50%);
-  max-width: 150px; background: #fff; color: #1a1a1a; font-size: 11.5px;
-  padding: 6px 9px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.4);
-  z-index: 6; word-break: break-word; animation: chatBubbleIn 0.18s ease-out;
+  width: min(150px, 56vw); box-sizing: border-box;
+  background: #fff; color: #1a1a1a; font-size: 12px; line-height: 1.35;
+  padding: 7px 10px; border-radius: 14px; box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+  z-index: 6; word-break: break-word; animation: chatBubbleIn 0.18s ease-out both;
 }
-.seat-chat-bubble.below { top: 100%; margin-top: 6px; }
-.seat-chat-bubble.above { bottom: 100%; margin-bottom: 6px; }
+.seat-chat-bubble.below { top: calc(100% + 4px); }
+.seat-chat-bubble.above { bottom: calc(100% + 4px); }
 .seat-chat-bubble::after {
   content: ''; position: absolute; left: 50%; transform: translateX(-50%);
-  width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent;
+  width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent;
 }
-.seat-chat-bubble.below::after { top: -6px; border-bottom: 6px solid #fff; }
-.seat-chat-bubble.above::after { bottom: -6px; border-top: 6px solid #fff; }
+.seat-chat-bubble.below::after { top: -7px; border-bottom: 8px solid #fff; }
+.seat-chat-bubble.above::after { bottom: -7px; border-top: 8px solid #fff; }
+.seat-chat-gif { display: block; width: 100%; border-radius: 8px; }
+
+/* ---- Final-hand reveal (game over) -- everyone's actual last hand shown
+   at their own seat, cards + point value, for a dramatic beat before the
+   scorecard appears. ---- */
+.seat-final-hand {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: rgba(0,0,0,0.4); border: 1px solid #d4a017; border-radius: 8px;
+  padding: 5px 6px; z-index: 6; width: min(150px, 58vw); box-sizing: border-box;
+  animation: popIn 0.3s ease-out both;
+}
+.seat-final-hand.below { top: calc(100% + 4px); }
+.seat-final-hand.above { bottom: calc(100% + 4px); }
+.seat-final-hand-cards { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
+.seat-final-hand-cards .card.mini { width: 18px; height: 25px; }
+.seat-final-hand-cards .card.mini .card-corner { display: none; }
+.seat-final-hand-cards .card.mini .center-rank { font-size: 7px; }
+.seat-final-hand-cards .card.mini .center-suit { font-size: 7px; }
+.seat-final-hand-value { font-size: 10px; color: #ffcb6b; font-weight: 700; }
 @keyframes chatBubbleIn {
   from { transform: translateX(-50%) scale(0.7); opacity: 0; }
   to { transform: translateX(-50%) scale(1); opacity: 1; }
@@ -420,6 +447,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .podium-score { font-size: 12px; color: #8a5c00; margin-top: 2px; font-weight: 700; }
+.podium-delta { font-size: 10.5px; color: #b8860b; margin-top: 1px; font-weight: 700; }
 /* 1st place sits centered (order: 2, flanked by 2nd/3rd) and visibly higher
    than the other two -- via extra padding/scale + the other two carrying
    their own bottom margin, not a bar-chart height. */
@@ -439,6 +467,10 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .scoreboard-row.me { background: #fffaf0; font-weight: 700; }
 .scoreboard-row.eliminated { opacity: 0.55; }
+.scoreboard-row.scoreboard-header {
+  text-transform: uppercase; letter-spacing: 0.5px; font-size: 10.5px;
+  color: #999; font-weight: 700; border-bottom: 1.5px solid #d4a017;
+}
 .scoreboard-rank { color: #999; font-size: 11px; font-weight: 700; }
 .scoreboard-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scoreboard-delta { color: #b8860b; font-weight: 700; text-align: right; }
@@ -468,10 +500,13 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .draw-reveal-box {
   background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25);
   border-radius: 20px; padding: 24px 28px; text-align: center;
-  animation: popIn 0.25s ease-out;
+  animation: popIn 0.25s ease-out; max-width: 92vw; box-sizing: border-box;
 }
 .draw-reveal-label { color: #fff; font-size: 14px; margin-bottom: 14px; font-weight: 600; }
-.draw-reveal-cards { display: flex; gap: 10px; justify-content: center; }
+/* A +4/+6 penalty draw needs more than one row -- wrapping (plus a width
+   cap on the box above) keeps a big draw from overflowing the screen edge
+   or getting crushed unreadably small trying to fit in one line. */
+.draw-reveal-cards { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 78vw; }
 .draw-reveal-cards .card { width: 76px; height: 108px; }
 .draw-reveal-cards .card-center .center-rank { font-size: 26px; }
 .draw-reveal-cards .card-center .center-suit { font-size: 32px; }
@@ -564,9 +599,29 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .chat-msg .chat-name { font-weight: 700; color: #1e5631; }
 .chat-msg.me .chat-name { color: #7d3cff; }
 .chat-msg .chat-text { word-break: break-word; }
+.chat-msg .chat-gif { display: block; max-width: 160px; border-radius: 8px; margin-top: 4px; }
 .chat-empty { color: #999; font-size: 12px; text-align: center; margin-top: 20px; }
 .chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid #eee; }
 .chat-input-row input {
   flex: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; font-size: 14px;
 }
 .chat-input-row button.tiny { width: auto; padding: 8px 16px; border-radius: 20px; }
+#btn-gif-open { font-weight: 700; font-size: 11px; background: #eee; color: #333; }
+
+/* ---- GIF picker (Giphy search) ---- */
+.gif-picker {
+  position: absolute; left: 0; right: 0; bottom: 56px; height: 260px;
+  background: #fff; border-top: 1px solid #eee; z-index: 26;
+  display: flex; flex-direction: column;
+}
+.gif-picker.hidden { display: none; }
+.gif-picker-header { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid #eee; }
+.gif-picker-header input {
+  flex: 1; padding: 8px 12px; border-radius: 16px; border: 1px solid #ccc; font-size: 13px;
+}
+.gif-results {
+  flex: 1; overflow-y: auto; padding: 8px; display: grid;
+  grid-template-columns: repeat(3, 1fr); gap: 6px; align-content: start;
+}
+.gif-results img { width: 100%; height: 72px; object-fit: cover; border-radius: 6px; cursor: pointer; }
+.gif-results-hint { grid-column: 1 / -1; text-align: center; color: #999; font-size: 12px; padding: 24px 0; }

@@ -201,8 +201,16 @@
     <button id="btn-chat-close" class="tiny">✕</button>
   </div>
   <div id="chat-messages" class="chat-messages"></div>
+  <div id="gif-picker" class="gif-picker hidden">
+    <div class="gif-picker-header">
+      <input id="gif-search-input" type="text" placeholder="Search GIFs..." />
+      <button id="btn-gif-close" class="tiny">✕</button>
+    </div>
+    <div id="gif-results" class="gif-results"></div>
+  </div>
   <div class="chat-input-row">
     <input id="chat-input" type="text" maxlength="300" placeholder="Message..." />
+    <button id="btn-gif-open" class="tiny" title="Send a GIF">GIF</button>
     <button id="btn-chat-send" class="tiny primary">➤</button>
   </div>
 </div>
