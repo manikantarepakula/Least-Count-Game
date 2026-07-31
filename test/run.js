@@ -330,7 +330,7 @@ check('game continues until exactly one active player remains', () => {
   assert.strictEqual(state.winner, 'B');
 });
 
-check('getPublicState exposes finalHands/finalHandValues once gameOver, and never before', () => {
+check('getPublicState exposes finalHands/finalHandValues once roundOver, and never before', () => {
   const g = new LeastCountGame(['A', 'B']);
   // Both near the cap -- a correct declare leaves the declarer's own score
   // untouched, so whichever of A/B ends up as "other" (and gets +13) is the
@@ -347,14 +347,39 @@ check('getPublicState exposes finalHands/finalHandValues once gameOver, and neve
   g.hands[other] = [{ id: 'o1', rank: '9', suit: 'D' }, { id: 'o2', rank: '4', suit: 'H' }];
 
   const midState = g.getPublicState();
-  assert.strictEqual(midState.finalHands, undefined, 'should not reveal hands before the game is over');
+  assert.strictEqual(midState.finalHands, undefined, 'should not reveal hands before the round is over');
 
   const state = g.declare(declarer);
   assert.strictEqual(state.gameOver, true);
-  assert.ok(state.finalHands, 'finalHands should be present once gameOver');
+  assert.strictEqual(state.roundOver, true);
+  assert.ok(state.finalHands, 'finalHands should be present once roundOver');
   assert.deepStrictEqual(state.finalHands[other].map((c) => c.id).sort(), ['o1', 'o2']);
   assert.strictEqual(state.finalHandValues[other], 13, 'value 9 + 4 = 13');
   assert.strictEqual(state.finalHandValues[declarer], 1);
+});
+
+check('getPublicState exposes finalHands/finalHandValues on an ordinary (non-final) round end too', () => {
+  const g = new LeastCountGame(['A', 'B', 'C']);
+  g.scores = { A: 0, B: 0, C: 0 };
+  g.startRound();
+  g.roundJokerRank = null;
+  g.chainCount = 0;
+  g.discardPile = [{ id: 'pin-open', rank: 'K', suit: 'S' }];
+  const declarer = g.currentPlayer();
+  const others = g.turnOrder.filter((id) => id !== declarer);
+  g.hands[declarer] = [{ id: 'v1', rank: 'A', suit: 'S' }];
+
+  const midState = g.getPublicState();
+  assert.strictEqual(midState.finalHands, undefined, 'should not reveal hands mid-round');
+
+  const state = g.declare(declarer);
+  assert.strictEqual(state.gameOver, false, 'nobody should be eliminated from a low score');
+  assert.strictEqual(state.roundOver, true);
+  assert.ok(state.finalHands, 'finalHands should be present as soon as this ordinary round ends, not just on the game-ending round');
+  others.forEach((id) => {
+    assert.ok(state.finalHands[id], `finalHands should include ${id}`);
+    assert.ok(Number.isFinite(state.finalHandValues[id]), `finalHandValues should include ${id}`);
+  });
 });
 
 // 12. Quit / leave-between-rounds

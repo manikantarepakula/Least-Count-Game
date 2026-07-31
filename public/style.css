@@ -125,6 +125,16 @@ select:focus { border-color: #1e5631; }
 .lobby-maxscore-row.hidden { display: none; }
 .lobby-maxscore-row label { color: #9fd8b8; }
 
+.rules-btn { margin-top: 14px; font-size: 13px; padding: 9px; }
+
+.rules-panel { max-width: 480px; width: 92vw; text-align: left; }
+.rules-panel h2 { text-align: center; }
+.rules-body { max-height: 60vh; overflow-y: auto; padding-right: 4px; margin-bottom: 14px; }
+.rules-item { margin-bottom: 14px; }
+.rules-item:last-child { margin-bottom: 0; }
+.rules-heading { font-weight: 700; color: #1e5631; font-size: 14px; margin-bottom: 3px; }
+.rules-item p { margin: 0; font-size: 13px; line-height: 1.45; color: #333; }
+
 h1 { text-align: center; margin: 0 0 4px; font-size: 28px; }
 h2 { margin-top: 0; }
 .subtitle { text-align: center; color: #666; margin-top: 0; }

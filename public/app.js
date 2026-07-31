@@ -824,18 +824,18 @@
     discardBtn.classList.toggle('hidden', duringChain);
     declareBtn.classList.toggle('hidden', duringChain);
 
-    // On a normal round, show the podium/scorecard popup as before. On the
-    // FINAL round (game just ended), skip straight past it -- the dramatic
-    // final-hand reveal takes its place, then leads into the gameover screen.
-    if (game.roundOver && game.lastRoundResult && game.roundNumber !== window.__lastRoundResultShownFor) {
-      if (!game.gameOver) {
-        showRoundResult(game);
-      }
-      window.__lastRoundResultShownFor = game.roundNumber;
-    }
-    if (game.gameOver && game.roundNumber !== window.__finalRevealShownFor) {
+    // Every round, once it's over, first do the dramatic face-up reveal of
+    // everyone's final hand at their seat, then lead into either the normal
+    // podium/scorecard popup (mid-game) or the gameover screen (final round).
+    if (game.roundOver && game.lastRoundResult && game.roundNumber !== window.__finalRevealShownFor) {
       window.__finalRevealShownFor = game.roundNumber;
-      showFinalHandReveal(game, () => showGameOver(game));
+      showFinalHandReveal(game, () => {
+        if (game.gameOver) {
+          showGameOver(game);
+        } else {
+          showRoundResult(game);
+        }
+      });
     }
   }
 
@@ -1050,6 +1050,9 @@
     document.getElementById('overlay-scores').classList.remove('hidden');
   };
   document.getElementById('btn-close-scores').onclick = () => document.getElementById('overlay-scores').classList.add('hidden');
+
+  document.getElementById('btn-game-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
+  document.getElementById('btn-close-rules').onclick = () => document.getElementById('overlay-rules').classList.add('hidden');
 
   // ---------------- confetti celebration (item 7) ----------------
   // Pure canvas + requestAnimationFrame, no external library or assets --
