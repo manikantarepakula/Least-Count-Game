@@ -285,6 +285,11 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .seat-final-hand.below { top: calc(100% + 4px); }
 .seat-final-hand.above { bottom: calc(100% + 4px); }
+/* Side seats (left/right of the table) hug their own near edge instead of
+   staying centered, so the box grows inward toward the table center and
+   never spills past the screen's clipped edge -- see renderFinalHandsAtSeats(). */
+.seat-final-hand.align-left { left: 0; transform: none; }
+.seat-final-hand.align-right { left: auto; right: 0; transform: none; }
 .seat-final-hand-cards { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
 .seat-final-hand-cards .card.mini { width: 18px; height: 25px; }
 .seat-final-hand-cards .card.mini .card-corner { display: none; }

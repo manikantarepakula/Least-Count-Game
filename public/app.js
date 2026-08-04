@@ -1126,8 +1126,19 @@
       const seatEl = oval.querySelector(`.seat[data-player-id="${CSS.escape(pid)}"]`);
       if (!seatEl) return;
       const topPct = parseFloat(seatEl.style.top);
+      const leftPct = parseFloat(seatEl.style.left);
+      // Vertical: below the seat if it's in the top half, above it if in the
+      // bottom half (unchanged). Horizontal: seats near the table's left/right
+      // edge hug that same edge and grow inward toward the table center,
+      // instead of always centering under the seat -- centering meant the box
+      // spilled past the clipped screen edge and vanished for side seats.
+      let hAlign = 'center';
+      if (Number.isFinite(leftPct)) {
+        if (leftPct < 35) hAlign = 'left';
+        else if (leftPct > 65) hAlign = 'right';
+      }
       const fan = document.createElement('div');
-      fan.className = 'seat-final-hand ' + (Number.isFinite(topPct) && topPct < 50 ? 'below' : 'above');
+      fan.className = 'seat-final-hand ' + (Number.isFinite(topPct) && topPct < 50 ? 'below' : 'above') + ' align-' + hAlign;
       const cardsRow = document.createElement('div');
       cardsRow.className = 'seat-final-hand-cards';
       sortHand(finalHands[pid] || []).forEach((c) => {
