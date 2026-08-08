@@ -36,6 +36,17 @@
       <button id="btn-join" class="secondary">Join Room (జాయిన్)</button>
     </div>
 
+    <div class="divider">OR (లేదా)</div>
+
+    <button id="btn-solo-toggle" class="secondary" type="button">🤖 Play Solo vs Bots</button>
+    <div id="solo-panel" class="solo-panel hidden">
+      <label for="input-bot-count">Number of Bots</label>
+      <select id="input-bot-count"></select>
+      <div class="row">
+        <button id="btn-solo-start" class="primary">Start Solo Game</button>
+      </div>
+    </div>
+
     <p id="landing-error" class="error"></p>
   </div>
 </div>
@@ -155,7 +166,7 @@
 
     <div id="podium" class="podium"></div>
     <div id="round-result-note" class="round-result-note"></div>
-    <div id="round-result-table" class="scoreboard-table"></div>
+    <div id="round-result-hands" class="reveal-rows"></div>
 
     <div id="round-maxscore-row" class="round-maxscore-row hidden">
       <label for="round-maxscore-select">Change Max Score</label>
@@ -163,6 +174,7 @@
     </div>
 
     <button id="btn-next-round" class="primary hidden">Next Round</button>
+    <button id="btn-see-final-result" class="primary hidden">See Final Result 🏆</button>
     <button id="btn-leave-round-result" class="secondary leave-btn">Leave Game</button>
     <p id="round-result-hint" class="hint"></p>
   </div>
@@ -241,6 +253,7 @@
       <input id="gif-search-input" type="text" placeholder="Search GIFs..." />
       <button id="btn-gif-close" class="tiny">✕</button>
     </div>
+    <div id="gif-suggestions" class="gif-suggestions"></div>
     <div id="gif-results" class="gif-results"></div>
   </div>
   <div class="chat-input-row">

@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { LeastCountGame, MAX_SCORE_OPTIONS } = require('./game/gameLogic');
+const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, DECLARE_MAX_VALUE } = require('./game/gameLogic');
 
 const app = express();
 const server = http.createServer(app);
@@ -55,6 +55,11 @@ const socketIndex = new Map(); // socket.id -> { roomCode, playerId }
 const TURN_SECONDS = 20;
 const CHAT_HISTORY_LIMIT = 100;
 const DEFAULT_ELIMINATION_SCORE = 200;
+// Solo play (item: "Play Solo" on the landing screen) -- bots act fast, well
+// under the human turn timer, using the exact same auto-play logic already
+// used when a human times out (see runBotTurn/scheduleTurnTimer below).
+const BOT_MOVE_MS = 3000;
+const MAX_BOTS = 7;
 
 // ---------------------------------------------------------------------------
 // Game-start sequence timing. When the host clicks "Start Game" the cards
@@ -104,6 +109,7 @@ function publicRoomInfo(room) {
       playerId: pid,
       name: room.players.get(pid).name,
       connected: room.players.get(pid).connected,
+      isBot: !!room.players.get(pid).isBot,
     })),
   };
 }
@@ -144,8 +150,55 @@ function clearTurnTimer(room) {
 function scheduleTurnTimer(room) {
   clearTurnTimer(room);
   if (!room.game || room.game.roundOver || room.game.gameOver) return;
+  // Solo play: if it's a bot's turn, they act quickly on their own timer
+  // instead of waiting out the full human turn countdown -- no deadline
+  // shown to the human either, since there's nothing for them to react to.
+  const currentPlayerRecord = room.players.get(room.game.currentPlayer());
+  if (currentPlayerRecord && currentPlayerRecord.isBot) {
+    room.turnTimer = setTimeout(() => runBotTurn(room), BOT_MOVE_MS);
+    return;
+  }
   room.turnDeadline = Date.now() + TURN_SECONDS * 1000;
   room.turnTimer = setTimeout(() => handleTurnTimeout(room), TURN_SECONDS * 1000);
+}
+
+// A bot's turn: declare as soon as it legally can (hand value low enough,
+// and no +2 challenge actively pending against it -- same rule a human has
+// to follow), otherwise fall back to the exact same sensible auto-discard
+// used when a human times out. Re-schedules afterward, which naturally
+// chains through consecutive bot seats until it reaches a human.
+function runBotTurn(room) {
+  const game = room.game;
+  if (!game || game.roundOver || game.gameOver) return;
+  const pid = game.currentPlayer();
+  const player = room.players.get(pid);
+  if (!player || !player.isBot) return; // safety: turn moved on some other way already
+
+  try {
+    const myValue = handValue(game.hands[pid] || [], game.roundJokerRank);
+    if (game.chainCount === 0 && myValue <= DECLARE_MAX_VALUE) {
+      game.declare(pid);
+      const newlyEliminated = (game.lastRoundResult && game.lastRoundResult.newlyEliminated) || [];
+      for (const id of newlyEliminated) emitSeatReaction(room.code, 'eliminated', id);
+    } else {
+      const cardIds = game.autoPickDiscard(pid);
+      game.playTurn(pid, cardIds);
+      revealDrawIfAny(room);
+      emitLogBasedReactions(room, room.code);
+      checkLowCardReaction(room, room.code, pid);
+    }
+  } catch (e) {
+    console.error(`Bot turn failed for room ${room.code}:`, e.message);
+  }
+
+  if (game.roundOver || game.gameOver) {
+    clearTurnTimer(room);
+    if (game.gameOver) room.phase = 'game_over';
+  } else {
+    scheduleTurnTimer(room);
+  }
+  broadcastRoom(room);
+  broadcastGameState(room);
 }
 
 // Clears the one-shot timers that drive the countdown -> deal -> reveal
@@ -304,13 +357,58 @@ io.on('connection', (socket) => {
         revealTimer: null,
         chatHistory: [],
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false });
       room.order.push(playerId);
       rooms.set(code, room);
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
       ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
       broadcastRoom(room);
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Solo play: one human + a chosen number of bots, in a fresh room that
+  // skips the lobby entirely and jumps straight into the normal
+  // countdown -> deal -> reveal sequence, exactly like a real multiplayer
+  // game starting -- bots are just regular players to the game engine, the
+  // only special handling is how quickly they act (see scheduleTurnTimer).
+  socket.on('create_solo_room', ({ name, botCount }, ack) => {
+    try {
+      const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const n = Math.max(1, Math.min(MAX_BOTS, Math.round(Number(botCount)) || 3));
+      const code = makeRoomCode();
+      const playerId = makePlayerId();
+      const room = {
+        code,
+        hostPlayerId: playerId,
+        players: new Map(),
+        order: [],
+        phase: 'lobby',
+        game: null,
+        turnTimer: null,
+        turnDeadline: null,
+        dealTimer: null,
+        revealTimer: null,
+        chatHistory: [],
+      };
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false });
+      room.order.push(playerId);
+      for (let i = 1; i <= n; i++) {
+        const botId = makePlayerId();
+        room.players.set(botId, { name: `🤖 Bot ${i}`, socketId: null, connected: true, isBot: true });
+        room.order.push(botId);
+      }
+      rooms.set(code, room);
+      socketIndex.set(socket.id, { roomCode: code, playerId });
+      socket.join(code);
+
+      room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
+      room.game.startRound();
+      beginStartSequence(room, code);
+
+      ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
@@ -326,7 +424,7 @@ io.on('connection', (socket) => {
 
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const playerId = makePlayerId();
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false });
       room.order.push(playerId);
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
@@ -522,7 +620,11 @@ io.on('connection', (socket) => {
       socketIndex.delete(socket.id);
       socket.leave(roomCode);
 
-      if (room.order.length === 0) {
+      // Also clean up a solo room once no human is left in it -- bots never
+      // leave on their own, so without this a solo player leaving would
+      // otherwise leak a room that lingers forever with only bots in it.
+      const noHumansLeft = room.order.every((id) => room.players.get(id).isBot);
+      if (room.order.length === 0 || noHumansLeft) {
         clearTurnTimer(room);
         clearStartSequenceTimers(room);
         rooms.delete(roomCode);

@@ -106,6 +106,17 @@ class LeastCountGame {
     // compare this against their last-seen value and play a reshuffle sound
     // whenever it changes.
     this.reshuffleCount = 0;
+    // Recent discards per player, this round only -- see startRound().
+    this.discardHistory = {};
+  }
+
+  // Records card(s) a player just discarded into their rolling recent-discard
+  // history (public info -- these cards are already face-up on the pile),
+  // keeping only the last 2. Called from both a normal discard and a single
+  // 2 played mid-chain.
+  _recordDiscard(playerId, cards) {
+    const existing = this.discardHistory[playerId] || [];
+    this.discardHistory[playerId] = [...existing, ...cards].slice(-2);
   }
 
   activePlayers() {
@@ -240,6 +251,12 @@ class LeastCountGame {
     this.roundOver = false;
     this.lastRoundResult = null;
 
+    // Recent discards per player, this round only -- lets players track what
+    // opponents have been throwing away (same info they'd naturally pick up
+    // watching a real discard pile), reset fresh every round since hands and
+    // the pile itself reset too. Capped to the last 2 cards per player.
+    this.discardHistory = {};
+
     return this.getPublicState();
   }
 
@@ -312,6 +329,7 @@ class LeastCountGame {
     const openIsJoker = this._openIsJoker();
 
     for (const c of discarded) this.discardPile.push(c);
+    this._recordDiscard(playerId, discarded);
 
     // Open card is a Joker (printed, or this round's wild rank): free pass --
     // any group of same-rank cards can be discarded together with no penalty
@@ -347,6 +365,7 @@ class LeastCountGame {
         throw new Error('While facing a +2 challenge you must play exactly one 2, or draw the penalty');
       }
       this.discardPile.push(discarded[0]);
+      this._recordDiscard(playerId, discarded);
       this.chainCount += 1;
       this.log.push({ type: '2-chain-extend', round: this.roundNumber, playerId, chainCount: this.chainCount });
       if (!this.roundOver) this._advanceTurn();
@@ -508,6 +527,10 @@ class LeastCountGame {
       handCounts: this.hands
         ? Object.fromEntries(Object.entries(this.hands).map(([id, h]) => [id, h.length]))
         : {},
+      // Public -- these cards are already face-up on the discard pile, so
+      // there's no hidden info here, just a convenience so the client doesn't
+      // have to replay the whole discard pile to know who threw what recently.
+      discardHistory: this.discardHistory || {},
     };
     if (forPlayerId && this.hands && this.hands[forPlayerId]) {
       state.yourHand = this.hands[forPlayerId];

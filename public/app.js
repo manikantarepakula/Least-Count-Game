@@ -503,6 +503,39 @@
 
   function setLandingError(msg) { document.getElementById('landing-error').textContent = msg || ''; }
 
+  // ---------------- solo play vs bots ----------------
+  const MAX_BOTS = 7;
+  (function populateBotCountSelect() {
+    const sel = document.getElementById('input-bot-count');
+    for (let i = 1; i <= MAX_BOTS; i++) {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = i + (i === 1 ? ' bot' : ' bots');
+      if (i === 3) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  })();
+
+  document.getElementById('btn-solo-toggle').onclick = () => {
+    document.getElementById('solo-panel').classList.toggle('hidden');
+  };
+
+  document.getElementById('btn-solo-start').onclick = () => {
+    const name = document.getElementById('input-name').value.trim();
+    if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
+    const botCount = Number(document.getElementById('input-bot-count').value) || 3;
+    socket.emit('create_solo_room', { name, botCount }, (res) => {
+      if (!res.ok) return setLandingError(res.error);
+      saveSession(res.roomCode, res.playerId);
+      loadChatHistory(res.chatHistory);
+      showChatFab();
+      // Solo play skips the lobby entirely -- the room's already mid-deal by
+      // the time this ack comes back, so head straight to the game screen
+      // (the very next room_update/game_starting event drives the rest).
+      showScreen('screen-game');
+    });
+  };
+
   // ---------------- lobby screen ----------------
   populateMaxScoreSelect(document.getElementById('input-maxscore'), DEFAULT_MAX_SCORE, 0);
 
@@ -637,11 +670,40 @@
       // name on top, "N cards · M pts" below. No extra icon on top of it,
       // so every seat looks identical regardless of position on the table.
       // While dealing, only the running card count is shown (no score yet).
-      seatEl.innerHTML =
-        '<div class="seat-chip">' +
-        `<div class="seat-name">${escapeHtml(p.name)}${p.playerId === myPlayerId ? ' (You)' : ''}</div>` +
-        `<div class="seat-meta">${count !== undefined ? count + ' cards' + (dealing ? '' : ' · ' + score + ' pts') : ''}</div>` +
-        '</div>';
+      const chipEl = document.createElement('div');
+      chipEl.className = 'seat-chip';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'seat-name';
+      nameEl.textContent = p.name + (p.playerId === myPlayerId ? ' (You)' : '');
+      chipEl.appendChild(nameEl);
+      const metaEl = document.createElement('div');
+      metaEl.className = 'seat-meta';
+      metaEl.textContent = count !== undefined ? count + ' cards' + (dealing ? '' : ' · ' + score + ' pts') : '';
+      chipEl.appendChild(metaEl);
+
+      // Recent discards for THIS player, this round -- lets you track what
+      // opponents have been throwing away, same as you naturally would
+      // watching a real discard pile. Sits inside the chip itself (not a
+      // separate floating box), so it never needs edge-aware positioning --
+      // it just makes the pill a little taller, never wider than the seat.
+      const history = (!dealing && game && game.discardHistory) ? game.discardHistory[p.playerId] : null;
+      if (history && history.length > 0) {
+        const histEl = document.createElement('div');
+        histEl.className = 'seat-discard-history';
+        const label = document.createElement('span');
+        label.className = 'seat-discard-label';
+        label.textContent = 'Last:';
+        histEl.appendChild(label);
+        history.forEach((c) => {
+          const cEl = cardEl(c);
+          cEl.classList.add('mini');
+          histEl.appendChild(cEl);
+        });
+        chipEl.appendChild(histEl);
+      }
+
+      seatEl.innerHTML = '';
+      seatEl.appendChild(chipEl);
 
       const reaction = seatReactions[p.playerId];
       if (reaction) {
@@ -667,11 +729,21 @@
           // screen's overflow:hidden near the top edge on mobile.
           bubbleEl.className = 'seat-chat-bubble ' + (top < 50 ? 'below' : 'above');
           if (chatBubble.type === 'gif' && chatBubble.gifUrl) {
+            // GIFs render as a small thumbnail instead of a full-size image --
+            // at full chat-bubble width a GIF was tall enough to cover the
+            // joker/open card in the middle of the table. Same edge-aware
+            // left/right hugging as the discard history and old final-hand
+            // reveal, so it never runs off-screen on side seats either.
+            bubbleEl.classList.add('gif-thumb', 'align-' + getSeatHAlign(seatEl));
             const img = document.createElement('img');
             img.src = chatBubble.gifUrl;
             img.className = 'seat-chat-gif';
             img.alt = 'GIF';
             bubbleEl.appendChild(img);
+            const tag = document.createElement('span');
+            tag.className = 'seat-chat-gif-tag';
+            tag.textContent = 'GIF';
+            bubbleEl.appendChild(tag);
           } else {
             bubbleEl.textContent = chatBubble.text;
           }
@@ -824,18 +896,13 @@
     discardBtn.classList.toggle('hidden', duringChain);
     declareBtn.classList.toggle('hidden', duringChain);
 
-    // Every round, once it's over, first do the dramatic face-up reveal of
-    // everyone's final hand at their seat, then lead into either the normal
-    // podium/scorecard popup (mid-game) or the gameover screen (final round).
-    if (game.roundOver && game.lastRoundResult && game.roundNumber !== window.__finalRevealShownFor) {
-      window.__finalRevealShownFor = game.roundNumber;
-      showFinalHandReveal(game, () => {
-        if (game.gameOver) {
-          showGameOver(game);
-        } else {
-          showRoundResult(game);
-        }
-      });
+    // Every round, once it's over, show the merged result screen -- podium,
+    // everyone's revealed cards, and the round-score math, all in one place
+    // (see showRoundResult / renderHandRevealRows). On the final round this
+    // same screen appears too (minus the Next Round button); the celebratory
+    // trophy screen only shows once the player taps through it.
+    if (game.roundOver && game.lastRoundResult && game.roundNumber !== window.__lastRoundResultShownFor) {
+      showRoundResult(game);
     }
   }
 
@@ -935,30 +1002,102 @@
   }
 
   // Full sorted table below the podium -- everyone, this round's delta, and
-  // the running total, Tabletop-Gold style. Auto re-sorted (via rankedPlayers)
-  // every time this screen is shown, i.e. every round.
-  function renderScoreboardTable(game, ranked) {
-    const body = document.getElementById('round-result-table');
+  // Same rank-value rule as gameLogic.js's cardValue() -- a printed Joker or
+  // this round's wild rank scores 0, Ace is 1, face cards are 10, everything
+  // else is its face value. Kept in sync manually since the client only ever
+  // receives final hand *values* from the server, not a shared value table.
+  function cardValueClient(card, wildRank) {
+    if (card.rank === 'JOKER') return 0;
+    if (wildRank && card.rank === wildRank) return 0;
+    if (card.rank === 'A') return 1;
+    if (card.rank === 'J' || card.rank === 'Q' || card.rank === 'K') return 10;
+    return parseInt(card.rank, 10);
+  }
+
+  // Per-player reveal rows on the merged round-result screen -- replaces the
+  // old plain scoreboard table AND the old separate at-the-seat card reveal.
+  // Shows each player's actual final hand for the round (priciest cards
+  // first, same-rank grouped into a x N tile just like your own hand tray,
+  // capped to a few tiles with a "+N" count for the rest so a 15+ card hand
+  // never blows up the layout), the hand's point value, and the round-score
+  // math (this round's points + what they had before = new total).
+  const REVEAL_MAX_TILES = 4;
+  function renderHandRevealRows(game, ranked) {
+    const body = document.getElementById('round-result-hands');
     body.innerHTML = '';
-    const header = document.createElement('div');
-    header.className = 'scoreboard-row scoreboard-header';
-    header.innerHTML =
-      '<span class="scoreboard-rank">#</span>' +
-      '<span class="scoreboard-name">Player</span>' +
-      '<span class="scoreboard-delta">Round</span>' +
-      '<span class="scoreboard-total">Total</span>';
-    body.appendChild(header);
     const r = game.lastRoundResult;
-    ranked.forEach((p, i) => {
-      const delta = r && r.roundScores ? r.roundScores[p.playerId] : undefined;
+    const finalHands = game.finalHands || {};
+    const finalValues = game.finalHandValues || {};
+    const wildRank = game.roundJokerRank;
+
+    ranked.forEach((p) => {
+      const roundScore = r && r.roundScores ? r.roundScores[p.playerId] : undefined;
+      const newTotal = p.total;
+      const prevTotal = roundScore !== undefined ? newTotal - roundScore : undefined;
       const elim = game.eliminated && game.eliminated.includes(p.playerId);
+      const isDeclarer = r && r.declaredBy === p.playerId;
+
       const row = document.createElement('div');
-      row.className = 'scoreboard-row' + (p.playerId === myPlayerId ? ' me' : '') + (elim ? ' eliminated' : '');
-      row.innerHTML =
-        `<span class="scoreboard-rank">#${i + 1}</span>` +
-        `<span class="scoreboard-name">${escapeHtml(p.name)}${p.playerId === myPlayerId ? ' (You)' : ''}${elim ? ' (out)' : ''}</span>` +
-        `<span class="scoreboard-delta">${delta !== undefined ? '+' + delta : ''}</span>` +
-        `<span class="scoreboard-total">${p.total} pts</span>`;
+      row.className = 'reveal-row' + (isDeclarer ? ' declared' : '') + (elim ? ' eliminated' : '');
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'reveal-name';
+      nameEl.textContent = p.name
+        + (p.playerId === myPlayerId ? ' (You)' : '')
+        + (isDeclarer ? ' (declared)' : '')
+        + (elim ? ' (out)' : '');
+      row.appendChild(nameEl);
+
+      const mainRow = document.createElement('div');
+      mainRow.className = 'reveal-main';
+
+      const cardsWrap = document.createElement('div');
+      cardsWrap.className = 'reveal-cards';
+      const hand = finalHands[p.playerId] || [];
+      const groups = groupHand(hand)
+        .slice()
+        .sort((a, b) => cardValueClient(b.cards[0], wildRank) - cardValueClient(a.cards[0], wildRank));
+      const shownGroups = groups.slice(0, REVEAL_MAX_TILES);
+      shownGroups.forEach((g) => {
+        const el = cardEl(g.cards[0]);
+        el.classList.add('mini');
+        if (g.cards.length > 1) {
+          const badge = document.createElement('span');
+          badge.className = 'card-count-badge';
+          badge.textContent = '×' + g.cards.length;
+          el.appendChild(badge);
+        }
+        cardsWrap.appendChild(el);
+      });
+      const shownCardCount = shownGroups.reduce((sum, g) => sum + g.cards.length, 0);
+      const remaining = hand.length - shownCardCount;
+      if (remaining > 0) {
+        const more = document.createElement('span');
+        more.className = 'reveal-more';
+        more.textContent = '+' + remaining;
+        cardsWrap.appendChild(more);
+      }
+      if (finalValues[p.playerId] !== undefined) {
+        const valueEl = document.createElement('span');
+        valueEl.className = 'reveal-value';
+        valueEl.textContent = '= ' + finalValues[p.playerId];
+        cardsWrap.appendChild(valueEl);
+      }
+      mainRow.appendChild(cardsWrap);
+
+      const mathEl = document.createElement('div');
+      mathEl.className = 'reveal-math';
+      if (roundScore !== undefined) {
+        mathEl.append(`${roundScore} + ${prevTotal} = `);
+        const strong = document.createElement('b');
+        strong.textContent = String(newTotal);
+        mathEl.appendChild(strong);
+      } else {
+        mathEl.textContent = `${newTotal} pts`;
+      }
+      mainRow.appendChild(mathEl);
+
+      row.appendChild(mainRow);
       body.appendChild(row);
     });
   }
@@ -978,7 +1117,12 @@
 
     const nextBtn = document.getElementById('btn-next-round');
     nextBtn.classList.toggle('hidden', !isHost || game.gameOver);
-    document.getElementById('round-result-hint').textContent = isHost || game.gameOver ? '' : 'Waiting for host to start next round...';
+    // On the final round there's no next round to start -- instead everyone
+    // (not just the host) gets a "See Final Result" button that leads into
+    // the separate celebratory trophy screen, at their own pace rather than
+    // an automatic timer.
+    document.getElementById('btn-see-final-result').classList.toggle('hidden', !game.gameOver);
+    document.getElementById('round-result-hint').textContent = (isHost || game.gameOver) ? '' : 'Waiting for host to start next round...';
 
     const maxScoreRow = document.getElementById('round-maxscore-row');
     if (isHost && !game.gameOver) {
@@ -1014,7 +1158,7 @@
 
     const ranked = rankedPlayers(game);
     renderPodium(game, ranked);
-    renderScoreboardTable(game, ranked);
+    renderHandRevealRows(game, ranked);
 
     const noteEl = document.getElementById('round-result-note');
     noteEl.textContent = (r.newlyEliminated && r.newlyEliminated.length)
@@ -1034,6 +1178,12 @@
     socket.emit('next_round', { roomCode: myRoomCode, eliminationScore }, (res) => {
       if (!res.ok) setGameError(res.error);
     });
+  };
+
+  // Final round only -- everyone reads the merged reveal+scorecard screen at
+  // their own pace, then taps through to the separate trophy/confetti screen.
+  document.getElementById('btn-see-final-result').onclick = () => {
+    if (latestGame) showGameOver(latestGame);
   };
 
   document.getElementById('btn-scores').onclick = () => {
@@ -1113,59 +1263,21 @@
     requestAnimationFrame(frame);
   }
 
-  // ---------------- final-hand reveal (game over) ----------------
-  // Instead of jumping straight to the scorecard the instant the game ends,
-  // flip every player's actual last hand face-up at their own seat (plus its
-  // point value), hold it for a beat, then move on to the scorecard -- a
-  // showdown moment instead of an abrupt cut.
-  const FINAL_REVEAL_MS = 5000;
-
-  function renderFinalHandsAtSeats(finalHands, finalHandValues) {
-    const oval = document.getElementById('oval-table');
-    Object.keys(finalHands || {}).forEach((pid) => {
-      const seatEl = oval.querySelector(`.seat[data-player-id="${CSS.escape(pid)}"]`);
-      if (!seatEl) return;
-      const topPct = parseFloat(seatEl.style.top);
-      const leftPct = parseFloat(seatEl.style.left);
-      // Vertical: below the seat if it's in the top half, above it if in the
-      // bottom half (unchanged). Horizontal: seats near the table's left/right
-      // edge hug that same edge and grow inward toward the table center,
-      // instead of always centering under the seat -- centering meant the box
-      // spilled past the clipped screen edge and vanished for side seats.
-      let hAlign = 'center';
-      if (Number.isFinite(leftPct)) {
-        if (leftPct < 35) hAlign = 'left';
-        else if (leftPct > 65) hAlign = 'right';
-      }
-      const fan = document.createElement('div');
-      fan.className = 'seat-final-hand ' + (Number.isFinite(topPct) && topPct < 50 ? 'below' : 'above') + ' align-' + hAlign;
-      const cardsRow = document.createElement('div');
-      cardsRow.className = 'seat-final-hand-cards';
-      sortHand(finalHands[pid] || []).forEach((c) => {
-        const el = cardEl(c);
-        el.classList.add('mini');
-        cardsRow.appendChild(el);
-      });
-      fan.appendChild(cardsRow);
-      const valueEl = document.createElement('div');
-      valueEl.className = 'seat-final-hand-value';
-      valueEl.textContent = `Value: ${finalHandValues && finalHandValues[pid] !== undefined ? finalHandValues[pid] : 0}`;
-      fan.appendChild(valueEl);
-      seatEl.appendChild(fan);
-    });
-  }
-
-  function showFinalHandReveal(game, onDone) {
-    document.getElementById('overlay-round-result').classList.add('hidden');
-    document.getElementById('overlay-gameover').classList.add('hidden');
-    if (!game.finalHands) {
-      // Defensive fallback (e.g. an older cached client) -- don't block the
-      // gameover screen from ever appearing if this field is ever missing.
-      onDone();
-      return;
-    }
-    renderFinalHandsAtSeats(game.finalHands, game.finalHandValues);
-    setTimeout(onDone, FINAL_REVEAL_MS);
+  // ---------------- seat edge-aware positioning ----------------
+  // Shared by anything pinned to a seat that can grow wider than the seat
+  // chip itself (discard history, GIF thumbnails, etc). Seats near the
+  // table's left/right edge get a class telling the element to hug that same
+  // edge and grow inward toward the center, instead of always centering on
+  // the seat -- centering meant it could spill past the screen's clipped
+  // edge and vanish entirely for side seats. Seats near top/bottom-center
+  // stay centered as before. Pairs with the .align-left/.align-right/
+  // (default centered) CSS rules.
+  function getSeatHAlign(seatEl) {
+    const leftPct = parseFloat(seatEl.style.left);
+    if (!Number.isFinite(leftPct)) return 'center';
+    if (leftPct < 35) return 'left';
+    if (leftPct > 65) return 'right';
+    return 'center';
   }
 
   function showGameOver(game) {
@@ -1224,7 +1336,6 @@
       latestRoom = null;
       latestGame = null;
       window.__lastRoundResultShownFor = null;
-      window.__finalRevealShownFor = null;
       hideChatUI();
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
@@ -1324,12 +1435,36 @@
   });
 
   // ---------------- GIF picker (Giphy search) ----------------
+  // Giphy's public library does have good regional content (Telugu/Tollywood
+  // memes included), but it's easy to miss if you don't know the right
+  // search word to type. These are just a few one-tap shortcuts into terms
+  // that tend to surface it -- not a separate curated library, just a
+  // head start on the same search everyone already has.
+  const GIF_QUICK_SEARCHES = ['Telugu', 'Tollywood', 'Pawan Kalyan', 'Allu Arjun', 'Brahmanandam', 'NTR'];
   let gifSearchTimer = null;
+
+  function renderGifSuggestions() {
+    const wrap = document.getElementById('gif-suggestions');
+    wrap.innerHTML = '';
+    GIF_QUICK_SEARCHES.forEach((term) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'gif-suggestion-chip';
+      chip.textContent = term;
+      chip.onclick = () => {
+        document.getElementById('gif-search-input').value = term;
+        loadGifResults(term);
+      };
+      wrap.appendChild(chip);
+    });
+  }
+
   function openGifPicker() {
     document.getElementById('gif-picker').classList.remove('hidden');
     const input = document.getElementById('gif-search-input');
     input.value = '';
     input.focus();
+    renderGifSuggestions();
     loadGifResults('');
   }
   function closeGifPicker() {
@@ -1533,7 +1668,6 @@
     if (room.phase === 'lobby') {
       latestGame = null;
       window.__lastRoundResultShownFor = null;
-      window.__finalRevealShownFor = null;
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
       renderLobby(room);

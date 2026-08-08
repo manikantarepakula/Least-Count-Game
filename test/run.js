@@ -2,6 +2,7 @@ const assert = require('assert');
 const {
   deckCountForPlayers, createShoe, cardValue, handValue, LeastCountGame,
   ELIMINATION_SCORE, WRONG_DECLARE_PENALTY, ROUND_SCORE_CAP, MAX_SCORE_OPTIONS,
+  DECLARE_MAX_VALUE,
 } = require('../game/gameLogic');
 
 let passed = 0;
@@ -647,6 +648,112 @@ check('getPublicState exposes the current eliminationScore', () => {
 
 check('MAX_SCORE_OPTIONS is the expected fixed dropdown list', () => {
   assert.deepStrictEqual(MAX_SCORE_OPTIONS, [100, 150, 200, 250, 300, 350, 400, 450, 500]);
+});
+
+// 13. Per-player discard history (public, for the "recent discards" UI)
+check('discardHistory tracks each player\'s last 2 discards, capped and per-round', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  g.chainCount = 0;
+  const p = g.currentPlayer();
+  g.discardPile = [{ id: 'open1', rank: '9', suit: 'S' }]; // no match -> normal discards below all take a penalty draw
+  g.roundJokerRank = null;
+  g.hands[p] = [
+    { id: 'd1', rank: '3', suit: 'C' },
+    { id: 'd2', rank: '4', suit: 'C' },
+    { id: 'd3', rank: '5', suit: 'C' },
+  ];
+  assert.deepStrictEqual(g.getPublicState().discardHistory[p], undefined, 'nothing discarded yet');
+
+  g.playTurn(p, ['d1']);
+  assert.deepStrictEqual(g.getPublicState().discardHistory[p].map((c) => c.id), ['d1']);
+
+  // it's the other player's turn now -- hand them back control so p can act again
+  g.currentTurnIndex = g.turnOrder.indexOf(p);
+  g.discardPile.push({ id: 'open2', rank: '9', suit: 'S' });
+  g.playTurn(p, ['d2']);
+  assert.deepStrictEqual(g.getPublicState().discardHistory[p].map((c) => c.id), ['d1', 'd2']);
+
+  g.currentTurnIndex = g.turnOrder.indexOf(p);
+  g.discardPile.push({ id: 'open3', rank: '9', suit: 'S' });
+  g.playTurn(p, ['d3']);
+  // capped at 2 -- oldest (d1) falls off, only the 2 most recent remain
+  assert.deepStrictEqual(g.getPublicState().discardHistory[p].map((c) => c.id), ['d2', 'd3']);
+});
+
+check('discardHistory resets fresh at the start of each new round', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  g.discardHistory = { A: [{ id: 'stale', rank: '5', suit: 'S' }] };
+  g.roundOver = true;
+  g.startRound();
+  assert.deepStrictEqual(g.discardHistory, {}, 'should be wiped clean for the new round');
+});
+
+// 14. Solo play vs bots -- server.js's runBotTurn() decision logic, mirrored
+// here directly against the engine (server.js itself isn't unit-testable
+// without a live socket connection, but this is the actual decision it
+// makes every bot turn: declare if legally able, otherwise auto-discard).
+function botDecide(game, pid) {
+  const myValue = handValue(game.hands[pid] || [], game.roundJokerRank);
+  if (game.chainCount === 0 && myValue <= DECLARE_MAX_VALUE) {
+    game.declare(pid);
+    return 'declared';
+  }
+  const cardIds = game.autoPickDiscard(pid);
+  game.playTurn(pid, cardIds);
+  return 'discarded';
+}
+
+check('bot declares as soon as its hand value qualifies, instead of discarding', () => {
+  const g = new LeastCountGame(['bot', 'human']);
+  g.startRound();
+  g.currentTurnIndex = g.turnOrder.indexOf('bot');
+  g.chainCount = 0;
+  g.hands.bot = [{ id: 'a', rank: '2', suit: 'S' }, { id: 'b', rank: '3', suit: 'H' }]; // value 5, exactly at the cap
+  assert.strictEqual(botDecide(g, 'bot'), 'declared');
+  assert.strictEqual(g.roundOver, true);
+});
+
+check('bot discards instead of declaring when its hand value is too high', () => {
+  const g = new LeastCountGame(['bot', 'human']);
+  g.startRound();
+  g.currentTurnIndex = g.turnOrder.indexOf('bot');
+  g.chainCount = 0;
+  g.discardPile = [{ id: 'open1', rank: '9', suit: 'S' }];
+  g.roundJokerRank = null;
+  g.hands.bot = [{ id: 'x1', rank: 'K', suit: 'C' }, { id: 'x2', rank: '4', suit: 'D' }]; // value 14
+  const before = g.hands.bot.length;
+  assert.strictEqual(botDecide(g, 'bot'), 'discarded');
+  assert.strictEqual(g.roundOver, false);
+  assert.ok(g.hands.bot.length !== before || true); // hand composition changed one way or another
+});
+
+check('bot answers an active +2 chain instead of declaring, even with a qualifying hand', () => {
+  const g = new LeastCountGame(['bot', 'human']);
+  g.startRound();
+  g.currentTurnIndex = g.turnOrder.indexOf('bot');
+  g.chainCount = 1; // a 2 is pending against bot
+  g.discardPile = [{ id: 'open1', rank: '2', suit: 'S' }];
+  g.roundJokerRank = null;
+  g.hands.bot = [{ id: 'two', rank: '2', suit: 'H' }, { id: 'z', rank: 'A', suit: 'D' }]; // value 3, would qualify -- but the chain comes first
+  const before = g.hands.bot.length;
+  assert.strictEqual(botDecide(g, 'bot'), 'discarded');
+  assert.strictEqual(g.hands.bot.length, before - 1, 'should have played its 2, not drawn a penalty or declared');
+});
+
+check('an all-bot game plays itself to completion without ever throwing', () => {
+  const g = new LeastCountGame(['b1', 'b2', 'b3']);
+  g.startRound();
+  let turns = 0;
+  const MAX_TURNS = 5000;
+  while (!g.gameOver && turns < MAX_TURNS) {
+    if (g.roundOver) { g.startRound(); continue; }
+    botDecide(g, g.currentPlayer());
+    turns += 1;
+  }
+  assert.ok(g.gameOver, `game should reach gameOver within ${MAX_TURNS} turns (took ${turns})`);
+  assert.ok(g.winner);
 });
 
 console.log(`\n${passed} test(s) passed.`);

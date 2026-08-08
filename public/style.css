@@ -125,6 +125,10 @@ select:focus { border-color: #1e5631; }
 .lobby-maxscore-row.hidden { display: none; }
 .lobby-maxscore-row label { color: #9fd8b8; }
 
+.solo-panel { margin: 12px 0; }
+.solo-panel.hidden { display: none; }
+.solo-panel label { color: #9fd8b8; }
+
 .rules-btn { margin-top: 14px; font-size: 13px; padding: 9px; }
 
 .rules-panel { max-width: 480px; width: 92vw; text-align: left; }
@@ -192,15 +196,20 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 
 /* ---- Oval table ---- */
 /* Height-driven (not width-driven) so it shrinks to fit short phone
-   screens automatically; aspect-ratio derives the matching width. */
+   screens automatically; aspect-ratio derives the matching width.
+   This is now the flex-grow element in the game screen's column layout --
+   it absorbs whatever vertical space the hand row (below) isn't using,
+   instead of that space sitting empty. Still capped by max-height/max-width
+   so it can't grow unreasonably large on tall/wide screens. */
 .oval-table {
   position: relative;
   width: auto;
-  height: min(40vh, 340px);
+  max-height: min(48vh, 400px);
   max-width: 94vw;
   aspect-ratio: 1 / 1.05;
   margin: 2px auto 6px;
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .table-felt {
   position: absolute; inset: 12%;
@@ -273,29 +282,35 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .seat-chat-bubble.above::after { bottom: -7px; border-top: 8px solid #fff; }
 .seat-chat-gif { display: block; width: 100%; border-radius: 8px; }
 
-/* ---- Final-hand reveal (game over) -- everyone's actual last hand shown
-   at their own seat, cards + point value, for a dramatic beat before the
-   scorecard appears. ---- */
-.seat-final-hand {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  background: rgba(0,0,0,0.4); border: 1px solid #d4a017; border-radius: 8px;
-  padding: 5px 6px; z-index: 6; width: min(150px, 58vw); box-sizing: border-box;
-  animation: popIn 0.3s ease-out both;
+/* Text bubbles near a table edge could in principle also run wide, but at
+   150px max they've been fine in practice -- these align classes exist
+   specifically for the GIF thumbnail below, reusing the same left/right/
+   center pattern as the per-seat discard history and old final-hand reveal. */
+.seat-chat-bubble.align-left { left: 0; transform: none; }
+.seat-chat-bubble.align-right { left: auto; right: 0; transform: none; }
+.seat-chat-bubble.align-left::after { left: 14px; transform: none; }
+.seat-chat-bubble.align-right::after { left: auto; right: 14px; transform: none; }
+
+/* GIF thumbnail on the table -- much smaller than a full chat bubble (which
+   was tall enough to cover the joker/open card in the middle of the table).
+   Just enough to notice someone sent a GIF; the chat panel shows it full size. */
+.seat-chat-bubble.gif-thumb {
+  width: 62px; padding: 0; border-radius: 8px; overflow: hidden;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.4); line-height: 0;
 }
-.seat-final-hand.below { top: calc(100% + 4px); }
-.seat-final-hand.above { bottom: calc(100% + 4px); }
-/* Side seats (left/right of the table) hug their own near edge instead of
-   staying centered, so the box grows inward toward the table center and
-   never spills past the screen's clipped edge -- see renderFinalHandsAtSeats(). */
-.seat-final-hand.align-left { left: 0; transform: none; }
-.seat-final-hand.align-right { left: auto; right: 0; transform: none; }
-.seat-final-hand-cards { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
-.seat-final-hand-cards .card.mini { width: 18px; height: 25px; }
-.seat-final-hand-cards .card.mini .card-corner { display: none; }
-.seat-final-hand-cards .card.mini .center-rank { font-size: 7px; }
-.seat-final-hand-cards .card.mini .center-suit { font-size: 7px; }
-.seat-final-hand-value { font-size: 10px; color: #ffcb6b; font-weight: 700; }
+.seat-chat-bubble.gif-thumb .seat-chat-gif { width: 62px; height: 62px; object-fit: cover; border-radius: 0; }
+.seat-chat-gif-tag {
+  position: absolute; bottom: 2px; right: 2px; background: rgba(0,0,0,0.6); color: #fff;
+  font-size: 7px; font-weight: 700; padding: 1px 3px; border-radius: 3px; line-height: 1.2;
+}
+
+/* Small card tile, reused anywhere a full-size 44x62 card would be too big:
+   the round-result reveal rows, the per-seat discard history. */
+.card.mini { width: 19px; height: 26px; }
+.card.mini .card-corner { display: none; }
+.card.mini .center-rank { font-size: 7.5px; }
+.card.mini .center-suit { font-size: 7.5px; }
+.card.mini .card-count-badge { width: 13px; height: 13px; font-size: 7px; top: -5px; right: -5px; }
 @keyframes chatBubbleIn {
   from { transform: translateX(-50%) scale(0.7); opacity: 0; }
   to { transform: translateX(-50%) scale(1); opacity: 1; }
@@ -321,6 +336,14 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .seat-meta { font-size: 10px; opacity: 0.85; display: block; }
+
+/* Per-seat recent-discards line -- lives inside the chip itself so it never
+   needs its own edge-aware positioning (see renderOvalTable()). */
+.seat-discard-history {
+  display: flex; align-items: center; justify-content: center; gap: 2px;
+  white-space: normal; margin-top: 3px;
+}
+.seat-discard-label { font-size: 8px; color: #ffcb6b; font-weight: 700; margin-right: 1px; }
 .mini-card-back {
   width: 26px; height: 36px; border-radius: 4px;
   background: repeating-linear-gradient(45deg, #234, #234 4px, #1a2f42 4px, #1a2f42 8px);
@@ -415,7 +438,12 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .hand-header { font-size: 12px; margin: 2px 4px; flex-shrink: 0; }
 .hand {
   display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 4px;
-  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  /* Sized to actual content (about 2 rows of cards) instead of stretching to
+     fill all leftover screen space -- previously this grew to fill whatever
+     was left over even with just 1-2 rows of cards, leaving a big empty gap
+     below the cards. Rare huge hands (after several stacked +2 penalties)
+     scroll within this cap instead of pushing the action buttons off-screen. */
+  flex: 0 1 auto; max-height: 148px; min-height: 0; overflow-y: auto;
 }
 
 .action-bar { display: flex; gap: 8px; padding: 4px; flex-shrink: 0; }
@@ -475,21 +503,21 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .podium-place-2 { order: 1; margin-bottom: 8px; }
 .podium-place-3 { order: 3; margin-bottom: 14px; }
 
-.scoreboard-table { border-top: 1.5px solid #f0dfa8; padding-top: 6px; max-height: 34vh; overflow-y: auto; }
-.scoreboard-row {
-  display: grid; grid-template-columns: 26px 1fr 54px 70px; align-items: center;
-  gap: 4px; padding: 7px 2px; border-bottom: 1px solid #f2f2f2; font-size: 13px;
-}
-.scoreboard-row.me { background: #fffaf0; font-weight: 700; }
-.scoreboard-row.eliminated { opacity: 0.55; }
-.scoreboard-row.scoreboard-header {
-  text-transform: uppercase; letter-spacing: 0.5px; font-size: 10.5px;
-  color: #999; font-weight: 700; border-bottom: 1.5px solid #d4a017;
-}
-.scoreboard-rank { color: #999; font-size: 11px; font-weight: 700; }
-.scoreboard-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scoreboard-delta { color: #b8860b; font-weight: 700; text-align: right; }
-.scoreboard-total { text-align: right; font-weight: 700; color: #1e5631; }
+/* ---- Round-result reveal rows: replaces the old plain scoreboard table AND
+   the old separate at-the-seat card reveal -- everyone's actual final hand
+   for the round (priciest cards first, capped tiles + "+N"), its value, and
+   the round-score math, all in one merged screen. See renderHandRevealRows(). ---- */
+.reveal-rows { border-top: 1.5px solid #f0dfa8; padding-top: 6px; max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.reveal-row { background: #f7f5ee; border-radius: 10px; padding: 7px 9px; }
+.reveal-row.declared { background: #fff3d6; border: 1px solid #d4a017; }
+.reveal-row.eliminated { opacity: 0.55; }
+.reveal-name { font-size: 11.5px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reveal-main { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.reveal-cards { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; min-width: 0; }
+.reveal-more { font-size: 10px; color: #8a5c00; font-weight: 700; margin-left: 1px; }
+.reveal-value { font-size: 10.5px; color: #8a5c00; font-weight: 700; margin-left: 3px; white-space: nowrap; }
+.reveal-math { font-size: 11px; color: #666; white-space: nowrap; flex-shrink: 0; }
+.reveal-math b { color: #1e5631; font-size: 12px; }
 
 .round-maxscore-row { margin: 14px 0; }
 .round-maxscore-row.hidden { display: none; }
@@ -634,6 +662,14 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .gif-picker-header input {
   flex: 1; padding: 8px 12px; border-radius: 16px; border: 1px solid #ccc; font-size: 13px;
 }
+.gif-suggestions {
+  display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; flex-shrink: 0;
+}
+.gif-suggestion-chip {
+  flex-shrink: 0; background: #f1f1f1; border: 1px solid #ddd; border-radius: 14px;
+  padding: 5px 12px; font-size: 12px; color: #1a1a1a; white-space: nowrap; cursor: pointer;
+}
+.gif-suggestion-chip:active { background: #e3e3e3; }
 .gif-results {
   flex: 1; overflow-y: auto; padding: 8px; display: grid;
   grid-template-columns: repeat(3, 1fr); gap: 6px; align-content: start;
