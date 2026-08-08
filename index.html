@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Least Count</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="screen-landing" class="screen active">
+  <div class="hero-landing">
+    <div class="hero-felt"></div>
+    <div class="hero-card hero-card-1">K<span>♣</span></div>
+    <div class="hero-card hero-card-2">Q<span>♠</span></div>
+    <div class="hero-card hero-card-3">2<span>♥</span></div>
+    <div class="hero-fade"></div>
+    <div class="hero-content">
+      <h1>Least Count</h1>
+      <p class="hero-subtitle">Real cards. Real family. One link.</p>
+    </div>
+  </div>
+  <div class="landing-form">
+    <label>Your name (మీ పేరు)</label>
+    <input id="input-name" type="text" maxlength="20" placeholder="e.g. Manikanta" />
+
+    <div class="row">
+      <button id="btn-create" class="primary">Create Room (కొత్త రూమ్)</button>
+    </div>
+
+    <div class="divider">OR (లేదా)</div>
+
+    <label>Room Code (రూమ్ కోడ్)</label>
+    <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
+    <div class="row">
+      <button id="btn-join" class="secondary">Join Room (జాయిన్)</button>
+    </div>
+
+    <div class="divider">OR (లేదా)</div>
+
+    <button id="btn-solo-toggle" class="secondary" type="button">🤖 Play Solo vs Bots</button>
+    <div id="solo-panel" class="solo-panel hidden">
+      <label for="input-bot-count">Number of Bots</label>
+      <select id="input-bot-count"></select>
+      <div class="row">
+        <button id="btn-solo-start" class="primary">Start Solo Game</button>
+      </div>
+    </div>
+
+    <p id="landing-error" class="error"></p>
+  </div>
+</div>
+
+<div id="screen-lobby" class="screen">
+  <div class="hero-landing hero-landing-sm">
+    <div class="hero-felt"></div>
+    <div class="hero-card hero-card-1">K<span>♣</span></div>
+    <div class="hero-card hero-card-2">Q<span>♠</span></div>
+    <div class="hero-card hero-card-3">2<span>♥</span></div>
+    <div class="hero-fade"></div>
+  </div>
+  <div class="landing-form">
+    <div class="room-code-label">Room Code (రూమ్ కోడ్)</div>
+    <div class="room-code-display" id="lobby-roomcode">----</div>
+    <p class="hint">Send this code to your family/friends</p>
+
+    <button id="btn-game-rules" class="secondary rules-btn" type="button">ⓘ Game Rules (గేమ్ రూల్స్)</button>
+
+    <h3>Players</h3>
+    <ul id="lobby-players" class="player-list"></ul>
+
+    <div id="lobby-maxscore-row" class="lobby-maxscore-row hidden">
+      <label for="input-maxscore">Max Score (గరిష్ట స్కోర్)</label>
+      <select id="input-maxscore"></select>
+    </div>
+
+    <button id="btn-start" class="primary" disabled>Start Game (గేమ్ మొదలుపెట్టు)</button>
+    <p id="lobby-hint" class="hint"></p>
+    <button id="btn-leave-lobby" class="secondary leave-btn">Leave Room</button>
+    <p id="lobby-error" class="error"></p>
+  </div>
+</div>
+
+<div id="screen-game" class="screen">
+  <div class="game-top">
+    <div class="top-actions">
+      <button id="btn-scores" class="tiny">Scores</button>
+    </div>
+  </div>
+
+  <div id="turn-timer" class="turn-timer hidden">⏱ <span id="timer-seconds">30</span>s</div>
+
+  <div class="oval-table" id="oval-table">
+    <div class="table-felt"></div>
+    <div class="stock-badge">Stock: <span id="stock-count">0</span></div>
+    <div class="table-center">
+      <div class="pile-group">
+        <div class="pile-label">Open Card</div>
+        <div id="open-card-slot"></div>
+      </div>
+      <div class="pile-group">
+        <div class="pile-label">Joker</div>
+        <div id="joker-indicator">-</div>
+      </div>
+    </div>
+    <!-- .seat elements injected by app.js -->
+    <div id="deal-flyer" class="deal-flyer hidden"></div>
+  </div>
+
+  <div id="chain-banner" class="chain-banner hidden">
+    <span id="chain-banner-text">🔥 +2 Chain!</span>
+    <button id="btn-take-penalty" class="danger hidden">Take Penalty (<span id="penalty-count">0</span>)</button>
+  </div>
+  <div id="chain-flash" class="chain-flash hidden"></div>
+
+  <div id="hand-jokers-row" class="hand-jokers hidden">
+    <div class="hand-jokers-label">🃏 Jokers / Wild (0 pts) — only you see this</div>
+    <div id="hand-jokers" class="hand-jokers-cards"></div>
+  </div>
+
+  <div class="hand-header">
+    <span>Your cards (మీ కార్డులు) (Value: <b id="hand-value">0</b>)</span>
+  </div>
+  <div id="hand" class="hand"></div>
+
+  <div class="action-bar">
+    <button id="btn-discard" class="primary" disabled>Discard Selected</button>
+    <button id="btn-declare" class="declare" disabled>Least Count!</button>
+  </div>
+  <p id="game-error" class="error"></p>
+</div>
+
+<canvas id="confetti-canvas" class="confetti-canvas hidden"></canvas>
+
+<!-- Countdown + "dealing" label float over the real oval table (now visible
+     underneath) instead of a full-screen takeover, since the deal animation
+     itself flies cards to the actual chair positions on that table. -->
+<div id="deal-phase-badge" class="deal-phase-badge hidden">
+  <div id="start-seq-countdown" class="start-seq-countdown">3</div>
+  <div id="deal-phase-label" class="deal-phase-label hidden">Dealing cards... (కార్డులు ఇస్తున్నారు)</div>
+</div>
+
+<div id="overlay-start-sequence" class="start-sequence hidden">
+  <div class="start-seq-box">
+    <div id="start-seq-reveal" class="start-seq-reveal hidden">
+      <div class="start-seq-reveal-row">
+        <div class="start-seq-reveal-label">Joker</div>
+        <div id="start-seq-joker-card"></div>
+      </div>
+      <div class="start-seq-reveal-row">
+        <div class="start-seq-reveal-label">Open Card</div>
+        <div id="start-seq-open-card"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="overlay-round-result" class="overlay hidden">
+  <div class="card-panel podium-panel">
+    <div id="round-result-emoji" class="round-result-emoji"></div>
+    <h2 id="round-result-title">Round Result</h2>
+    <div id="round-result-maxscore" class="round-result-maxscore"></div>
+
+    <div id="podium" class="podium"></div>
+    <div id="round-result-note" class="round-result-note"></div>
+    <div id="round-result-hands" class="reveal-rows"></div>
+
+    <div id="round-maxscore-row" class="round-maxscore-row hidden">
+      <label for="round-maxscore-select">Change Max Score</label>
+      <select id="round-maxscore-select"></select>
+    </div>
+
+    <button id="btn-next-round" class="primary hidden">Next Round</button>
+    <button id="btn-see-final-result" class="primary hidden">See Final Result 🏆</button>
+    <button id="btn-leave-round-result" class="secondary leave-btn">Leave Game</button>
+    <p id="round-result-hint" class="hint"></p>
+  </div>
+</div>
+
+<div id="overlay-rules" class="overlay hidden">
+  <div class="card-panel rules-panel">
+    <h2>📜 Game Rules (గేమ్ రూల్స్)</h2>
+    <div class="rules-body">
+      <div class="rules-item">
+        <div class="rules-heading">🎯 Goal (లక్ష్యం)</div>
+        <p>Score as few points as possible. When your total points reach the elimination score, you're out. The last player still standing wins.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">🃏 Card Values (కార్డుల విలువ)</div>
+        <p>Ace = 1, number cards = face value, face cards (J/Q/K) = 10. Each round, one rank is picked as the Joker — Jokers and that rank are worth 0 points and can replace any card.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">🔄 Your Turn (మీ వంతు)</div>
+        <p>Draw a card from the stock pile or the open pile, then discard one card. Try to keep your hand's total value as low as possible.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">🔥 +2 Chain</div>
+        <p>Discarding a 2 forces the next player to draw 2 penalty cards — unless they also discard a 2, which stacks the chain higher (+4, +6...). Whoever can't continue it draws the full penalty.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">📣 Declaring (డిక్లేర్)</div>
+        <p>Once your hand value is 5 or less, you can declare "Least Count!" If your total really is the lowest at the table, every other player scores their own hand value as penalty points. If you're wrong, you take the penalty instead.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">🏆 Elimination & Winning (ఎలిమినేషన్)</div>
+        <p>Points carry over every round. Cross the elimination score (chosen before the game, e.g. 100/200) and you're eliminated. Play continues until only one player remains — they win!</p>
+      </div>
+    </div>
+    <button id="btn-close-rules" class="secondary">Close</button>
+  </div>
+</div>
+
+<div id="overlay-scores" class="overlay hidden">
+  <div class="card-panel">
+    <h2>Scores</h2>
+    <div id="scores-body"></div>
+    <button id="btn-close-scores" class="secondary">Close</button>
+  </div>
+</div>
+
+<div id="overlay-gameover" class="overlay hidden">
+  <div class="card-panel">
+    <h1 id="gameover-title">🏆</h1>
+    <div id="gameover-body"></div>
+    <button id="btn-new-game" class="primary hidden">Play Again (same room)</button>
+    <button id="btn-leave-gameover" class="secondary leave-btn">Leave Room</button>
+    <p id="gameover-hint" class="hint"></p>
+  </div>
+</div>
+
+<div id="draw-reveal" class="draw-reveal hidden">
+  <div class="draw-reveal-box">
+    <div class="draw-reveal-label" id="draw-reveal-label">You drew... (మీకు వచ్చింది...)</div>
+    <div id="draw-reveal-cards" class="draw-reveal-cards"></div>
+  </div>
+</div>
+
+<div id="chat-fab" class="chat-fab hidden">
+  💬<span id="chat-badge" class="badge hidden">0</span>
+</div>
+
+<div id="chat-panel" class="chat-panel hidden">
+  <div class="chat-header">
+    <span>💬 Chat</span>
+    <button id="btn-chat-close" class="tiny">✕</button>
+  </div>
+  <div id="chat-messages" class="chat-messages"></div>
+  <div id="gif-picker" class="gif-picker hidden">
+    <div class="gif-picker-header">
+      <input id="gif-search-input" type="text" placeholder="Search GIFs..." />
+      <button id="btn-gif-close" class="tiny">✕</button>
+    </div>
+    <div id="gif-suggestions" class="gif-suggestions"></div>
+    <div id="gif-results" class="gif-results"></div>
+  </div>
+  <div class="chat-input-row">
+    <input id="chat-input" type="text" maxlength="300" placeholder="Message..." />
+    <button id="btn-gif-open" class="tiny" title="Send a GIF">GIF</button>
+    <button id="btn-chat-send" class="tiny primary">➤</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

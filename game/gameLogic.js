@@ -115,8 +115,30 @@ class LeastCountGame {
   // keeping only the last 2. Called from both a normal discard and a single
   // 2 played mid-chain.
   _recordDiscard(playerId, cards) {
+    if (!cards || !cards.length) return;
     const existing = this.discardHistory[playerId] || [];
-    this.discardHistory[playerId] = [...existing, ...cards].slice(-2);
+
+    // A single discard can contain several cards of the same rank (a free-pass
+    // group) -- collapse those to one representative card per distinct rank.
+    const newRanks = new Set(cards.map((c) => c.rank));
+    let combined = existing.filter((c) => !newRanks.has(c.rank));
+    for (const rank of newRanks) {
+      combined.push(cards.find((c) => c.rank === rank));
+    }
+
+    // Re-dedupe by rank (in case stale entries slipped through) keeping the
+    // most recent occurrence of each rank, oldest-first order preserved.
+    const seenRanks = new Set();
+    const deduped = [];
+    for (let i = combined.length - 1; i >= 0; i--) {
+      const c = combined[i];
+      if (!seenRanks.has(c.rank)) {
+        seenRanks.add(c.rank);
+        deduped.unshift(c);
+      }
+    }
+
+    this.discardHistory[playerId] = deduped.slice(-2);
   }
 
   activePlayers() {

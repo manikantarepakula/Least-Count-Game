@@ -681,6 +681,53 @@ check('discardHistory tracks each player\'s last 2 discards, capped and per-roun
   assert.deepStrictEqual(g.getPublicState().discardHistory[p].map((c) => c.id), ['d2', 'd3']);
 });
 
+check('discardHistory tracks the last 2 DISTINCT ranks, not just the last 2 discards chronologically', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  g.chainCount = 0;
+  const p = g.currentPlayer();
+  g.discardPile = [{ id: 'open1', rank: '9', suit: 'S' }];
+  g.roundJokerRank = null;
+  g.hands[p] = [
+    { id: 'd1', rank: '3', suit: 'C' },
+    { id: 'd2', rank: '4', suit: 'C' },
+    { id: 'd3', rank: '3', suit: 'D' }, // same rank as d1, discarded later
+  ];
+
+  g.playTurn(p, ['d1']);
+  g.currentTurnIndex = g.turnOrder.indexOf(p);
+  g.discardPile.push({ id: 'open2', rank: '9', suit: 'S' });
+  g.playTurn(p, ['d2']);
+  assert.deepStrictEqual(g.getPublicState().discardHistory[p].map((c) => c.rank), ['3', '4']);
+
+  // Discarding another 3 shouldn't create a second "3" entry or push out the
+  // "4" -- it should just refresh the existing "3" slot to the most recent
+  // position, leaving distinct ranks 4 and 3 (in that order).
+  g.currentTurnIndex = g.turnOrder.indexOf(p);
+  g.discardPile.push({ id: 'open3', rank: '9', suit: 'S' });
+  g.playTurn(p, ['d3']);
+  const history = g.getPublicState().discardHistory[p];
+  assert.strictEqual(history.length, 2, 'still only 2 distinct-rank entries');
+  assert.deepStrictEqual(history.map((c) => c.rank), ['4', '3']);
+  assert.strictEqual(history[1].id, 'd3', 'the "3" slot now points at the newer d3 card');
+});
+
+check('discardHistory collapses a same-rank multi-card discard into a single entry', () => {
+  const g = new LeastCountGame(['A', 'B']);
+  g.startRound();
+  const p = g.currentPlayer();
+  // Directly exercise _recordDiscard -- a free-pass discard of 2 same-rank
+  // cards at once (e.g. joker-open free pass) should still only ever record
+  // one representative card per rank, never two entries for the same rank.
+  g.discardHistory[p] = [];
+  g._recordDiscard(p, [
+    { id: 'x1', rank: '7', suit: 'C' },
+    { id: 'x2', rank: '7', suit: 'D' },
+  ]);
+  assert.strictEqual(g.discardHistory[p].length, 1);
+  assert.strictEqual(g.discardHistory[p][0].rank, '7');
+});
+
 check('discardHistory resets fresh at the start of each new round', () => {
   const g = new LeastCountGame(['A', 'B']);
   g.startRound();

@@ -1,0 +1,687 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  /* Georgia leads the stack for that classic-serif look on English text;
+     it has no Telugu glyphs, so the browser automatically falls through
+     to Noto Sans Telugu (and system defaults) for Telugu characters --
+     no separate rule needed to keep that text readable. */
+  font-family: Georgia, 'Times New Roman', 'Noto Sans Telugu', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: radial-gradient(circle at top, #1e5631, #0b2e1a);
+  color: #f0f0f0;
+  min-height: 100vh;
+}
+
+/* On mobile, 100vh can mean the LARGER viewport (as if the address bar were
+   hidden), taller than what's actually visible. That leftover min-height
+   was clamping the game screen upward and forcing a page-level scrollbar
+   even after switching it to 100dvh. Locking body itself to the current
+   dynamic viewport while the game screen is active removes that scroll. */
+body.game-active {
+  min-height: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.screen { display: none; min-height: 100vh; padding: 16px; }
+.screen.active { display: block; }
+
+/* Game screen fits one viewport height, no page scroll, on any device */
+#screen-game.screen.active {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100vh;
+  height: 100dvh;
+  padding: 6px 8px;
+  overflow: hidden;
+}
+
+.card-panel {
+  background: #ffffff;
+  color: #1a1a1a;
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 420px;
+  margin: 24px auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+
+/* ---- Landing / lobby "tabletop hero" screens ---- */
+/* Cards fanned out on a felt circle at the top, fading straight into the
+   page's own dark green background, with the form sitting directly on it
+   (no white card-panel here -- these two screens use their own dark theme). */
+#screen-landing.screen.active, #screen-lobby.screen.active { padding: 0; }
+
+.hero-landing { position: relative; height: 210px; overflow: hidden; }
+.hero-landing-sm { height: 150px; }
+.hero-felt {
+  position: absolute; top: -150px; left: 50%; transform: translateX(-50%);
+  width: 420px; height: 420px; border-radius: 50%;
+  background: radial-gradient(circle, #1f6b3a, #0d3319 70%);
+}
+.hero-card {
+  position: absolute; top: 46px; left: 50%;
+  width: 52px; height: 74px; border-radius: 6px; background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 19px;
+  box-shadow: 0 6px 14px rgba(0,0,0,0.4);
+}
+.hero-card span { margin-left: 3px; }
+.hero-card-1 { transform: translate(-84%, 0) rotate(-10deg); color: #c0392b; }
+.hero-card-2 { transform: translate(-16%, 6px) rotate(7deg); color: #1a1a1a; }
+.hero-card-3 { transform: translate(46%, 2px) rotate(-23deg); color: #c0392b; }
+.hero-fade {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(11,46,26,0) 0%, rgba(11,46,26,0.92) 55%, #0b2e1a 78%);
+}
+.hero-content {
+  position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; padding: 0 16px;
+}
+.hero-content h1 { color: #fff; font-size: 27px; font-weight: 700; margin: 0; }
+.hero-subtitle { color: #9fd8b8; font-size: 12px; margin: 4px 0 0; }
+
+.landing-form { max-width: 420px; margin: 10px auto 24px; padding: 0 24px 24px; }
+.landing-form label { color: #9fd8b8; }
+.landing-form input[type=text] {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
+}
+.landing-form input[type=text]::placeholder { color: rgba(255,255,255,0.4); }
+.landing-form input[type=text]:focus { border-color: #d4a017; }
+.landing-form button.primary { background: #d4a017; color: #1a1a1a; }
+.landing-form button.secondary {
+  background: transparent; border: 1.5px solid #d4a017; color: #d4a017;
+}
+.landing-form .divider { color: #6ba889; }
+.landing-form .hint { color: #9fd8b8; }
+.landing-form .error { color: #ff8a80; }
+.landing-form h3 {
+  color: #d4a017; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+  margin: 20px 0 8px;
+}
+.landing-form .room-code-label {
+  color: #d4e8da; font-size: 11px; text-align: center; text-transform: uppercase; letter-spacing: 1px;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.6); margin-top: 4px;
+}
+.landing-form .room-code-display {
+  background: transparent; color: #ffcb6b; font-size: 38px; letter-spacing: 8px;
+  box-shadow: none; text-shadow: 0 2px 10px rgba(0,0,0,0.4); padding: 4px 0;
+}
+.landing-form .player-list li { border-bottom: 1px solid rgba(255,255,255,0.12); }
+.landing-form .player-list .host-tag { color: #ffcb6b; }
+.landing-form .player-list .status { color: #6ba889; }
+.landing-form .leave-btn { border-color: #c0392b; color: #e0736a; }
+
+select {
+  width: 100%; padding: 12px; font-size: 16px; border-radius: 10px;
+  border: 1px solid #ccc; background: #fff; color: #1a1a1a; outline: none;
+}
+select:focus { border-color: #1e5631; }
+.landing-form select {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
+}
+.landing-form select option { color: #1a1a1a; }
+.lobby-maxscore-row { margin: 14px 0; }
+.lobby-maxscore-row.hidden { display: none; }
+.lobby-maxscore-row label { color: #9fd8b8; }
+
+.solo-panel { margin: 12px 0; }
+.solo-panel.hidden { display: none; }
+.solo-panel label { color: #9fd8b8; }
+
+.rules-btn { margin-top: 14px; font-size: 13px; padding: 9px; }
+
+.rules-panel { max-width: 480px; width: 92vw; text-align: left; }
+.rules-panel h2 { text-align: center; }
+.rules-body { max-height: 60vh; overflow-y: auto; padding-right: 4px; margin-bottom: 14px; }
+.rules-item { margin-bottom: 14px; }
+.rules-item:last-child { margin-bottom: 0; }
+.rules-heading { font-weight: 700; color: #1e5631; font-size: 14px; margin-bottom: 3px; }
+.rules-item p { margin: 0; font-size: 13px; line-height: 1.45; color: #333; }
+
+h1 { text-align: center; margin: 0 0 4px; font-size: 28px; }
+h2 { margin-top: 0; }
+.subtitle { text-align: center; color: #666; margin-top: 0; }
+
+label { display: block; font-size: 13px; margin: 14px 0 4px; color: #444; }
+input[type=text] {
+  width: 100%; padding: 12px; font-size: 18px; border-radius: 10px;
+  border: 1px solid #ccc; outline: none;
+}
+input[type=text]:focus { border-color: #1e5631; }
+
+.row { margin-top: 16px; }
+button {
+  width: 100%; padding: 14px; font-size: 16px; border-radius: 10px;
+  border: none; cursor: pointer; font-weight: 600;
+}
+button.primary { background: #1e5631; color: white; }
+button.secondary { background: #e8e8e8; color: #222; }
+button.danger { background: #c0392b; color: white; margin-top: 8px; }
+button.declare { background: #d4a017; color: #1a1a1a; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.tiny { width: auto; padding: 6px 12px; font-size: 12px; }
+button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c0392b; margin-top: 10px; }
+
+.divider { text-align: center; margin: 20px 0; color: #999; font-size: 12px; }
+.error { color: #c0392b; font-size: 13px; min-height: 16px; }
+.hint { color: #777; font-size: 12px; text-align: center; }
+
+.room-code-display {
+  font-size: 40px; letter-spacing: 8px; text-align: center; font-weight: 800;
+  background: #f0f0f0; border-radius: 12px; padding: 12px; margin: 8px 0;
+}
+
+.player-list { list-style: none; padding: 0; }
+.player-list li {
+  padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between;
+}
+.player-list .status { font-size: 11px; color: #999; }
+.player-list .host-tag { color: #1e5631; font-weight: 700; font-size: 11px; }
+
+/* ---------------- Game screen ---------------- */
+.game-top {
+  display: flex; justify-content: flex-end; align-items: center;
+  font-size: 13px; padding: 3px 4px; flex-shrink: 0;
+}
+.top-actions { display: flex; gap: 6px; align-items: center; }
+
+.turn-timer {
+  text-align: center; font-size: 12px; font-weight: 700;
+  background: rgba(0,0,0,0.35); border-radius: 20px; padding: 3px 10px;
+  width: fit-content; margin: 2px auto; transition: color 0.2s; flex-shrink: 0;
+}
+.turn-timer.low { color: #ff6b6b; }
+.turn-timer.hidden { display: none; }
+
+/* ---- Oval table ---- */
+/* Height-driven (not width-driven) so it shrinks to fit short phone
+   screens automatically; aspect-ratio derives the matching width.
+   This is now the flex-grow element in the game screen's column layout --
+   it absorbs whatever vertical space the hand row (below) isn't using,
+   instead of that space sitting empty. Still capped by max-height/max-width
+   so it can't grow unreasonably large on tall/wide screens. */
+.oval-table {
+  position: relative;
+  width: auto;
+  max-height: min(48vh, 400px);
+  max-width: 94vw;
+  aspect-ratio: 1 / 1.05;
+  margin: 2px auto 6px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.table-felt {
+  position: absolute; inset: 12%;
+  background: radial-gradient(circle, #1f6b3a, #0d3319 75%);
+  border-radius: 50%;
+  border: 6px solid #0a2314;
+  box-shadow: inset 0 0 30px rgba(0,0,0,0.45);
+}
+.stock-badge {
+  /* Hidden from players by request -- stock count is still tracked and
+     broadcast by the server as normal, just not shown in the UI. */
+  display: none;
+}
+.table-center {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; gap: 18px; align-items: center; z-index: 2;
+}
+.table-center .pile-label { font-size: 11px; }
+.table-center .card { width: 58px; height: 82px; }
+.table-center .card .card-corner { display: none; }
+.table-center .card .center-rank { font-size: 20px; }
+.table-center .card .center-suit { font-size: 26px; }
+#joker-indicator { display: flex; }
+
+.seat {
+  position: absolute; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; z-index: 3; width: 96px; text-align: center;
+}
+.seat-chip {
+  background: rgba(255,255,255,0.14); border-radius: 10px; padding: 5px 9px;
+  font-size: 11.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%; width: 100%;
+}
+.seat.active .seat-chip { background: #d4a017; color: #1a1a1a; font-weight: 700; }
+.seat.eliminated { opacity: 0.4; }
+.seat.quit { opacity: 0.35; }
+
+/* Your-turn visual pulse: only ever applied to your OWN seat, and only once
+   you've gone quiet for 5+ seconds on your own turn (see app.js) -- a purely
+   local, self-only nudge, no vibration, no broadcast to anyone else. */
+@keyframes turnPulseRing {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212,160,23,0.65); }
+  50% { box-shadow: 0 0 0 12px rgba(212,160,23,0); }
+}
+.seat.my-turn-pulse .seat-chip { animation: turnPulseRing 1.1s ease-in-out infinite; }
+
+/* Chat speech-bubble at the sender's seat -- shown alongside (not instead
+   of) the separate chat panel, for 5-10s scaled by message length.
+   A comic-style bubble with a tail pointing straight at the seat, sitting
+   tight against it so it visually reads as "this came from their chair".
+   Width is a fixed value (not shrink-to-fit) -- an auto/max-width-only box
+   combined with word-break:break-word was computing down to a near-zero
+   width on some phones, wrapping text to 2-3 letters per line. A fixed
+   width sidesteps that shrink-to-fit ambiguity entirely. */
+.seat-chat-bubble {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  width: min(150px, 56vw); box-sizing: border-box;
+  background: #fff; color: #1a1a1a; font-size: 12px; line-height: 1.35;
+  padding: 7px 10px; border-radius: 14px; box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+  z-index: 6; word-break: break-word; animation: chatBubbleIn 0.18s ease-out both;
+}
+.seat-chat-bubble.below { top: calc(100% + 4px); }
+.seat-chat-bubble.above { bottom: calc(100% + 4px); }
+.seat-chat-bubble::after {
+  content: ''; position: absolute; left: 50%; transform: translateX(-50%);
+  width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent;
+}
+.seat-chat-bubble.below::after { top: -7px; border-bottom: 8px solid #fff; }
+.seat-chat-bubble.above::after { bottom: -7px; border-top: 8px solid #fff; }
+.seat-chat-gif { display: block; width: 100%; border-radius: 8px; }
+
+/* Text bubbles near a table edge could in principle also run wide, but at
+   150px max they've been fine in practice -- these align classes exist
+   specifically for the GIF thumbnail below, reusing the same left/right/
+   center pattern as the per-seat discard history and old final-hand reveal. */
+.seat-chat-bubble.align-left { left: 0; transform: none; }
+.seat-chat-bubble.align-right { left: auto; right: 0; transform: none; }
+.seat-chat-bubble.align-left::after { left: 14px; transform: none; }
+.seat-chat-bubble.align-right::after { left: auto; right: 14px; transform: none; }
+
+/* GIF thumbnail on the table -- much smaller than a full chat bubble (which
+   was tall enough to cover the joker/open card in the middle of the table).
+   Just enough to notice someone sent a GIF; the chat panel shows it full size. */
+.seat-chat-bubble.gif-thumb {
+  width: 62px; padding: 0; border-radius: 8px; overflow: hidden;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.4); line-height: 0;
+}
+.seat-chat-bubble.gif-thumb .seat-chat-gif { width: 62px; height: 62px; object-fit: cover; border-radius: 0; }
+.seat-chat-gif-tag {
+  position: absolute; bottom: 2px; right: 2px; background: rgba(0,0,0,0.6); color: #fff;
+  font-size: 7px; font-weight: 700; padding: 1px 3px; border-radius: 3px; line-height: 1.2;
+}
+
+/* Small card tile, reused anywhere a full-size 44x62 card would be too big:
+   the round-result reveal rows, the per-seat discard history. */
+.card.mini { width: 19px; height: 26px; }
+.card.mini .card-corner { display: none; }
+.card.mini .center-rank { font-size: 7.5px; }
+.card.mini .center-suit { font-size: 7.5px; }
+.card.mini .card-count-badge { width: 13px; height: 13px; font-size: 7px; top: -5px; right: -5px; }
+@keyframes chatBubbleIn {
+  from { transform: translateX(-50%) scale(0.7); opacity: 0; }
+  to { transform: translateX(-50%) scale(1); opacity: 1; }
+}
+.seat-emoji-bubble {
+  /* Centered squarely on the seat chip itself (covering the name, as
+     intended) rather than floating above it -- staying within the seat's
+     own footprint avoids any risk of the popup being clipped by the
+     screen's overflow:hidden on cramped mobile layouts, especially for
+     seats near the top of the table. */
+  position: absolute; top: 50%; left: 50%; width: 44px; height: 44px; border-radius: 50%;
+  background: #1a4a2c; border: 2px solid #d4a017; display: flex; align-items: center; justify-content: center;
+  font-size: 28px; z-index: 5; animation: seatReactionPop 3.4s ease both;
+}
+@keyframes seatReactionPop {
+  0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+  10% { transform: translate(-50%, -50%) scale(1.3); opacity: 1; }
+  18% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  85% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(0.85); opacity: 0; }
+}
+.seat-name {
+  font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.seat-meta { font-size: 10px; opacity: 0.85; display: block; }
+
+/* Per-seat recent-discards line -- lives inside the chip itself so it never
+   needs its own edge-aware positioning (see renderOvalTable()). */
+.seat-discard-history {
+  display: flex; align-items: center; justify-content: center; gap: 2px;
+  white-space: normal; margin-top: 3px;
+}
+.seat-discard-label { font-size: 8px; color: #ffcb6b; font-weight: 700; margin-right: 1px; }
+.mini-card-back {
+  width: 26px; height: 36px; border-radius: 4px;
+  background: repeating-linear-gradient(45deg, #234, #234 4px, #1a2f42 4px, #1a2f42 8px);
+  border: 1px solid #0b1a26; margin-bottom: 2px;
+}
+
+.pile-group { text-align: center; }
+.pile-label { font-size: 11px; color: #cde; margin-bottom: 4px; }
+
+/* ---- Realistic playing cards ---- */
+.card {
+  width: 44px; height: 62px; border-radius: 6px; background: white;
+  position: relative; user-select: none; flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: 2px solid transparent;
+  display: inline-block;
+}
+.card.red .corner-rank, .card.red .corner-suit, .card.red .center-suit, .card.red .center-rank { color: #c0392b; }
+.card.black .corner-rank, .card.black .corner-suit, .card.black .center-suit, .card.black .center-rank { color: #1a1a1a; }
+
+.card-corner {
+  position: absolute; display: flex; flex-direction: column; align-items: center;
+  line-height: 1; font-weight: 700;
+}
+.corner-tl { top: 3px; left: 3px; }
+.corner-br { bottom: 3px; right: 3px; transform: rotate(180deg); }
+.corner-rank { font-size: 10px; }
+.corner-suit { font-size: 8px; margin-top: 1px; }
+
+.card-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.card-center .center-rank { font-size: 14px; font-weight: 800; line-height: 1; }
+.card-center .center-suit { font-size: 18px; line-height: 1; margin-top: 2px; }
+
+.card-count-badge {
+  position: absolute; top: -6px; right: -6px; background: #c0392b; color: #fff;
+  border-radius: 50%; font-size: 9px; font-weight: 700; width: 17px; height: 17px;
+  display: flex; align-items: center; justify-content: center; z-index: 2;
+}
+
+.card.joker { color: #8b1a1a; }
+.joker-letters {
+  font-size: 7px; font-weight: 700; line-height: 1.15; color: #8b1a1a;
+  letter-spacing: -0.5px;
+}
+.joker-cap {
+  width: 22px; height: 22px; position: relative;
+}
+.joker-cap::before {
+  content: ''; position: absolute; inset: 0;
+  background: #8b1a1a;
+  clip-path: polygon(50% 0%, 20% 45%, 35% 40%, 50% 70%, 65% 40%, 80% 45%);
+}
+.draw-reveal-cards .card.joker .joker-cap, .table-center .card.joker .joker-cap { width: 30px; height: 30px; }
+
+.card.back {
+  background: repeating-linear-gradient(45deg, #234, #234 6px, #1a2f42 6px, #1a2f42 12px);
+  border: 2px solid #0b1a26;
+}
+.card.selected { border-color: #d4a017; transform: translateY(-8px); }
+.card.selectable { cursor: pointer; }
+
+.chain-banner {
+  background: #c0392b22; border: 1px solid #c0392b; border-radius: 10px;
+  padding: 6px 10px; text-align: center; font-size: 12px; margin-bottom: 4px;
+  flex-shrink: 0;
+}
+.chain-banner.hidden { display: none; }
+.chain-banner button.hidden { display: none; }
+
+/* Brief flash announcing a 2 was just played/escalated/resolved -- visible
+   to every player at the table, not just whoever's turn it is. */
+.chain-flash {
+  flex-shrink: 0; text-align: center; font-size: 13px; font-weight: 700;
+  background: linear-gradient(90deg, #c0392b, #e67e22); color: #fff;
+  border-radius: 20px; padding: 6px 14px; margin: 0 auto 4px; width: fit-content;
+  max-width: 92%; animation: chainPop 0.25s ease-out;
+}
+.chain-flash.hidden { display: none; }
+@keyframes chainPop {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.hand-jokers { flex-shrink: 0; margin: 2px 4px 0; }
+.hand-jokers.hidden { display: none; }
+.hand-jokers-label { font-size: 10px; color: #d4a017; margin-bottom: 3px; }
+.hand-jokers-cards { display: flex; flex-wrap: wrap; gap: 5px; }
+.card.wild-zero { border-color: #d4a017; }
+
+.hand-header { font-size: 12px; margin: 2px 4px; flex-shrink: 0; }
+.hand {
+  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 4px;
+  /* Sized to actual content (about 2 rows of cards) instead of stretching to
+     fill all leftover screen space -- previously this grew to fill whatever
+     was left over even with just 1-2 rows of cards, leaving a big empty gap
+     below the cards. Rare huge hands (after several stacked +2 penalties)
+     scroll within this cap instead of pushing the action buttons off-screen. */
+  flex: 0 1 auto; max-height: 148px; min-height: 0; overflow-y: auto;
+}
+
+.action-bar { display: flex; gap: 8px; padding: 4px; flex-shrink: 0; }
+.action-bar button { padding: 10px; font-size: 14px; }
+
+.overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center; z-index: 10;
+  padding: 16px;
+}
+.overlay.hidden { display: none; }
+
+.hidden { display: none !important; }
+
+.round-result-emoji { text-align: center; font-size: 48px; line-height: 1; margin-bottom: 4px; }
+@keyframes scoreCardEmojiPop {
+  0% { transform: scale(0); opacity: 0; }
+  12% { transform: scale(1.25); opacity: 1; }
+  22% { transform: scale(1); opacity: 1; }
+  85% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(0.85); opacity: 0; }
+}
+.result-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 14px; }
+.result-row.winner-row { font-weight: 700; color: #1e5631; }
+
+/* ---- Podium-style score card (shown every round) ---- */
+.podium-panel {
+  max-width: 480px; width: 92vw;
+  margin: 8px auto; padding: 14px 16px;
+  /* Safety net only -- the podium shrink above is what makes this fit on a
+     normal phone screen without scrolling; this just prevents the panel
+     from ever being clipped outright on an unusually short viewport. */
+  max-height: 96dvh; overflow-y: auto;
+}
+.round-result-maxscore {
+  text-align: center; font-size: 12px; color: #8a5c00; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;
+}
+.round-result-note { text-align: center; font-size: 12.5px; color: #c0392b; margin-bottom: 8px; }
+.podium {
+  display: flex; align-items: flex-end; justify-content: center; gap: 7px;
+  margin: 4px 0 8px;
+}
+/* Shrunk down (not the reveal rows below) so the whole round-result screen
+   fits on one mobile viewport without needing to scroll. */
+.podium-slot {
+  background: #fff8e6; border: 1.5px solid #d4a017; border-radius: 10px;
+  padding: 5px 7px; text-align: center; flex: 1; min-width: 0;
+}
+.podium-medal { font-size: 17px; line-height: 1; }
+.podium-name {
+  font-weight: 700; font-size: 10.5px; margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.podium-score { font-size: 10px; color: #8a5c00; margin-top: 1px; font-weight: 700; }
+.podium-delta { font-size: 9px; color: #b8860b; margin-top: 1px; font-weight: 700; }
+/* 1st place sits centered (order: 2, flanked by 2nd/3rd) and visibly higher
+   than the other two -- via extra padding/scale + the other two carrying
+   their own bottom margin, not a bar-chart height. */
+.podium-place-1 {
+  order: 2; padding-top: 8px; padding-bottom: 8px;
+  background: #ffe9ad; border-width: 2px; transform: scale(1.03);
+  box-shadow: 0 3px 10px rgba(212,160,23,0.35);
+}
+.podium-place-1 .podium-medal { font-size: 21px; }
+.podium-place-2 { order: 1; margin-bottom: 4px; }
+.podium-place-3 { order: 3; margin-bottom: 6px; }
+
+/* ---- Round-result reveal rows: replaces the old plain scoreboard table AND
+   the old separate at-the-seat card reveal -- everyone's actual final hand
+   for the round (priciest cards first, capped tiles + "+N"), its value, and
+   the round-score math, all in one merged screen. See renderHandRevealRows(). ---- */
+.reveal-rows { border-top: 1.5px solid #f0dfa8; padding-top: 6px; max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.reveal-row { background: #f7f5ee; border-radius: 10px; padding: 7px 9px; }
+.reveal-row.declared { background: #fff3d6; border: 1px solid #d4a017; }
+.reveal-row.eliminated { opacity: 0.55; }
+.reveal-name { font-size: 11.5px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reveal-main { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.reveal-cards { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; min-width: 0; }
+.reveal-more { font-size: 10px; color: #8a5c00; font-weight: 700; margin-left: 1px; }
+.reveal-value { font-size: 10.5px; color: #8a5c00; font-weight: 700; margin-left: 3px; white-space: nowrap; }
+.reveal-math { font-size: 11px; color: #666; white-space: nowrap; flex-shrink: 0; }
+.reveal-math b { color: #1e5631; font-size: 12px; }
+
+.round-maxscore-row { margin: 14px 0; }
+.round-maxscore-row.hidden { display: none; }
+.round-maxscore-row label { color: #666; font-size: 12px; }
+.final-round-delta { font-weight: 700; color: #b8860b; background: #fff3d6; padding: 1px 6px; border-radius: 6px; }
+.final-round-banner {
+  background: #fff3d6; border: 1.5px solid #d4a017; border-radius: 10px;
+  padding: 10px 14px; margin-bottom: 14px; text-align: center; font-size: 14px; color: #6b4a00;
+}
+.final-round-banner-label {
+  text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; font-weight: 700;
+  color: #b8860b; margin-bottom: 4px;
+}
+.final-round-banner b { color: #8a5c00; }
+
+/* ---- Drawn card reveal ---- */
+.draw-reveal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center; z-index: 30;
+  animation: fadeIn 0.15s ease-out;
+}
+.draw-reveal.hidden { display: none; }
+.draw-reveal-box {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 20px; padding: 24px 28px; text-align: center;
+  animation: popIn 0.25s ease-out; max-width: 92vw; box-sizing: border-box;
+}
+.draw-reveal-label { color: #fff; font-size: 14px; margin-bottom: 14px; font-weight: 600; }
+/* A +4/+6 penalty draw needs more than one row -- wrapping (plus a width
+   cap on the box above) keeps a big draw from overflowing the screen edge
+   or getting crushed unreadably small trying to fit in one line. */
+.draw-reveal-cards { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 78vw; }
+.draw-reveal-cards .card { width: 76px; height: 108px; }
+.draw-reveal-cards .card-center .center-rank { font-size: 26px; }
+.draw-reveal-cards .card-center .center-suit { font-size: 32px; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes popIn { from { transform: scale(0.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* ---- Game-start sequence: countdown -> live deal -> joker/open reveal ---- */
+.confetti-canvas {
+  position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 50; pointer-events: none;
+}
+.confetti-canvas.hidden { display: none; }
+
+/* Countdown + "dealing" label -- a small floating, non-blocking badge (NOT
+   a full-screen takeover) so the real oval table underneath stays visible
+   while cards fly to the actual chair positions during dealing. */
+.deal-phase-badge {
+  position: fixed; top: 12%; left: 50%; transform: translateX(-50%);
+  z-index: 45; text-align: center; pointer-events: none;
+}
+.deal-phase-badge.hidden { display: none; }
+.deal-phase-badge .start-seq-countdown { font-size: 64px; }
+.start-seq-countdown {
+  font-weight: 700; color: #d4a017;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+  animation: popIn 0.3s ease-out;
+}
+.start-seq-countdown.hidden { display: none; }
+.deal-phase-label {
+  color: #fff; font-size: 14px; font-weight: 600;
+  background: rgba(9,38,22,0.6); border-radius: 20px; padding: 6px 16px;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.5); animation: fadeIn 0.2s ease-out;
+}
+.deal-phase-label.hidden { display: none; }
+
+/* The flying "card" itself lives inside the real #oval-table and travels
+   from the table's center to each actual seat in turn -- a real chair-to-
+   chair deal, not an abstract side-panel animation. */
+.deal-flyer {
+  position: absolute; top: 50%; left: 50%; width: 24px; height: 34px; border-radius: 4px;
+  background: repeating-linear-gradient(45deg, #234, #234 5px, #1a2f42 5px, #1a2f42 10px);
+  border: 1px solid #0b1a26; box-shadow: 0 3px 8px rgba(0,0,0,0.45);
+  transform: translate(-50%, -50%); opacity: 0; z-index: 6;
+}
+.deal-flyer.hidden { display: none; }
+/* Brief highlight the instant a card "lands" at a seat. */
+.seat.dealt-flash .seat-chip { background: #d4a017; color: #1a1a1a; transition: background 0.1s; }
+
+.start-sequence {
+  position: fixed; inset: 0; background: rgba(9, 38, 22, 0.92);
+  display: flex; align-items: center; justify-content: center; z-index: 40;
+  animation: fadeIn 0.2s ease-out;
+}
+.start-sequence.hidden { display: none; }
+.start-seq-box { text-align: center; }
+.start-seq-reveal { display: flex; flex-direction: column; gap: 18px; animation: popIn 0.3s ease-out; }
+.start-seq-reveal.hidden { display: none; }
+.start-seq-reveal-row { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.start-seq-reveal-label { color: #d4a017; font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+.start-seq-reveal-row .card { width: 76px; height: 108px; }
+.start-seq-reveal-row .card-center .center-rank { font-size: 26px; }
+.start-seq-reveal-row .card-center .center-suit { font-size: 32px; }
+
+/* ---- Chat ---- */
+.chat-fab {
+  position: fixed; bottom: 16px; right: 16px; width: 52px; height: 52px; border-radius: 50%;
+  background: #1e5631; color: white; display: flex; align-items: center; justify-content: center;
+  font-size: 22px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); cursor: pointer; z-index: 20;
+}
+.chat-fab.hidden { display: none; }
+.badge {
+  position: absolute; top: -4px; right: -4px; background: #c0392b; color: white;
+  border-radius: 50%; font-size: 10px; min-width: 16px; height: 16px; padding: 0 3px;
+  display: flex; align-items: center; justify-content: center; font-weight: 700;
+}
+.badge.hidden { display: none; }
+
+.chat-panel {
+  position: fixed; bottom: 0; right: 0; left: 0; margin: 0 auto; width: 100%; max-width: 380px;
+  height: 60vh; max-height: 480px;
+  background: white; color: #1a1a1a; border-radius: 16px 16px 0 0; z-index: 25;
+  display: flex; flex-direction: column; box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+}
+.chat-panel.hidden { display: none; }
+.chat-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; border-bottom: 1px solid #eee; font-weight: 700;
+}
+.chat-messages { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 13px; }
+.chat-msg { margin-bottom: 8px; }
+.chat-msg .chat-name { font-weight: 700; color: #1e5631; }
+.chat-msg.me .chat-name { color: #7d3cff; }
+.chat-msg .chat-text { word-break: break-word; }
+.chat-msg .chat-gif { display: block; max-width: 160px; border-radius: 8px; margin-top: 4px; }
+.chat-empty { color: #999; font-size: 12px; text-align: center; margin-top: 20px; }
+.chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid #eee; }
+.chat-input-row input {
+  flex: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; font-size: 14px;
+}
+.chat-input-row button.tiny { width: auto; padding: 8px 16px; border-radius: 20px; }
+#btn-gif-open { font-weight: 700; font-size: 11px; background: #eee; color: #333; }
+
+/* ---- GIF picker (Giphy search) ---- */
+.gif-picker {
+  position: absolute; left: 0; right: 0; bottom: 56px; height: 260px;
+  background: #fff; border-top: 1px solid #eee; z-index: 26;
+  display: flex; flex-direction: column;
+}
+.gif-picker.hidden { display: none; }
+.gif-picker-header { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid #eee; }
+.gif-picker-header input {
+  flex: 1; padding: 8px 12px; border-radius: 16px; border: 1px solid #ccc; font-size: 13px;
+}
+.gif-suggestions {
+  display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; flex-shrink: 0;
+}
+.gif-suggestion-chip {
+  flex-shrink: 0; background: #f1f1f1; border: 1px solid #ddd; border-radius: 14px;
+  padding: 5px 12px; font-size: 12px; color: #1a1a1a; white-space: nowrap; cursor: pointer;
+}
+.gif-suggestion-chip:active { background: #e3e3e3; }
+.gif-results {
+  flex: 1; overflow-y: auto; padding: 8px; display: grid;
+  grid-template-columns: repeat(3, 1fr); gap: 6px; align-content: start;
+}
+.gif-results img { width: 100%; height: 72px; object-fit: cover; border-radius: 6px; cursor: pointer; }
+.gif-results-hint { grid-column: 1 / -1; text-align: center; color: #999; font-size: 12px; padding: 24px 0; }
