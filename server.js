@@ -97,6 +97,24 @@ async function recordGameResult(room) {
 }
 
 // --------------------------------------------------------------------------
+// Basic chat content filtering. Deliberately simple -- a fixed word list,
+// whole-word matching (so it doesn't flag substrings inside innocent words),
+// and censoring (turning the word into asterisks) rather than blocking the
+// message outright, so one filtered word doesn't stop the rest of a message
+// from sending. This is a first layer for a family game, not a complete
+// moderation system -- paired with the report/mute tools on the client for
+// anything it misses.
+// --------------------------------------------------------------------------
+const PROFANITY_LIST = [
+  'fuck', 'shit', 'bitch', 'asshole', 'bastard', 'cunt', 'dick', 'pussy',
+  'whore', 'slut', 'nigger', 'nigga', 'faggot', 'retard', 'rape', 'molest',
+];
+const PROFANITY_REGEX = new RegExp(`\\b(${PROFANITY_LIST.join('|')})\\b`, 'gi');
+function censorText(text) {
+  return text.replace(PROFANITY_REGEX, (match) => '*'.repeat(match.length));
+}
+
+// --------------------------------------------------------------------------
 // GIF search (chat). Proxies to Giphy so the API key stays server-side only
 // -- never shipped to the browser, where anyone could read it out of the
 // page source and drain the quota. Set GIPHY_API_KEY as an environment
@@ -189,6 +207,7 @@ const RATE_LIMITS = {
   create_room: { max: 5, windowMs: 60000 },
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
+  report_player: { max: 5, windowMs: 60000 },
 };
 const rateBuckets = new Map(); // socket.id -> { [eventName]: number[] recent timestamps }
 
@@ -793,7 +812,7 @@ io.on('connection', (socket) => {
         msg.type = 'gif';
         msg.gifUrl = cleanUrl;
       } else {
-        const cleanText = (text || '').toString().trim().slice(0, 300);
+        const cleanText = censorText((text || '').toString().trim().slice(0, 300));
         if (!cleanText) throw new Error('Empty message.');
         msg.type = 'text';
         msg.text = cleanText;
@@ -802,6 +821,43 @@ io.on('connection', (socket) => {
       room.chatHistory.push(msg);
       if (room.chatHistory.length > CHAT_HISTORY_LIMIT) room.chatHistory.shift();
       io.to(roomCode).emit('chat_message', msg);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // A player flagging another player's message. Deliberately not something
+  // that takes automatic action (no auto-mute/auto-kick) -- it just records
+  // the report to Firestore's "reports" collection so it can be reviewed by
+  // hand, since there's no live moderator watching every room. Falls back to
+  // a server log line if Firestore isn't connected, so nothing is silently
+  // lost either way.
+  socket.on('report_player', ({ roomCode, reportedPlayerId, reportedName, messageType, messageText }, ack) => {
+    try {
+      if (isRateLimited(socket, 'report_player')) throw new Error('Too many reports too quickly. Please wait a moment.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      const reporter = room.players.get(entry.playerId);
+      const reportDoc = {
+        roomCode: (roomCode || '').toString().slice(0, 10),
+        reportedPlayerId: (reportedPlayerId || '').toString().slice(0, 100),
+        reportedName: (reportedName || '').toString().slice(0, 40),
+        reporterPlayerId: entry.playerId,
+        reporterName: reporter ? reporter.name : '?',
+        messageType: (messageType || 'text').toString().slice(0, 10),
+        messageText: (messageText || '').toString().slice(0, 300),
+        createdAt: new Date().toISOString(),
+      };
+      if (db) {
+        db.collection('reports').add(reportDoc).catch((e) => {
+          console.error('[Firebase] Failed to save report:', e.message);
+        });
+      } else {
+        console.warn('[Report] (Firestore not connected, logged here instead):', reportDoc);
+      }
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
