@@ -172,6 +172,40 @@ const PENALTY_REACTION_THRESHOLD = 6;
 const BIG_DISCARD_THRESHOLD = 4;
 const LOW_CARDS_THRESHOLD = 4;
 
+// ---------------------------------------------------------------------------
+// Per-socket rate limiting. Each connected socket gets its own small bucket
+// per action type; going over the limit just gets rejected (same as any
+// other invalid action, via the existing ack({ok:false}) error path) instead
+// of processed. This is a brake pedal, not a ban -- once the window passes,
+// that socket can act again normally. Limits are set generously above what
+// a real human could ever hit through normal play/chat, so this should never
+// trip for a legitimate player; it's here for scripted spam and stuck-key
+// button-mashing, not to slow anyone down.
+// ---------------------------------------------------------------------------
+const RATE_LIMITS = {
+  chat_message: { max: 5, windowMs: 10000 },       // 5 chat/GIF messages per 10s
+  play_turn: { max: 10, windowMs: 5000 },           // 10 moves per 5s
+  declare: { max: 5, windowMs: 5000 },
+  create_room: { max: 5, windowMs: 60000 },
+  create_solo_room: { max: 5, windowMs: 60000 },
+  join_room: { max: 10, windowMs: 60000 },
+};
+const rateBuckets = new Map(); // socket.id -> { [eventName]: number[] recent timestamps }
+
+function isRateLimited(socket, eventName) {
+  const limit = RATE_LIMITS[eventName];
+  if (!limit) return false;
+  const now = Date.now();
+  let bucket = rateBuckets.get(socket.id);
+  if (!bucket) { bucket = {}; rateBuckets.set(socket.id, bucket); }
+  let hits = bucket[eventName];
+  if (!hits) { hits = []; bucket[eventName] = hits; }
+  while (hits.length && now - hits[0] > limit.windowMs) hits.shift(); // drop expired hits
+  if (hits.length >= limit.max) return true;
+  hits.push(now);
+  return false;
+}
+
 function makeRoomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I confusion
   let code;
@@ -426,6 +460,7 @@ function handleTurnTimeout(room) {
 io.on('connection', (socket) => {
   socket.on('create_room', ({ name, firebaseUid }, ack) => {
     try {
+      if (isRateLimited(socket, 'create_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const code = makeRoomCode();
       const playerId = makePlayerId();
@@ -462,6 +497,7 @@ io.on('connection', (socket) => {
   // only special handling is how quickly they act (see scheduleTurnTimer).
   socket.on('create_solo_room', ({ name, botCount, firebaseUid }, ack) => {
     try {
+      if (isRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const n = Math.max(1, Math.min(MAX_BOTS, Math.round(Number(botCount)) || 3));
       const code = makeRoomCode();
@@ -503,6 +539,7 @@ io.on('connection', (socket) => {
 
   socket.on('join_room', ({ roomCode, name, firebaseUid }, ack) => {
     try {
+      if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
       const code = (roomCode || '').trim().toUpperCase();
       const room = rooms.get(code);
       if (!room) throw new Error('Room not found. Check the code.');
@@ -597,6 +634,7 @@ io.on('connection', (socket) => {
 
   socket.on('play_turn', ({ roomCode, cardIds }, ack) => {
     try {
+      if (isRateLimited(socket, 'play_turn')) throw new Error('Too many actions too quickly. Please slow down.');
       const room = rooms.get(roomCode);
       if (!room || !room.game) throw new Error('Game not active.');
       const entry = socketIndex.get(socket.id);
@@ -616,6 +654,7 @@ io.on('connection', (socket) => {
 
   socket.on('declare', ({ roomCode }, ack) => {
     try {
+      if (isRateLimited(socket, 'declare')) throw new Error('Too many actions too quickly. Please slow down.');
       const room = rooms.get(roomCode);
       if (!room || !room.game) throw new Error('Game not active.');
       const entry = socketIndex.get(socket.id);
@@ -732,6 +771,7 @@ io.on('connection', (socket) => {
 
   socket.on('chat_message', ({ roomCode, type, text, gifUrl }, ack) => {
     try {
+      if (isRateLimited(socket, 'chat_message')) throw new Error('You are sending messages too quickly. Please slow down.');
       const room = rooms.get(roomCode);
       if (!room) throw new Error('Room not found.');
       const entry = socketIndex.get(socket.id);
@@ -769,6 +809,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    rateBuckets.delete(socket.id); // this socket is gone -- no point keeping its rate-limit history around
     const entry = socketIndex.get(socket.id);
     if (!entry) return;
     socketIndex.delete(socket.id);
