@@ -26,6 +26,16 @@
     console.warn('[Firebase] LCAuth not found -- check that firebase-init.js loaded before app.js.');
   }
 
+  // Current Firebase uid (if any), sent along with create/join so the server
+  // can link a room seat to a real account and later record stats against
+  // it. Safe to call anytime -- returns null before sign-in has finished,
+  // in which case that player's games just won't have stats saved (same as
+  // any guest who never gets linked to an account).
+  function currentFirebaseUid() {
+    const user = window.LCAuth && window.LCAuth.getUser();
+    return user ? user.uid : null;
+  }
+
   let latestRoom = null;
   let latestGame = null;
   let selectedIds = new Set();
@@ -490,7 +500,7 @@
   document.getElementById('btn-create').onclick = () => {
     const name = document.getElementById('input-name').value.trim();
     if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
-    socket.emit('create_room', { name }, (res) => {
+    socket.emit('create_room', { name, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       saveSession(res.roomCode, res.playerId);
       loadChatHistory(res.chatHistory);
@@ -504,7 +514,7 @@
     const roomCode = document.getElementById('input-roomcode').value.trim().toUpperCase();
     if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
     if (!roomCode) return setLandingError('Enter room code (రూమ్ కోడ్ రాయండి)');
-    socket.emit('join_room', { roomCode, name }, (res) => {
+    socket.emit('join_room', { roomCode, name, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       saveSession(res.roomCode, res.playerId);
       loadChatHistory(res.chatHistory);
@@ -536,7 +546,7 @@
     const name = document.getElementById('input-name').value.trim();
     if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
-    socket.emit('create_solo_room', { name, botCount }, (res) => {
+    socket.emit('create_solo_room', { name, botCount, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       saveSession(res.roomCode, res.playerId);
       loadChatHistory(res.chatHistory);
