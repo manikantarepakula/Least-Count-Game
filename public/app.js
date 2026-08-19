@@ -9,6 +9,12 @@
   let myPlayerId = session ? session.playerId : null;
   let myRoomCode = session ? session.roomCode : null;
 
+  // Players this device has chosen to mute -- local only, resets on reload,
+  // never sent to the server. Hides both their chat panel messages and their
+  // seat speech-bubbles for the rest of this session.
+  const mutedPlayerIds = new Set();
+  function isMuted(playerId) { return mutedPlayerIds.has(playerId); }
+
   // ---------------- Firebase account status (wiring check only) ----------------
   // No UI or game behavior changes yet -- this just confirms firebase-init.js
   // loaded and Firebase Auth is connected, logged to the console so it's easy
@@ -1429,6 +1435,7 @@
     if (emptyEl) emptyEl.remove();
     const div = document.createElement('div');
     div.className = 'chat-msg' + (msg.playerId === myPlayerId ? ' me' : '');
+    div.dataset.playerId = msg.playerId || '';
     if (msg.type === 'gif' && msg.gifUrl) {
       div.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}:</span>`;
       const img = document.createElement('img');
@@ -1439,6 +1446,43 @@
     } else {
       div.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}:</span> <span class="chat-text">${escapeHtml(msg.text)}</span>`;
     }
+
+    // Report / mute -- only ever shown on someone else's messages, never
+    // your own, and never on system-ish messages without a real playerId.
+    if (msg.playerId && msg.playerId !== myPlayerId) {
+      const actions = document.createElement('span');
+      actions.className = 'chat-msg-actions';
+
+      const reportBtn = document.createElement('button');
+      reportBtn.type = 'button';
+      reportBtn.className = 'chat-action-btn';
+      reportBtn.title = 'Report this message';
+      reportBtn.textContent = '🚩';
+      reportBtn.onclick = () => {
+        reportBtn.disabled = true;
+        socket.emit('report_player', {
+          roomCode: myRoomCode,
+          reportedPlayerId: msg.playerId,
+          reportedName: msg.name,
+          messageType: msg.type,
+          messageText: msg.type === 'gif' ? '[GIF]' : (msg.text || ''),
+        }, (res) => {
+          reportBtn.textContent = res && res.ok ? '✅' : '⚠️';
+        });
+      };
+
+      const muteBtn = document.createElement('button');
+      muteBtn.type = 'button';
+      muteBtn.className = 'chat-action-btn';
+      muteBtn.title = `Mute ${msg.name}`;
+      muteBtn.textContent = '🔇';
+      muteBtn.onclick = () => mutePlayer(msg.playerId, msg.name);
+
+      actions.appendChild(reportBtn);
+      actions.appendChild(muteBtn);
+      div.appendChild(actions);
+    }
+
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
 
@@ -1449,14 +1493,26 @@
     }
   }
 
+  // Mutes a player for the rest of this session (this device only -- never
+  // sent to the server, so nobody else is affected). Also clears anything of
+  // theirs already sitting in the chat panel, not just future messages.
+  function mutePlayer(playerId, name) {
+    if (!playerId || mutedPlayerIds.has(playerId)) return;
+    mutedPlayerIds.add(playerId);
+    document.querySelectorAll('#chat-messages .chat-msg').forEach((el) => {
+      if (el.dataset.playerId === playerId) el.remove();
+    });
+  }
+
   function loadChatHistory(history) {
     const container = document.getElementById('chat-messages');
     container.innerHTML = '';
-    if (!history || history.length === 0) {
+    const visible = (history || []).filter((m) => !isMuted(m.playerId));
+    if (visible.length === 0) {
       container.innerHTML = '<div class="chat-empty">No messages yet (ఇంకా మెసేజ్‌లు లేవు)</div>';
       return;
     }
-    history.forEach((m) => appendChatMessage(m, { silent: true }));
+    visible.forEach((m) => appendChatMessage(m, { silent: true }));
   }
 
   document.getElementById('chat-fab').onclick = () => {
@@ -1484,6 +1540,7 @@
     if (e.key === 'Enter') sendChat();
   });
   socket.on('chat_message', (msg) => {
+    if (isMuted(msg.playerId)) return; // muted -- skip both the panel message and the seat bubble
     appendChatMessage(msg);
     // Speech bubble at the sender's seat, in addition to the panel above --
     // only meaningful once seats actually exist (mid-game), not lobby chat.
