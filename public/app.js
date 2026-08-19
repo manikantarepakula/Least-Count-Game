@@ -21,6 +21,7 @@
       } else {
         console.log('[Firebase] no user yet, signing in...');
       }
+      updateSigninUI(user);
     });
   } else {
     console.warn('[Firebase] LCAuth not found -- check that firebase-init.js loaded before app.js.');
@@ -34,6 +35,44 @@
   function currentFirebaseUid() {
     const user = window.LCAuth && window.LCAuth.getUser();
     return user ? user.uid : null;
+  }
+
+  // ---------------- optional Google sign-in (non-blocking) ----------------
+  // Small status line + button on the landing screen only. A guest can keep
+  // playing without ever touching this -- it's purely an upgrade path so
+  // their stats can follow them to another device later, via the same
+  // linkWithPopup() flow in firebase-init.js that preserves their uid.
+  const googleSigninBtn = document.getElementById('btn-google-signin');
+  const signinStatusEl = document.getElementById('signin-status');
+
+  function updateSigninUI(user) {
+    if (!googleSigninBtn || !signinStatusEl) return;
+    if (user && !user.isAnonymous) {
+      const label = user.displayName || user.email || 'Google account';
+      signinStatusEl.textContent = `Signed in as ${label}`;
+      googleSigninBtn.classList.add('hidden');
+    } else {
+      signinStatusEl.textContent = 'Playing as Guest';
+      googleSigninBtn.classList.remove('hidden');
+    }
+  }
+
+  if (googleSigninBtn) {
+    googleSigninBtn.onclick = async () => {
+      googleSigninBtn.disabled = true;
+      googleSigninBtn.textContent = 'Signing in...';
+      try {
+        await window.LCAuth.signInWithGoogle();
+      } catch (e) {
+        // Most common cases: the user closed the Google popup, or the
+        // browser blocked it -- neither is a real error worth alarming
+        // anyone over, just let them try again.
+        console.warn('[Firebase] Google sign-in did not complete:', e.message);
+      } finally {
+        googleSigninBtn.disabled = false;
+        googleSigninBtn.textContent = 'Sign in with Google';
+      }
+    };
   }
 
   let latestRoom = null;

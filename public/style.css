@@ -131,6 +131,18 @@ select:focus { border-color: #1e5631; }
 
 .rules-btn { margin-top: 14px; font-size: 13px; padding: 9px; }
 
+/* Small, non-blocking sign-in row at the top of the landing form -- lets a
+   guest optionally upgrade to a real Google account (keeping their existing
+   stats via the linkWithPopup path in firebase-init.js) without forcing a
+   choice before they can just start playing. */
+.signin-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 16px; padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.signin-status { color: #9fd8b8; font-size: 12px; }
+.signin-row button.tiny { margin: 0; white-space: nowrap; }
+
 .rules-panel { max-width: 480px; width: 92vw; text-align: left; }
 .rules-panel h2 { text-align: center; }
 .rules-body { max-height: 60vh; overflow-y: auto; padding-right: 4px; margin-bottom: 14px; }
