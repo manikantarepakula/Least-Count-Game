@@ -9,6 +9,23 @@
   let myPlayerId = session ? session.playerId : null;
   let myRoomCode = session ? session.roomCode : null;
 
+  // ---------------- Firebase account status (wiring check only) ----------------
+  // No UI or game behavior changes yet -- this just confirms firebase-init.js
+  // loaded and Firebase Auth is connected, logged to the console so it's easy
+  // to verify. A real "Sign in with Google" button and Firestore-backed
+  // stats/purchases come in a later step.
+  if (window.LCAuth) {
+    window.LCAuth.onUserChange((user) => {
+      if (user) {
+        console.log(`[Firebase] signed in as ${user.uid}${user.isAnonymous ? ' (anonymous/guest)' : ' (Google account)'}`);
+      } else {
+        console.log('[Firebase] no user yet, signing in...');
+      }
+    });
+  } else {
+    console.warn('[Firebase] LCAuth not found -- check that firebase-init.js loaded before app.js.');
+  }
+
   let latestRoom = null;
   let latestGame = null;
   let selectedIds = new Set();
