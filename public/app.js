@@ -276,13 +276,9 @@
     document.removeEventListener('click', initAudioOnce);
   }, { once: true });
 
-  const soundBtn = document.getElementById('btn-sound-toggle');
-  soundBtn.textContent = Sound.isMuted() ? '🔇' : '🔊';
-  soundBtn.onclick = () => {
-    const next = !Sound.isMuted();
-    Sound.setMuted(next);
-    soundBtn.textContent = next ? '🔇' : '🔊';
-  };
+  // Sound toggle button was removed from the game screen's top bar by
+  // request; Sound.isMuted()/setMuted() are still available if a toggle is
+  // reintroduced elsewhere later.
 
   // ---------------- screen management ----------------
   function showScreen(id) {
@@ -325,7 +321,6 @@
     // cards to instead of an abstract side panel.
     const dealOrderIds = (data.players || []).map((p) => p.playerId);
     renderOvalTable(null, dealOrderIds);
-    document.getElementById('turn-info').textContent = 'Dealing cards... (పంచుతున్నారు)';
     document.getElementById('open-card-slot').innerHTML = '';
     document.getElementById('joker-indicator').innerHTML = '';
     document.getElementById('stock-count').textContent = '';
@@ -827,13 +822,8 @@
       document.getElementById('overlay-round-result').classList.add('hidden');
     }
 
-    document.getElementById('round-info').textContent = `Round ${game.roundNumber}`;
-
     const isMyTurn = game.currentPlayer === myPlayerId;
     const currentName = playerName(game.currentPlayer);
-    document.getElementById('turn-info').textContent = game.roundOver
-      ? 'Round Over'
-      : (isMyTurn ? 'Your turn! (మీ వంతు)' : `${currentName}'s turn... (వంతు)`);
 
     updateTurnTimerDisplay(game.roundOver ? null : game.turnDeadline);
     renderOvalTable(game);
@@ -1434,28 +1424,89 @@
     if (latestGame) triggerChatBubble(msg.playerId, msg);
   });
 
-  // ---------------- GIF picker (Giphy search) ----------------
-  // Giphy's public library does have good regional content (Telugu/Tollywood
-  // memes included), but it's easy to miss if you don't know the right
-  // search word to type. These are just a few one-tap shortcuts into terms
-  // that tend to surface it -- not a separate curated library, just a
-  // head start on the same search everyone already has.
-  const GIF_QUICK_SEARCHES = ['Telugu', 'Tollywood', 'Pawan Kalyan', 'Allu Arjun', 'Brahmanandam', 'NTR'];
+  // ---------------- GIF picker ----------------
+  // The quick-tap chips now load from a small self-hosted meme library
+  // (public/memes/<category>/*.gif, ~150 GIFs total) instead of hitting the
+  // live Giphy API on every tap -- instant, no rate limit, no network call.
+  // The free-text search box still falls back to live Giphy search for
+  // anything outside that curated set.
+  const GIF_CATEGORIES = [
+    { label: 'Telugu', key: 'telugu_memes_general' },
+    { label: 'Tollywood', key: 'tollywood_memes' },
+    { label: 'Brahmanandam', key: 'brahmanandam' },
+    { label: 'Ali', key: 'ali' },
+    { label: 'Venu Madhav', key: 'venu_madhav' },
+    { label: 'MS Narayana', key: 'ms_narayana' },
+    { label: 'Sunil', key: 'sunil' },
+    { label: 'Satya', key: 'satya_akkala' },
+  ];
+  let localMemeManifest = null; // { category: [filenames] }, fetched once
   let gifSearchTimer = null;
+
+  // Giphy's free key is capped at 100 calls/hour total, shared by everyone
+  // in every room on the whole app. Only the free-text search box below
+  // still uses it now, but results are still cached for a few minutes so
+  // retyping/retapping the same query doesn't fire a fresh call each time.
+  const GIF_CACHE_TTL_MS = 10 * 60 * 1000;
+  const gifResultsCache = new Map(); // normalized query -> { gifs, ts }
+
+  function loadLocalManifest() {
+    if (localMemeManifest) return Promise.resolve(localMemeManifest);
+    return fetch('/memes/manifest.json')
+      .then((r) => r.json())
+      .then((data) => { localMemeManifest = data; return data; })
+      .catch(() => { localMemeManifest = {}; return {}; });
+  }
 
   function renderGifSuggestions() {
     const wrap = document.getElementById('gif-suggestions');
     wrap.innerHTML = '';
-    GIF_QUICK_SEARCHES.forEach((term) => {
+    GIF_CATEGORIES.forEach((cat) => {
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'gif-suggestion-chip';
-      chip.textContent = term;
+      chip.textContent = cat.label;
       chip.onclick = () => {
-        document.getElementById('gif-search-input').value = term;
-        loadGifResults(term);
+        document.getElementById('gif-search-input').value = '';
+        loadLocalCategory(cat.key);
       };
       wrap.appendChild(chip);
+    });
+  }
+
+  function loadLocalCategory(categoryKey) {
+    const results = document.getElementById('gif-results');
+    results.innerHTML = '<div class="gif-results-hint">Loading...</div>';
+    loadLocalManifest().then((manifest) => {
+      const files = manifest[categoryKey] || [];
+      const gifs = files.map((f) => {
+        const url = `/memes/${categoryKey}/${f}`;
+        return { preview: url, full: url };
+      });
+      renderGifTiles(gifs);
+    });
+  }
+
+  // Default view when the picker opens: a shuffled sample pulled across
+  // every local category, so there's always something to browse without
+  // typing or tapping a chip first.
+  function loadLocalMixed() {
+    const results = document.getElementById('gif-results');
+    results.innerHTML = '<div class="gif-results-hint">Loading...</div>';
+    loadLocalManifest().then((manifest) => {
+      const all = [];
+      Object.keys(manifest).forEach((cat) => {
+        (manifest[cat] || []).forEach((f) => all.push({ cat, f }));
+      });
+      for (let i = all.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [all[i], all[j]] = [all[j], all[i]];
+      }
+      const gifs = all.slice(0, 24).map(({ cat, f }) => {
+        const url = `/memes/${cat}/${f}`;
+        return { preview: url, full: url };
+      });
+      renderGifTiles(gifs);
     });
   }
 
@@ -1465,7 +1516,7 @@
     input.value = '';
     input.focus();
     renderGifSuggestions();
-    loadGifResults('');
+    loadLocalMixed();
   }
   function closeGifPicker() {
     document.getElementById('gif-picker').classList.add('hidden');
@@ -1479,10 +1530,42 @@
   document.getElementById('gif-search-input').addEventListener('input', (e) => {
     const q = e.target.value;
     if (gifSearchTimer) clearTimeout(gifSearchTimer);
-    gifSearchTimer = setTimeout(() => loadGifResults(q), 350);
+    if (!q.trim()) {
+      // Empty box -- back to the local mixed view, no API call at all.
+      loadLocalMixed();
+      return;
+    }
+    // Waits a bit longer after you stop typing before actually searching --
+    // fewer wasted calls for someone still mid-word, at the cost of feeling
+    // very slightly less instant. This still hits live Giphy search since
+    // it's a custom typed query, not one of the local quick-tap categories.
+    gifSearchTimer = setTimeout(() => loadGifResults(q), 550);
   });
 
+  function renderGifTiles(gifs) {
+    const results = document.getElementById('gif-results');
+    results.innerHTML = '';
+    if (!gifs || gifs.length === 0) {
+      results.innerHTML = '<div class="gif-results-hint">No GIFs found</div>';
+      return;
+    }
+    gifs.forEach((g) => {
+      const img = document.createElement('img');
+      img.src = g.preview;
+      img.loading = 'lazy';
+      img.alt = 'GIF result';
+      img.onclick = () => sendGif(g.full);
+      results.appendChild(img);
+    });
+  }
+
   function loadGifResults(query) {
+    const key = (query || '').trim().toLowerCase();
+    const cached = gifResultsCache.get(key);
+    if (cached && Date.now() - cached.ts < GIF_CACHE_TTL_MS) {
+      renderGifTiles(cached.gifs);
+      return;
+    }
     const results = document.getElementById('gif-results');
     results.innerHTML = '<div class="gif-results-hint">Searching...</div>';
     fetch('/api/gif-search?q=' + encodeURIComponent(query || ''))
@@ -1492,19 +1575,8 @@
           results.innerHTML = `<div class="gif-results-hint">${escapeHtml(data.error || 'GIF search unavailable')}</div>`;
           return;
         }
-        results.innerHTML = '';
-        if (!data.gifs || data.gifs.length === 0) {
-          results.innerHTML = '<div class="gif-results-hint">No GIFs found</div>';
-          return;
-        }
-        data.gifs.forEach((g) => {
-          const img = document.createElement('img');
-          img.src = g.preview;
-          img.loading = 'lazy';
-          img.alt = 'GIF result';
-          img.onclick = () => sendGif(g.full);
-          results.appendChild(img);
-        });
+        gifResultsCache.set(key, { gifs: data.gifs || [], ts: Date.now() });
+        renderGifTiles(data.gifs);
       })
       .catch(() => {
         results.innerHTML = '<div class="gif-results-hint">GIF search failed</div>';
