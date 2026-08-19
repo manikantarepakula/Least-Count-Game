@@ -1,8 +1,10 @@
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const admin = require('firebase-admin');
 const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, DECLARE_MAX_VALUE } = require('./game/gameLogic');
 
 const app = express();
@@ -10,6 +12,54 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// --------------------------------------------------------------------------
+// Firebase Admin (server-side). This is the ONLY trusted place stats,
+// purchases, etc. should ever get written -- the server already knows who
+// really won a game, so writing from here (instead of the browser) means a
+// player can't just open dev tools and edit their own stats. Credentials
+// come from a Render "Secret File" (see the Environment tab), never from
+// anything committed to GitHub. Render makes secret files available both at
+// /etc/secrets/<filename> and in the app's own root directory, so this
+// checks both locations -- keeps things working the same in local dev too,
+// if the same file is ever placed in the project root there.
+// --------------------------------------------------------------------------
+const FIREBASE_SERVICE_ACCOUNT_FILENAME = 'least-count-ad558-firebase-adminsdk-fbsvc-8ab25ff468';
+const firebaseServiceAccountPath = [
+  path.join('/etc/secrets', FIREBASE_SERVICE_ACCOUNT_FILENAME),
+  path.join(__dirname, FIREBASE_SERVICE_ACCOUNT_FILENAME),
+].find((p) => {
+  try { return fs.existsSync(p); } catch { return false; }
+});
+
+let db = null;
+if (firebaseServiceAccountPath) {
+  try {
+    const serviceAccount = JSON.parse(fs.readFileSync(firebaseServiceAccountPath, 'utf8'));
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    db = admin.firestore();
+    console.log('[Firebase] Admin SDK initialized -- Firestore is connected.');
+  } catch (e) {
+    console.error('[Firebase] Failed to initialize Admin SDK:', e.message);
+  }
+} else {
+  console.warn('[Firebase] Service account file not found -- Firestore writes are disabled for now.');
+}
+
+// Temporary manual check only -- visit /api/firebase-test in a browser to
+// confirm the server can actually write to and read from Firestore. Safe to
+// remove once this is confirmed working and real stat-writing replaces it.
+app.get('/api/firebase-test', async (req, res) => {
+  if (!db) return res.status(500).json({ ok: false, error: 'Firestore is not initialized on the server -- check the secret file setup.' });
+  try {
+    const ref = db.collection('_diagnostics').doc('server-test');
+    await ref.set({ lastCheckedAt: new Date().toISOString(), ok: true });
+    const snap = await ref.get();
+    res.json({ ok: true, savedData: snap.data() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // --------------------------------------------------------------------------
 // GIF search (chat). Proxies to Giphy so the API key stays server-side only
