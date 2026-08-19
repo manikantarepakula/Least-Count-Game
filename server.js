@@ -62,6 +62,41 @@ app.get('/api/firebase-test', async (req, res) => {
 });
 
 // --------------------------------------------------------------------------
+// Real stat-tracking. Called from every place a game can actually end (a
+// correct declare, someone leaving down to 1 player, etc). Deliberately
+// server-driven, not client-driven -- the server is the only thing that
+// truly knows who won, so this is the one trustworthy place to record it.
+// Guarded by room.statsRecorded so a game's result is only ever written
+// once, no matter which of several code paths ends it. Bots and guests who
+// never actually got a Firebase account linked (firebaseUid missing) are
+// silently skipped -- there's nowhere to save their stats yet.
+// --------------------------------------------------------------------------
+async function recordGameResult(room) {
+  if (!db || !room.game || !room.game.gameOver || room.statsRecorded) return;
+  room.statsRecorded = true;
+  const winnerId = room.game.winner;
+  const writes = [];
+  for (const pid of room.game.playerIds) {
+    const player = room.players.get(pid);
+    if (!player || player.isBot || !player.firebaseUid) continue;
+    const ref = db.collection('users').doc(player.firebaseUid);
+    const isWinner = pid === winnerId;
+    writes.push(ref.set({
+      displayName: player.name,
+      gamesPlayed: admin.firestore.FieldValue.increment(1),
+      wins: admin.firestore.FieldValue.increment(isWinner ? 1 : 0),
+      lastPlayedAt: new Date().toISOString(),
+    }, { merge: true }));
+  }
+  try {
+    await Promise.all(writes);
+    console.log(`[Firebase] Recorded game result for room ${room.code} (${writes.length} player(s) with linked accounts).`);
+  } catch (e) {
+    console.error(`[Firebase] Failed to record game result for room ${room.code}:`, e.message);
+  }
+}
+
+// --------------------------------------------------------------------------
 // GIF search (chat). Proxies to Giphy so the API key stays server-side only
 // -- never shipped to the browser, where anyone could read it out of the
 // page source and drain the quota. Set GIPHY_API_KEY as an environment
@@ -243,7 +278,7 @@ function runBotTurn(room) {
 
   if (game.roundOver || game.gameOver) {
     clearTurnTimer(room);
-    if (game.gameOver) room.phase = 'game_over';
+    if (game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
   } else {
     scheduleTurnTimer(room);
   }
@@ -379,7 +414,7 @@ function handleTurnTimeout(room) {
 
   if (game.roundOver || game.gameOver) {
     clearTurnTimer(room);
-    if (game.gameOver) room.phase = 'game_over';
+    if (game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
   } else {
     scheduleTurnTimer(room);
   }
@@ -389,7 +424,7 @@ function handleTurnTimeout(room) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('create_room', ({ name }, ack) => {
+  socket.on('create_room', ({ name, firebaseUid }, ack) => {
     try {
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const code = makeRoomCode();
@@ -406,8 +441,9 @@ io.on('connection', (socket) => {
         dealTimer: null,
         revealTimer: null,
         chatHistory: [],
+        statsRecorded: false,
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: firebaseUid || null });
       room.order.push(playerId);
       rooms.set(code, room);
       socketIndex.set(socket.id, { roomCode: code, playerId });
@@ -424,7 +460,7 @@ io.on('connection', (socket) => {
   // countdown -> deal -> reveal sequence, exactly like a real multiplayer
   // game starting -- bots are just regular players to the game engine, the
   // only special handling is how quickly they act (see scheduleTurnTimer).
-  socket.on('create_solo_room', ({ name, botCount }, ack) => {
+  socket.on('create_solo_room', ({ name, botCount, firebaseUid }, ack) => {
     try {
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const n = Math.max(1, Math.min(MAX_BOTS, Math.round(Number(botCount)) || 3));
@@ -442,8 +478,9 @@ io.on('connection', (socket) => {
         dealTimer: null,
         revealTimer: null,
         chatHistory: [],
+        statsRecorded: false,
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: firebaseUid || null });
       room.order.push(playerId);
       for (let i = 1; i <= n; i++) {
         const botId = makePlayerId();
@@ -464,7 +501,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('join_room', ({ roomCode, name }, ack) => {
+  socket.on('join_room', ({ roomCode, name, firebaseUid }, ack) => {
     try {
       const code = (roomCode || '').trim().toUpperCase();
       const room = rooms.get(code);
@@ -474,7 +511,7 @@ io.on('connection', (socket) => {
 
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const playerId = makePlayerId();
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: firebaseUid || null });
       room.order.push(playerId);
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
@@ -549,6 +586,7 @@ io.on('connection', (socket) => {
       // broadcast -- which is what actually reveals hands/joker/open card to
       // clients -- until the countdown + live-deal animation has played out.
       room.game = new LeastCountGame(room.order.slice(), maxScore);
+      room.statsRecorded = false;
       room.game.startRound();
       beginStartSequence(room, roomCode);
       ack && ack({ ok: true });
@@ -584,7 +622,7 @@ io.on('connection', (socket) => {
       if (!entry) throw new Error('Not in a room.');
       room.game.declare(entry.playerId);
       clearTurnTimer(room);
-      if (room.game.gameOver) room.phase = 'game_over';
+      if (room.game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
       const newlyEliminated = (room.game.lastRoundResult && room.game.lastRoundResult.newlyEliminated) || [];
       for (const id of newlyEliminated) emitSeatReaction(roomCode, 'eliminated', id);
       broadcastRoom(room);
@@ -662,7 +700,7 @@ io.on('connection', (socket) => {
       // this person from leaving a finished game.
       if (room.game && !room.game.gameOver) {
         room.game.removePlayer(playerId);
-        if (room.game.gameOver) room.phase = 'game_over';
+        if (room.game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
       }
 
       room.players.delete(playerId);
