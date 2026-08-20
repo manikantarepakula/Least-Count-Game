@@ -208,6 +208,8 @@ const RATE_LIMITS = {
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
   report_player: { max: 5, windowMs: 60000 },
+  get_my_stats: { max: 10, windowMs: 30000 },
+  get_player_stats: { max: 20, windowMs: 30000 },
 };
 const rateBuckets = new Map(); // socket.id -> { [eventName]: number[] recent timestamps }
 
@@ -859,6 +861,60 @@ io.on('connection', (socket) => {
         console.warn('[Report] (Firestore not connected, logged here instead):', reportDoc);
       }
       ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // ---------------- player-facing stats (own + opponents') ----------------
+  // Both read the same `users` collection that recordGameResult() already
+  // writes to after every finished game -- no new data collection, just a
+  // read-only view onto stats that already exist. Neither handler ever sends
+  // a firebaseUid back to the browser, including the requester's own -- only
+  // the two numbers (gamesPlayed, wins), so tapping an opponent's seat can
+  // never hand you a stable account identifier for them, just their record.
+  socket.on('get_my_stats', ({ firebaseUid }, ack) => {
+    try {
+      if (isRateLimited(socket, 'get_my_stats')) throw new Error('Too many requests. Please wait a moment.');
+      if (!firebaseUid) throw new Error('Not signed in yet.');
+      if (!db) throw new Error('Stats are not available right now.');
+      db.collection('users').doc(firebaseUid.toString().slice(0, 100)).get()
+        .then((doc) => {
+          const data = doc.exists ? doc.data() : {};
+          ack && ack({ ok: true, stats: { gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0 } });
+        })
+        .catch((e) => {
+          console.error('[Firebase] Failed to read own stats:', e.message);
+          ack && ack({ ok: false, error: 'Could not load stats right now.' });
+        });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('get_player_stats', ({ roomCode, playerId }, ack) => {
+    try {
+      if (isRateLimited(socket, 'get_player_stats')) throw new Error('Too many requests. Please wait a moment.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const player = room.players.get(playerId);
+      if (!player) throw new Error('Player not found.');
+      // Bots and anyone who never got linked to a Firebase account (guest
+      // whose sign-in hadn't finished yet when they joined) simply have no
+      // record to show -- not an error, just null stats.
+      if (player.isBot || !player.firebaseUid || !db) {
+        ack && ack({ ok: true, stats: null });
+        return;
+      }
+      db.collection('users').doc(player.firebaseUid).get()
+        .then((doc) => {
+          const data = doc.exists ? doc.data() : {};
+          ack && ack({ ok: true, stats: { gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0 } });
+        })
+        .catch((e) => {
+          console.error('[Firebase] Failed to read player stats:', e.message);
+          ack && ack({ ok: false, error: 'Could not load stats right now.' });
+        });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
