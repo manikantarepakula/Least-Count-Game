@@ -19,6 +19,8 @@ import {
   signInWithPopup,
   GoogleAuthProvider,
   linkWithPopup,
+  linkWithCredential,
+  signInWithCredential,
   signOut as fbSignOut,
 } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js';
 import {
@@ -83,7 +85,43 @@ onAuthStateChanged(auth, (user) => {
 // KEEPING the same uid (and therefore the same future stats/purchases),
 // instead of starting a brand new identity -- important so nobody loses
 // progress just by signing in with Google after already playing as a guest.
+//
+// Two different code paths depending on where this is running:
+//  - Regular website (any browser): Firebase's own signInWithPopup/
+//    linkWithPopup opens a Google login popup right in the page. Unchanged.
+//  - Native Android app (wrapped with Capacitor): Google blocks OAuth popups
+//    inside embedded WebViews, so the popup above just hangs forever. Instead
+//    we use the @capacitor-firebase/authentication plugin, which drives the
+//    REAL native Google Sign-In screen (a system UI, not a WebView popup) and
+//    hands back a Google ID token. We then feed that token into the exact
+//    same Firebase JS SDK (signInWithCredential/linkWithCredential) used on
+//    the web, so both platforms end up in the same signed-in state and the
+//    same uid-preserving upgrade-from-guest logic applies either way.
 async function signInWithGoogle() {
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+
+  if (isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication) {
+    const FirebaseAuthentication = window.Capacitor.Plugins.FirebaseAuthentication;
+    const nativeResult = await FirebaseAuthentication.signInWithGoogle();
+    const idToken = nativeResult && nativeResult.credential && nativeResult.credential.idToken;
+    if (!idToken) throw new Error('Google sign-in did not return a token.');
+    const credential = GoogleAuthProvider.credential(idToken);
+    if (currentUser && currentUser.isAnonymous) {
+      try {
+        const result = await linkWithCredential(currentUser, credential);
+        return result.user;
+      } catch (err) {
+        if (err.code === 'auth/credential-already-in-use' || err.code === 'auth/email-already-in-use') {
+          const result = await signInWithCredential(auth, credential);
+          return result.user;
+        }
+        throw err;
+      }
+    }
+    const result = await signInWithCredential(auth, credential);
+    return result.user;
+  }
+
   const provider = new GoogleAuthProvider();
   if (currentUser && currentUser.isAnonymous) {
     try {
