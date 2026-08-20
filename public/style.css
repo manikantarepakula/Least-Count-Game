@@ -187,7 +187,9 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .player-list { list-style: none; padding: 0; }
 .player-list li {
   padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between;
+  position: relative; /* anchors the report/mute popover for tappable rows */
 }
+.player-list li.tappable { cursor: pointer; }
 .player-list .status { font-size: 11px; color: #999; }
 .player-list .host-tag { color: #1e5631; font-weight: 700; font-size: 11px; }
 
@@ -259,6 +261,39 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .seat.active .seat-chip { background: #d4a017; color: #1a1a1a; font-weight: 700; }
 .seat.eliminated { opacity: 0.4; }
 .seat.quit { opacity: 0.35; }
+.seat.tappable { cursor: pointer; }
+
+/* ---------------- player action popover (report / mute) ----------------
+   Replaces the old 🚩/🔇 icons that used to sit on every chat message.
+   Tap a player's seat (in-game) or their row in the lobby list (pre-game)
+   and this appears anchored to that element -- both .seat and .player-list
+   li are already a positioning context, so it's just appended as a child
+   and placed with plain CSS. Tap anywhere else on screen to dismiss it. */
+.player-action-popover {
+  position: absolute; z-index: 25;
+  background: #1a1a1a; border-radius: 10px; padding: 6px;
+  display: flex; flex-direction: column; gap: 4px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+  animation: popoverFadeIn 0.12s ease-out both;
+}
+@keyframes popoverFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.seat .player-action-popover {
+  bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 8px;
+}
+.seat .player-action-popover.align-left { left: 0; transform: none; }
+.seat .player-action-popover.align-right { left: auto; right: 0; transform: none; }
+.player-list li .player-action-popover {
+  top: 100%; right: 0; margin-top: 2px;
+}
+.player-action-btn {
+  background: #2a2a2a; color: #fff; border: none; border-radius: 6px;
+  padding: 8px 12px; font-size: 12.5px; white-space: nowrap; text-align: left;
+  cursor: pointer;
+}
+.player-action-btn:hover { background: #3a3a3a; }
+.player-action-btn:disabled { opacity: 0.6; cursor: default; }
+.player-action-btn.report { color: #ff8a80; }
+.player-action-btn.mute { color: #ffcb6b; }
 
 /* Your-turn visual pulse: only ever applied to your OWN seat, and only once
    you've gone quiet for 5+ seconds on your own turn (see app.js) -- a purely
@@ -664,12 +699,6 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .chat-msg.me .chat-name { color: #7d3cff; }
 .chat-msg .chat-text { word-break: break-word; }
 .chat-msg .chat-gif { display: block; max-width: 160px; border-radius: 8px; margin-top: 4px; }
-.chat-msg-actions { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
-.chat-action-btn {
-  background: none; border: none; padding: 0; margin: 0; width: auto;
-  font-size: 12px; line-height: 1; opacity: 0.55; cursor: pointer;
-}
-.chat-action-btn:disabled { opacity: 0.3; cursor: default; }
 .chat-empty { color: #999; font-size: 12px; text-align: center; margin-top: 20px; }
 .chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid #eee; }
 .chat-input-row input {

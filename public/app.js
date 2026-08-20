@@ -619,10 +619,24 @@
     list.innerHTML = '';
     room.players.forEach((p) => {
       const li = document.createElement('li');
+      li.dataset.playerId = p.playerId;
       const hostTag = p.playerId === room.hostPlayerId ? '<span class="host-tag">HOST</span>' : '';
       li.innerHTML = `<span>${escapeHtml(p.name)} ${hostTag}</span><span class="status">${p.connected ? 'online' : 'offline'}</span>`;
+      // Tap a player's row to report/mute them before the game even starts --
+      // same popover the seats use once play begins. Not wired for yourself
+      // or for bots (lobby rows are only ever real players anyway, but the
+      // guard is harmless).
+      if (p.playerId !== myPlayerId && !p.isBot) {
+        li.classList.add('tappable');
+        li.dataset.popoverAlign = 'align-right';
+        li.onclick = (e) => {
+          e.stopPropagation();
+          togglePlayerActionPopover(li, p.playerId, p.name, 'align-right');
+        };
+      }
       list.appendChild(li);
     });
+    reopenPlayerActionPopoverIfNeeded(list);
     const isHost = room.hostPlayerId === myPlayerId;
     const btn = document.getElementById('btn-start');
     btn.classList.toggle('hidden', !isHost);
@@ -730,6 +744,20 @@
       seatEl.style.left = left + '%';
       seatEl.style.top = top + '%';
 
+      // Tap a seat to report/mute that player -- never wired for yourself
+      // or for bots (nothing to report/mute there). Edge seats get an
+      // align class so the popover hugs the same edge it would otherwise
+      // spill past, same idea as the discard-history/GIF-bubble alignment.
+      if (!dealing && p.playerId !== myPlayerId && !p.isBot) {
+        seatEl.classList.add('tappable');
+        const alignClass = 'align-' + getSeatHAlign(seatEl);
+        seatEl.dataset.popoverAlign = alignClass;
+        seatEl.onclick = (e) => {
+          e.stopPropagation();
+          togglePlayerActionPopover(seatEl, p.playerId, p.name, alignClass);
+        };
+      }
+
       const count = game && game.handCounts ? game.handCounts[p.playerId] : (dealing ? 0 : undefined);
       const score = game && game.scores ? (game.scores[p.playerId] ?? 0) : 0;
 
@@ -830,6 +858,8 @@
 
       oval.appendChild(seatEl);
     });
+
+    reopenPlayerActionPopoverIfNeeded(oval);
   }
 
   socket.on('seat_reaction', ({ type, affectedPlayerId }) => {
@@ -1398,6 +1428,7 @@
       latestRoom = null;
       latestGame = null;
       window.__lastRoundResultShownFor = null;
+      closePlayerActionPopover();
       hideChatUI();
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
@@ -1447,41 +1478,9 @@
       div.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}:</span> <span class="chat-text">${escapeHtml(msg.text)}</span>`;
     }
 
-    // Report / mute -- only ever shown on someone else's messages, never
-    // your own, and never on system-ish messages without a real playerId.
-    if (msg.playerId && msg.playerId !== myPlayerId) {
-      const actions = document.createElement('span');
-      actions.className = 'chat-msg-actions';
-
-      const reportBtn = document.createElement('button');
-      reportBtn.type = 'button';
-      reportBtn.className = 'chat-action-btn';
-      reportBtn.title = 'Report this message';
-      reportBtn.textContent = '🚩';
-      reportBtn.onclick = () => {
-        reportBtn.disabled = true;
-        socket.emit('report_player', {
-          roomCode: myRoomCode,
-          reportedPlayerId: msg.playerId,
-          reportedName: msg.name,
-          messageType: msg.type,
-          messageText: msg.type === 'gif' ? '[GIF]' : (msg.text || ''),
-        }, (res) => {
-          reportBtn.textContent = res && res.ok ? '✅' : '⚠️';
-        });
-      };
-
-      const muteBtn = document.createElement('button');
-      muteBtn.type = 'button';
-      muteBtn.className = 'chat-action-btn';
-      muteBtn.title = `Mute ${msg.name}`;
-      muteBtn.textContent = '🔇';
-      muteBtn.onclick = () => mutePlayer(msg.playerId, msg.name);
-
-      actions.appendChild(reportBtn);
-      actions.appendChild(muteBtn);
-      div.appendChild(actions);
-    }
+    // Report/mute used to live here as icons on every message -- moved to a
+    // tap-on-their-seat/lobby-row popover instead (see the player action
+    // popover section below), so nothing gets attached per-message anymore.
 
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
@@ -1503,6 +1502,99 @@
       if (el.dataset.playerId === playerId) el.remove();
     });
   }
+
+  // Un-mutes a player -- their future chat messages and seat bubbles show up
+  // again. Whatever of theirs was already deleted from the chat panel while
+  // they were muted stays gone (same as it always has); only new messages
+  // come back.
+  function unmutePlayer(playerId) {
+    mutedPlayerIds.delete(playerId);
+  }
+
+  // ---------------- player action popover (report / mute) ----------------
+  // Replaces the old always-visible 🚩/🔇 icons that used to sit on every
+  // chat bubble. Now: tap a player's seat during the game, or their row in
+  // the lobby player list before the game starts, and a small popover with
+  // "Report" and "Mute/Unmute" appears anchored to that seat/row. Never
+  // shown for yourself or for bots. Only one popover open at a time, tracked
+  // by playerId rather than by DOM node -- seats and the lobby list get torn
+  // down and rebuilt from scratch on every render, so
+  // reopenPlayerActionPopoverIfNeeded() below re-attaches it to the freshly
+  // rebuilt element each time, otherwise it would silently vanish mid-tap
+  // during a live game (game_state arrives constantly).
+  let openPlayerActionForId = null;
+
+  function closePlayerActionPopover() {
+    document.querySelectorAll('.player-action-popover').forEach((el) => el.remove());
+    openPlayerActionForId = null;
+  }
+
+  function buildPlayerActionPopover(playerId, name, alignClass) {
+    const pop = document.createElement('div');
+    pop.className = 'player-action-popover' + (alignClass ? ' ' + alignClass : '');
+    pop.onclick = (e) => e.stopPropagation(); // don't let the outside-click closer catch this
+
+    const reportBtn = document.createElement('button');
+    reportBtn.type = 'button';
+    reportBtn.className = 'player-action-btn report';
+    reportBtn.textContent = `🚩 Report ${name}`;
+    reportBtn.onclick = () => {
+      reportBtn.disabled = true;
+      reportBtn.textContent = 'Reporting...';
+      socket.emit('report_player', {
+        roomCode: myRoomCode,
+        reportedPlayerId: playerId,
+        reportedName: name,
+        messageType: 'general',
+        messageText: '',
+      }, (res) => {
+        reportBtn.textContent = res && res.ok ? '✅ Reported' : '⚠️ Failed, try again';
+        setTimeout(closePlayerActionPopover, 900);
+      });
+    };
+
+    const muteBtn = document.createElement('button');
+    muteBtn.type = 'button';
+    muteBtn.className = 'player-action-btn mute';
+    const muted = isMuted(playerId);
+    muteBtn.textContent = muted ? `🔊 Unmute ${name}` : `🔇 Mute ${name}`;
+    muteBtn.onclick = () => {
+      if (isMuted(playerId)) unmutePlayer(playerId); else mutePlayer(playerId, name);
+      closePlayerActionPopover();
+    };
+
+    pop.appendChild(reportBtn);
+    pop.appendChild(muteBtn);
+    return pop;
+  }
+
+  // anchorEl must already be a positioning context (both .seat and the lobby
+  // <li> are) -- the popover is just appended as its child and placed with
+  // plain CSS, no JS measurement needed.
+  function showPlayerActionPopover(anchorEl, playerId, name, alignClass) {
+    closePlayerActionPopover();
+    if (!anchorEl) return;
+    openPlayerActionForId = playerId;
+    anchorEl.appendChild(buildPlayerActionPopover(playerId, name, alignClass));
+  }
+
+  function togglePlayerActionPopover(anchorEl, playerId, name, alignClass) {
+    if (openPlayerActionForId === playerId) { closePlayerActionPopover(); return; }
+    showPlayerActionPopover(anchorEl, playerId, name, alignClass);
+  }
+
+  // Called at the end of renderOvalTable()/renderLobby() -- if a popover was
+  // open for a player who's still on screen after the rebuild, put it right
+  // back instead of letting it silently disappear mid-decision.
+  function reopenPlayerActionPopoverIfNeeded(container) {
+    if (!openPlayerActionForId) return;
+    const anchorEl = container.querySelector(`[data-player-id="${CSS.escape(openPlayerActionForId)}"]`);
+    if (!anchorEl) { openPlayerActionForId = null; return; }
+    const alignClass = anchorEl.dataset.popoverAlign || '';
+    anchorEl.appendChild(buildPlayerActionPopover(openPlayerActionForId, playerName(openPlayerActionForId), alignClass));
+  }
+
+  document.addEventListener('click', () => closePlayerActionPopover());
 
   function loadChatHistory(history) {
     const container = document.getElementById('chat-messages');
