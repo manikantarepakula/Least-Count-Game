@@ -404,6 +404,14 @@
     // The game screen locks the page to one viewport (no drag/scroll needed);
     // other screens (lobby, overlays) are allowed to scroll normally.
     document.body.classList.toggle('game-active', id === 'screen-game');
+    // Banner ad (native Android app only -- see admob-init.js) shows on the
+    // landing/lobby screens, where there's room for it, and hides during
+    // actual gameplay, where every pixel of the single-viewport layout
+    // already matters.
+    if (window.LCAds) {
+      if (id === 'screen-game') window.LCAds.hideBanner();
+      else window.LCAds.showBanner();
+    }
   }
 
   // ---------------- game-start sequence ----------------
