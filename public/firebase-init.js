@@ -28,7 +28,7 @@ import {
   logEvent,
   isSupported as analyticsIsSupported,
 } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-analytics.js';
-
+ 
 const firebaseConfig = {
   apiKey: 'AIzaSyDY1DlnH5F3FZvU0Y0ePFdiw0nx7mhwvPE',
   authDomain: 'least-count-ad558.firebaseapp.com',
@@ -38,10 +38,10 @@ const firebaseConfig = {
   appId: '1:288085056604:web:335c242ed2bb5452cd5a99',
   measurementId: 'G-QNWDER2WET',
 };
-
+ 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-
+ 
 // ---------------- analytics (Google Analytics for Firebase, free/unlimited
 // up to 500 distinct event types) ----------------
 // analyticsIsSupported() rejects in a handful of environments (very old
@@ -55,7 +55,7 @@ analyticsIsSupported()
     if (supported) analytics = getAnalytics(app);
   })
   .catch((err) => console.warn('[Analytics] not supported in this browser:', err.message));
-
+ 
 function logAnalyticsEvent(name, params) {
   if (!analytics) return;
   try {
@@ -64,10 +64,10 @@ function logAnalyticsEvent(name, params) {
     console.warn('[Analytics] logEvent failed:', err.message);
   }
 }
-
+ 
 let currentUser = null;
 const listeners = [];
-
+ 
 onAuthStateChanged(auth, (user) => {
   currentUser = user;
   listeners.forEach((cb) => cb(user));
@@ -78,9 +78,16 @@ onAuthStateChanged(auth, (user) => {
     signInAnonymously(auth).catch((err) => {
       console.error('[Firebase] anonymous sign-in failed:', err.message);
     });
+    return;
+  }
+  // Keep RevenueCat's identity in sync with this same uid (safe no-op on
+  // the regular website, and safe even if revenuecat-init.js hasn't
+  // finished loading yet -- see the guard below).
+  if (window.LCPurchases) {
+    window.LCPurchases.identify(user.uid);
   }
 });
-
+ 
 // Upgrades the current anonymous session to a real Google account while
 // KEEPING the same uid (and therefore the same future stats/purchases),
 // instead of starting a brand new identity -- important so nobody loses
@@ -99,7 +106,7 @@ onAuthStateChanged(auth, (user) => {
 //    same uid-preserving upgrade-from-guest logic applies either way.
 async function signInWithGoogle() {
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-
+ 
   if (isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication) {
     const FirebaseAuthentication = window.Capacitor.Plugins.FirebaseAuthentication;
     const nativeResult = await FirebaseAuthentication.signInWithGoogle();
@@ -121,7 +128,7 @@ async function signInWithGoogle() {
     const result = await signInWithCredential(auth, credential);
     return result.user;
   }
-
+ 
   const provider = new GoogleAuthProvider();
   if (currentUser && currentUser.isAnonymous) {
     try {
@@ -142,13 +149,13 @@ async function signInWithGoogle() {
   const result = await signInWithPopup(auth, provider);
   return result.user;
 }
-
+ 
 async function signInWithGoogleAndLog() {
   const user = await signInWithGoogle();
   logAnalyticsEvent('google_sign_in');
   return user;
 }
-
+ 
 // Small global surface for app.js (a plain, non-module script) to use --
 // keeps all the Firebase-specific import/setup detail contained to this file.
 window.LCAuth = {
@@ -160,7 +167,7 @@ window.LCAuth = {
   signInWithGoogle: signInWithGoogleAndLog,
   signOut: () => fbSignOut(auth),
 };
-
+ 
 // Separate namespace (rather than piling onto LCAuth) since this covers
 // gameplay events too, not just auth -- app.js calls window.LCAnalytics.log(...)
 // at the handful of funnel moments that matter (room created/joined, solo
