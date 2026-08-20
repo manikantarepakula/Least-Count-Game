@@ -90,6 +90,42 @@
     };
   }
 
+  // ---------------- "My Stats" (own games played / wins) ----------------
+  // Reads the same `users` Firestore doc recordGameResult() already writes
+  // to -- this button just exposes it. Works for guests too (they already
+  // accumulate stats on this device once anonymous sign-in finishes), not
+  // only Google-linked accounts.
+  const myStatsBtn = document.getElementById('btn-my-stats');
+  if (myStatsBtn) {
+    myStatsBtn.onclick = () => {
+      const body = document.getElementById('my-stats-body');
+      body.innerHTML = '<p class="hint">Loading...</p>';
+      document.getElementById('overlay-my-stats').classList.remove('hidden');
+      const uid = currentFirebaseUid();
+      if (!uid) {
+        body.innerHTML = '<p class="hint">Still signing you in -- try again in a second.</p>';
+        return;
+      }
+      socket.emit('get_my_stats', { firebaseUid: uid }, (res) => {
+        if (!res || !res.ok) {
+          body.innerHTML = `<p class="error">${escapeHtml((res && res.error) || 'Could not load stats.')}</p>`;
+          return;
+        }
+        const { gamesPlayed, wins } = res.stats;
+        const winRate = gamesPlayed > 0 ? Math.round((wins / gamesPlayed) * 100) : 0;
+        body.innerHTML =
+          `<div class="result-row"><span>Games played</span><span>${gamesPlayed}</span></div>` +
+          `<div class="result-row"><span>Wins</span><span>${wins}</span></div>` +
+          `<div class="result-row"><span>Win rate</span><span>${winRate}%</span></div>` +
+          (gamesPlayed === 0 ? '<p class="hint">Play a game to start building your stats!</p>' : '');
+      });
+    };
+  }
+  const closeMyStatsBtn = document.getElementById('btn-close-my-stats');
+  if (closeMyStatsBtn) {
+    closeMyStatsBtn.onclick = () => document.getElementById('overlay-my-stats').classList.add('hidden');
+  }
+
   let latestRoom = null;
   let latestGame = null;
   let selectedIds = new Set();
@@ -1446,6 +1482,7 @@
       latestGame = null;
       window.__lastRoundResultShownFor = null;
       closePlayerActionPopover();
+      playerStatsCache.clear();
       hideChatUI();
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
@@ -1546,10 +1583,45 @@
     openPlayerActionForId = null;
   }
 
+  // playerId -> { gamesPlayed, wins } | null (fetched, no linked account) --
+  // cached per session so re-fetching stats every time this popover gets
+  // torn down and rebuilt (see reopenPlayerActionPopoverIfNeeded) doesn't
+  // spam the server on every game_state update while it happens to be open.
+  const playerStatsCache = new Map();
+
+  function applyStatsToEl(el, stats) {
+    if (!stats) { el.classList.add('hidden'); el.textContent = ''; return; }
+    el.classList.remove('hidden');
+    el.textContent = `🎮 ${stats.gamesPlayed} games · 🏆 ${stats.wins} wins`;
+  }
+
+  function loadStatsIntoPopover(playerId, statsEl) {
+    if (playerStatsCache.has(playerId)) {
+      applyStatsToEl(statsEl, playerStatsCache.get(playerId));
+      return;
+    }
+    statsEl.textContent = 'Loading stats...';
+    socket.emit('get_player_stats', { roomCode: myRoomCode, playerId }, (res) => {
+      const stats = (res && res.ok) ? res.stats : null;
+      playerStatsCache.set(playerId, stats);
+      // The popover may have already been closed or swapped to a different
+      // player by the time this ack comes back -- only touch the DOM if
+      // it's still showing for THIS player.
+      if (openPlayerActionForId !== playerId) return;
+      const liveEl = document.querySelector('.player-action-popover .player-action-stats');
+      if (liveEl) applyStatsToEl(liveEl, stats);
+    });
+  }
+
   function buildPlayerActionPopover(playerId, name, alignClass) {
     const pop = document.createElement('div');
     pop.className = 'player-action-popover' + (alignClass ? ' ' + alignClass : '');
     pop.onclick = (e) => e.stopPropagation(); // don't let the outside-click closer catch this
+
+    const statsEl = document.createElement('div');
+    statsEl.className = 'player-action-stats';
+    pop.appendChild(statsEl);
+    loadStatsIntoPopover(playerId, statsEl);
 
     const reportBtn = document.createElement('button');
     reportBtn.type = 'button';

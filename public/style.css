@@ -140,8 +140,12 @@ select:focus { border-color: #1e5631; }
   gap: 10px; margin-bottom: 16px; padding-bottom: 12px;
   border-bottom: 1px solid rgba(255,255,255,0.12);
 }
-.signin-status { color: #9fd8b8; font-size: 12px; }
+.signin-status { color: #9fd8b8; font-size: 12px; flex: 1; }
 .signin-row button.tiny { margin: 0; white-space: nowrap; }
+.icon-btn {
+  width: auto; flex: 0 0 auto; padding: 6px 9px; font-size: 15px; line-height: 1;
+  background: rgba(255,255,255,0.12); color: #fff; border-radius: 8px;
+}
 
 .rules-panel { max-width: 480px; width: 92vw; text-align: left; }
 .rules-panel h2 { text-align: center; }
@@ -294,6 +298,10 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .player-action-btn:disabled { opacity: 0.6; cursor: default; }
 .player-action-btn.report { color: #ff8a80; }
 .player-action-btn.mute { color: #ffcb6b; }
+.player-action-stats {
+  color: #cfead9; font-size: 11.5px; padding: 4px 8px 6px; white-space: nowrap;
+  border-bottom: 1px solid rgba(255,255,255,0.12); margin-bottom: 2px;
+}
 
 /* Your-turn visual pulse: only ever applied to your OWN seat, and only once
    you've gone quiet for 5+ seconds on your own turn (see app.js) -- a purely
