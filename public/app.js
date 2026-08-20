@@ -43,6 +43,15 @@
     return user ? user.uid : null;
   }
 
+  // Thin, always-safe wrapper around window.LCAnalytics.log -- so every call
+  // site below doesn't need its own existence check. A handful of funnel
+  // events only (room created/joined, solo game started, game completed,
+  // player reported) -- not every click, just enough to see whether the app
+  // is actually growing and where people drop off.
+  function logAnalytics(name, params) {
+    if (window.LCAnalytics) window.LCAnalytics.log(name, params);
+  }
+
   // ---------------- optional Google sign-in (non-blocking) ----------------
   // Small status line + button on the landing screen only. A guest can keep
   // playing without ever touching this -- it's purely an upgrade path so
@@ -547,6 +556,7 @@
     if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
     socket.emit('create_room', { name, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
+      logAnalytics('room_created');
       saveSession(res.roomCode, res.playerId);
       loadChatHistory(res.chatHistory);
       showChatFab();
@@ -561,6 +571,7 @@
     if (!roomCode) return setLandingError('Enter room code (రూమ్ కోడ్ రాయండి)');
     socket.emit('join_room', { roomCode, name, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
+      logAnalytics('room_joined');
       saveSession(res.roomCode, res.playerId);
       loadChatHistory(res.chatHistory);
       showChatFab();
@@ -593,6 +604,7 @@
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
     socket.emit('create_solo_room', { name, botCount, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
+      logAnalytics('solo_game_started', { bot_count: botCount });
       saveSession(res.roomCode, res.playerId);
       loadChatHistory(res.chatHistory);
       showChatFab();
@@ -1373,6 +1385,11 @@
   }
 
   function showGameOver(game) {
+    logAnalytics('game_completed', {
+      player_count: latestRoom ? latestRoom.players.length : undefined,
+      round_count: game.roundNumber,
+      you_won: game.winner === myPlayerId,
+    });
     document.getElementById('overlay-round-result').classList.add('hidden');
     document.getElementById('gameover-title').textContent = `🏆 ${playerName(game.winner)} wins!`;
     const body = document.getElementById('gameover-body');
@@ -1549,6 +1566,7 @@
         messageText: '',
       }, (res) => {
         reportBtn.textContent = res && res.ok ? '✅ Reported' : '⚠️ Failed, try again';
+        if (res && res.ok) logAnalytics('player_reported');
         setTimeout(closePlayerActionPopover, 900);
       });
     };
