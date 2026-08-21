@@ -1,9 +1,21 @@
 // --------------------------------------------------------------------------
-// RevenueCat (in-app purchases) -- native Android app only, same pattern as
-// admob-init.js: window.Capacitor only exists inside the wrapped app, so
-// every function here is a safe no-op on the regular website (nobody can
-// buy anything from a browser tab, which is intentional -- purchases only
-// make sense inside the real Play Store-connected app).
+// RevenueCat (in-app purchases) -- native Android app only, same idea as
+// admob-init.js: purchases only make sense inside the real Play
+// Store-connected app, so every function here is a safe no-op on the
+// regular website.
+//
+// UNLIKE admob-init.js, this file has to be loaded as a real ES module
+// (type="module", like firebase-init.js) that imports the actual published
+// @revenuecat/purchases-capacitor package, instead of reaching straight
+// into window.Capacitor.Plugins.Purchases. Reason: Capacitor only wires a
+// plugin's native bridge calls into real, spec-compliant Promises once
+// that plugin's OWN JS package code runs and calls registerPlugin() --
+// window.Capacitor.Plugins.Purchases exists even before that (a raw,
+// unwrapped stub), which is what caused "Purchases.configure(...).then is
+// not a function" when this file first tried the direct-access shortcut
+// (that shortcut happens to still work for simpler plugins like AdMob, but
+// isn't reliable in general). Importing the real package from a CDN -- the
+// exact same code RevenueCat's own docs use -- avoids that entirely.
 //
 // Purchases are tied to the SAME identity as everything else in this app
 // (the Firebase uid already used for stats/chat moderation) via
@@ -12,29 +24,26 @@
 // is still theirs after they later upgrade to a real Google account --
 // same uid, same RevenueCat customer record.
 // --------------------------------------------------------------------------
-(function () {
-  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+import { Purchases } from 'https://cdn.jsdelivr.net/npm/@revenuecat/purchases-capacitor@13.4.1/+esm';
 
-  if (!isNative || !window.Capacitor.Plugins || !window.Capacitor.Plugins.Purchases) {
-    window.LCPurchases = {
-      isReady: () => false,
-      identify: async () => {},
-      getOfferings: async () => null,
-      purchasePackage: async () => {
-        throw new Error('Purchases are only available in the app.');
-      },
-      isEntitled: async () => false,
-      restorePurchases: async () => null,
-    };
-    return;
-  }
+const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
-  const Purchases = window.Capacitor.Plugins.Purchases;
-
+if (!isNative) {
+  window.LCPurchases = {
+    isReady: () => false,
+    identify: async () => {},
+    getOfferings: async () => null,
+    purchasePackage: async () => {
+      throw new Error('Purchases are only available in the app.');
+    },
+    isEntitled: async () => false,
+    restorePurchases: async () => null,
+  };
+} else {
   // RevenueCat public SDK key. Safe to keep in client code, same as the
-  // Firebase config values above -- it only lets this app start purchases
-  // and read its own product catalog, not move money or read other users'
-  // data.
+  // Firebase config values in firebase-init.js -- it only lets this app
+  // start purchases and read its own product catalog, not move money or
+  // read other users' data.
   //
   // TEMPORARY: pointed at the "Test Store" app right now so we can build
   // and verify the whole purchase flow (button -> purchase -> entitlement
@@ -136,4 +145,4 @@
   // a buy button -- identify() re-points it at the real Firebase uid a
   // moment later without losing anything already in progress.
   ensureConfigured();
-})();
+}
