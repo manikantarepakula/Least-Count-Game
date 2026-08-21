@@ -31,11 +31,20 @@
 
   const Purchases = window.Capacitor.Plugins.Purchases;
 
-  // RevenueCat public SDK key for the "Least count (Play Store)" app.
-  // Safe to keep in client code, same as the Firebase config values above
-  // -- it only lets this app start purchases and read its own product
-  // catalog, not move money or read other users' data.
-  const RC_API_KEY = 'goog_RYLEYrOOSMJLfryTHvdoOslNOUN';
+  // RevenueCat public SDK key. Safe to keep in client code, same as the
+  // Firebase config values above -- it only lets this app start purchases
+  // and read its own product catalog, not move money or read other users'
+  // data.
+  //
+  // TEMPORARY: pointed at the "Test Store" app right now so we can build
+  // and verify the whole purchase flow (button -> purchase -> entitlement
+  // unlocked) using fake, no-money purchases, since the real Google Play
+  // merchant account is still pending Google's video KYC step.
+  //
+  // Real Play Store key (swap back in once the merchant account clears and
+  // the real "remove_ads" product exists in Play Console):
+  //   goog_RYLEYrOOSMJLfryTHvdoOslNOUN
+  const RC_API_KEY = 'test_CpMMMcHaECSeYdgRjrrTxPWUpTh';
 
   let configured = false;
   let configuring = null;
