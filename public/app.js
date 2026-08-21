@@ -126,6 +126,67 @@
     closeMyStatsBtn.onclick = () => document.getElementById('overlay-my-stats').classList.add('hidden');
   }
 
+  // ---------------- Remove Ads purchase (native app only) ----------------
+  // Reads whatever RevenueCat offering/package is configured server-side
+  // (see revenuecat-init.js) rather than hardcoding a product id here, so
+  // swapping from the Test Store to the real Play Store product later needs
+  // no changes on this side -- just the API key.
+  let adsRemoved = false;
+  const removeAdsBtn = document.getElementById('btn-remove-ads');
+
+  async function refreshRemoveAdsUI() {
+    if (!removeAdsBtn || !window.LCPurchases || !window.LCPurchases.isReady()) return;
+    try {
+      adsRemoved = await window.LCPurchases.isEntitled('remove_ads');
+    } catch (e) {
+      adsRemoved = false;
+    }
+    if (adsRemoved) {
+      removeAdsBtn.classList.add('hidden');
+      if (window.LCAds) window.LCAds.hideBanner();
+    } else {
+      removeAdsBtn.classList.remove('hidden');
+    }
+  }
+
+  if (removeAdsBtn) {
+    removeAdsBtn.onclick = async () => {
+      if (!window.LCPurchases) return;
+      removeAdsBtn.disabled = true;
+      const originalLabel = removeAdsBtn.textContent;
+      removeAdsBtn.textContent = 'Please wait...';
+      try {
+        const offering = await window.LCPurchases.getOfferings();
+        const pkg = offering && offering.availablePackages && offering.availablePackages[0];
+        if (!pkg) {
+          alert('Remove Ads is not available right now -- please try again later.');
+          return;
+        }
+        await window.LCPurchases.purchasePackage(pkg);
+        adsRemoved = true;
+        removeAdsBtn.classList.add('hidden');
+        if (window.LCAds) window.LCAds.hideBanner();
+        if (window.LCAnalytics) window.LCAnalytics.log('ads_removed_purchase');
+        alert('Ads removed -- thanks for supporting Least Count!');
+      } catch (e) {
+        // Most common case: the player backed out of the purchase sheet --
+        // not a real error worth alarming anyone over.
+        if (!(e && (e.userCancelled || e.code === 'PURCHASE_CANCELLED'))) {
+          console.warn('[RevenueCat] purchase failed:', e && e.message);
+          alert('Something went wrong with the purchase. Please try again.');
+        }
+      } finally {
+        removeAdsBtn.disabled = false;
+        removeAdsBtn.textContent = originalLabel;
+      }
+    };
+  }
+
+  // Give RevenueCat a moment to finish configuring/identifying before we
+  // ask it anything -- safe no-op on the regular website either way, since
+  // LCPurchases.isReady() just stays false there.
+  setTimeout(refreshRemoveAdsUI, 1500);
+
   let latestRoom = null;
   let latestGame = null;
   let selectedIds = new Set();
@@ -409,7 +470,10 @@
     // actual gameplay, where every pixel of the single-viewport layout
     // already matters.
     if (window.LCAds) {
-      if (id === 'screen-game') window.LCAds.hideBanner();
+      // adsRemoved (see the Remove Ads purchase block above) overrides
+      // everything else -- once someone's paid to remove ads, the banner
+      // should never come back, on any screen.
+      if (id === 'screen-game' || adsRemoved) window.LCAds.hideBanner();
       else window.LCAds.showBanner();
     }
   }
