@@ -137,6 +137,13 @@
   async function refreshRemoveAdsUI() {
     if (!removeAdsBtn || !window.LCPurchases || !window.LCPurchases.isReady()) return;
     try {
+      // Make sure RevenueCat has finished switching identity to the current
+      // Firebase uid before checking entitlements -- identify() is kicked
+      // off separately (fire-and-forget) from firebase-init.js, so without
+      // this the check can race ahead and run against the wrong (default
+      // anonymous) customer right after a fresh app launch, wrongly
+      // reporting "not purchased" even though it was.
+      if (window.LCPurchases.whenIdentified) await window.LCPurchases.whenIdentified();
       adsRemoved = await window.LCPurchases.isEntitled('remove_ads');
     } catch (e) {
       adsRemoved = false;
@@ -182,9 +189,16 @@
     };
   }
 
-  // Give RevenueCat a moment to finish configuring/identifying before we
-  // ask it anything -- safe no-op on the regular website either way, since
+  // Re-check whenever the signed-in Firebase user becomes known (guest or
+  // Google) -- this is what actually triggers RevenueCat's identify() call
+  // over in firebase-init.js, so checking here (rather than after a fixed
+  // delay) means we're never checking entitlements before that's fired.
+  // Safe no-op on the regular website either way, since
   // LCPurchases.isReady() just stays false there.
+  if (window.LCAuth) {
+    window.LCAuth.onUserChange(() => refreshRemoveAdsUI());
+  }
+  // Fallback in case LCAuth's user was already known before this file ran.
   setTimeout(refreshRemoveAdsUI, 1500);
 
   let latestRoom = null;
