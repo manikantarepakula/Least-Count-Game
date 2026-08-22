@@ -58,6 +58,17 @@ if (!isNative) {
   let configured = false;
   let configuring = null;
 
+  // The freshest CustomerInfo we've actually SEEN, from whichever call last
+  // returned one (logIn/restorePurchases/purchasePackage/getCustomerInfo).
+  // isEntitled() below prefers this over making its own fresh
+  // getCustomerInfo() call -- confirmed via live device testing that a
+  // standalone getCustomerInfo() call can report an entitlement as inactive
+  // even seconds after restorePurchases() (in the very same session, same
+  // identity) had just returned that exact entitlement as active. Rather
+  // than trust whichever call happens to run last, we trust the most
+  // authoritative one we've actually observed succeed.
+  let latestCustomerInfo = null;
+
   function ensureConfigured() {
     if (configured) return Promise.resolve();
     if (!configuring) {
@@ -90,7 +101,8 @@ if (!isNative) {
       await ensureConfigured();
       if (!firebaseUid) return;
       try {
-        await Purchases.logIn({ appUserID: firebaseUid });
+        const { customerInfo } = await Purchases.logIn({ appUserID: firebaseUid });
+        latestCustomerInfo = customerInfo;
       } catch (e) {
         console.warn('[RevenueCat] logIn failed:', e && e.message);
       }
@@ -105,7 +117,8 @@ if (!isNative) {
       // instead of requiring a manual "Restore Purchases" tap. Safe/cheap
       // no-op if there's nothing new to reconcile.
       try {
-        await Purchases.restorePurchases();
+        const { customerInfo } = await Purchases.restorePurchases();
+        latestCustomerInfo = customerInfo; // most authoritative -- see isEntitled()
       } catch (e) {
         console.warn('[RevenueCat] restorePurchases failed:', e && e.message);
       }
@@ -135,17 +148,35 @@ if (!isNative) {
   async function purchasePackage(pkg) {
     await ensureConfigured();
     const result = await Purchases.purchasePackage({ aPackage: pkg });
+    latestCustomerInfo = result.customerInfo;
     return result.customerInfo;
   }
 
+  function hasEntitlement(customerInfo, entitlementId) {
+    return !!(customerInfo && customerInfo.entitlements && customerInfo.entitlements.active
+      && customerInfo.entitlements.active[entitlementId]);
+  }
+
   // Checks whether the signed-in identity currently holds a given
-  // "entitlement" (e.g. 'remove_ads') -- the thing app.js actually gates
+  // "entitlement" (e.g. 'removeads') -- the thing app.js actually gates
   // features on, rather than checking specific product ids directly.
+  //
+  // Prefers latestCustomerInfo (set by logIn/restorePurchases/
+  // purchasePackage -- see the note by its declaration above) over making a
+  // fresh getCustomerInfo() call, since a fresh call was observed on-device
+  // to sometimes disagree with -- specifically, under-report relative to --
+  // what restorePurchases() had just confirmed moments earlier in the same
+  // session. Only falls back to a live getCustomerInfo() call if we don't
+  // have anything cached yet at all.
   async function isEntitled(entitlementId) {
     await ensureConfigured();
+    if (latestCustomerInfo) {
+      return hasEntitlement(latestCustomerInfo, entitlementId);
+    }
     try {
       const { customerInfo } = await Purchases.getCustomerInfo();
-      return !!(customerInfo.entitlements.active && customerInfo.entitlements.active[entitlementId]);
+      latestCustomerInfo = customerInfo;
+      return hasEntitlement(customerInfo, entitlementId);
     } catch (e) {
       console.warn('[RevenueCat] getCustomerInfo failed:', e && e.message);
       return false;
@@ -158,6 +189,7 @@ if (!isNative) {
   async function restorePurchases() {
     await ensureConfigured();
     const result = await Purchases.restorePurchases();
+    latestCustomerInfo = result.customerInfo;
     return result.customerInfo;
   }
 
