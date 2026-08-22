@@ -161,24 +161,27 @@ if (!isNative) {
   // "entitlement" (e.g. 'removeads') -- the thing app.js actually gates
   // features on, rather than checking specific product ids directly.
   //
-  // Prefers latestCustomerInfo (set by logIn/restorePurchases/
-  // purchasePackage -- see the note by its declaration above) over making a
-  // fresh getCustomerInfo() call, since a fresh call was observed on-device
-  // to sometimes disagree with -- specifically, under-report relative to --
-  // what restorePurchases() had just confirmed moments earlier in the same
-  // session. Only falls back to a live getCustomerInfo() call if we don't
-  // have anything cached yet at all.
+  // Deliberately calls Purchases.restorePurchases() directly here, every
+  // single time, rather than Purchases.getCustomerInfo() or a cached
+  // snapshot. Confirmed via repeated live device testing that
+  // getCustomerInfo() (and even the customerInfo returned directly from
+  // logIn()) can under-report an entitlement that IS genuinely active on
+  // this account, while restorePurchases() is the one call that has
+  // consistently, reliably surfaced the correct state every time it's been
+  // tried. It's a slightly heavier call, but this only runs a couple of
+  // times per app launch (not in a hot loop), so that's a fine trade for
+  // actually being correct.
   async function isEntitled(entitlementId) {
     await ensureConfigured();
-    if (latestCustomerInfo) {
-      return hasEntitlement(latestCustomerInfo, entitlementId);
-    }
     try {
-      const { customerInfo } = await Purchases.getCustomerInfo();
+      const { customerInfo } = await Purchases.restorePurchases();
       latestCustomerInfo = customerInfo;
       return hasEntitlement(customerInfo, entitlementId);
     } catch (e) {
-      console.warn('[RevenueCat] getCustomerInfo failed:', e && e.message);
+      console.warn('[RevenueCat] restorePurchases (via isEntitled) failed:', e && e.message);
+      // If the network call itself failed, fall back to whatever we last
+      // knew rather than flatly assuming "not purchased".
+      if (latestCustomerInfo) return hasEntitlement(latestCustomerInfo, entitlementId);
       return false;
     }
   }
