@@ -1,3 +1,4 @@
+```js
 // --------------------------------------------------------------------------
 // RevenueCat (in-app purchases) -- native Android app only, same idea as
 // admob-init.js: purchases only make sense inside the real Play
@@ -77,14 +78,29 @@ if (!isNative) {
   // right away for anonymous guests) -- switches RevenueCat's identity from
   // its own auto-generated anonymous id over to OUR uid, so it lines up
   // with stats/chat moderation instead of being a second, unrelated id.
+  //
+  // Tracked in `identifyPromise` (rather than just awaited by the caller)
+  // because firebase-init.js calls this fire-and-forget from
+  // onAuthStateChanged. Anything that needs to check entitlements --
+  // app.js's refreshRemoveAdsUI() -- should await whenIdentified() first,
+  // otherwise it can run against the wrong (not-yet-logged-in) customer on
+  // a fresh app launch and wrongly report "not purchased".
+  let identifyPromise = null;
   async function identify(firebaseUid) {
-    await ensureConfigured();
-    if (!firebaseUid) return;
-    try {
-      await Purchases.logIn({ appUserID: firebaseUid });
-    } catch (e) {
-      console.warn('[RevenueCat] logIn failed:', e && e.message);
-    }
+    identifyPromise = (async () => {
+      await ensureConfigured();
+      if (!firebaseUid) return;
+      try {
+        await Purchases.logIn({ appUserID: firebaseUid });
+      } catch (e) {
+        console.warn('[RevenueCat] logIn failed:', e && e.message);
+      }
+    })();
+    return identifyPromise;
+  }
+
+  function whenIdentified() {
+    return identifyPromise || Promise.resolve();
   }
 
   // Returns the current default "offering" (a named bundle of purchasable
@@ -134,6 +150,7 @@ if (!isNative) {
   window.LCPurchases = {
     isReady: () => configured,
     identify,
+    whenIdentified,
     getOfferings,
     purchasePackage,
     isEntitled,
@@ -146,3 +163,4 @@ if (!isNative) {
   // moment later without losing anything already in progress.
   ensureConfigured();
 }
+```
