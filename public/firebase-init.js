@@ -193,4 +193,3 @@ window.LCAuth = {
 window.LCAnalytics = {
   log: logAnalyticsEvent,
 };
-```
