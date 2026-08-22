@@ -1,3 +1,4 @@
+
 // --------------------------------------------------------------------------
 // RevenueCat (in-app purchases) -- native Android app only, same idea as
 // admob-init.js: purchases only make sense inside the real Play
@@ -25,9 +26,9 @@
 // same uid, same RevenueCat customer record.
 // --------------------------------------------------------------------------
 import { Purchases } from 'https://cdn.jsdelivr.net/npm/@revenuecat/purchases-capacitor@13.4.1/+esm';
-
+ 
 const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-
+ 
 if (!isNative) {
   window.LCPurchases = {
     isReady: () => false,
@@ -54,10 +55,10 @@ if (!isNative) {
   // the real "remove_ads" product exists in Play Console):
   //   goog_RYLEYrOOSMJLfryTHvdoOslNOUN
   const RC_API_KEY = 'test_CpMMMcHaECSeYdgRjrrTxPWUpTh';
-
+ 
   let configured = false;
   let configuring = null;
-
+ 
   function ensureConfigured() {
     if (configured) return Promise.resolve();
     if (!configuring) {
@@ -72,7 +73,7 @@ if (!isNative) {
     }
     return configuring;
   }
-
+ 
   // Called from firebase-init.js once the Firebase uid is known (including
   // right away for anonymous guests) -- switches RevenueCat's identity from
   // its own auto-generated anonymous id over to OUR uid, so it lines up
@@ -97,11 +98,11 @@ if (!isNative) {
     })();
     return identifyPromise;
   }
-
+ 
   function whenIdentified() {
     return identifyPromise || Promise.resolve();
   }
-
+ 
   // Returns the current default "offering" (a named bundle of purchasable
   // packages configured in the RevenueCat dashboard), or null if nothing is
   // set up yet / offline. app.js reads .availablePackages off this to build
@@ -116,13 +117,13 @@ if (!isNative) {
       return null;
     }
   }
-
+ 
   async function purchasePackage(pkg) {
     await ensureConfigured();
     const result = await Purchases.purchasePackage({ aPackage: pkg });
     return result.customerInfo;
   }
-
+ 
   // Checks whether the signed-in identity currently holds a given
   // "entitlement" (e.g. 'remove_ads') -- the thing app.js actually gates
   // features on, rather than checking specific product ids directly.
@@ -136,7 +137,7 @@ if (!isNative) {
       return false;
     }
   }
-
+ 
   // Lets someone who reinstalls the app, or switches devices, get back
   // whatever they already paid for without paying again -- required by
   // both Google and Apple store policy for non-consumable purchases.
@@ -145,7 +146,7 @@ if (!isNative) {
     const result = await Purchases.restorePurchases();
     return result.customerInfo;
   }
-
+ 
   window.LCPurchases = {
     isReady: () => configured,
     identify,
@@ -155,11 +156,11 @@ if (!isNative) {
     isEntitled,
     restorePurchases,
   };
-
+ 
   // Start configuring immediately (with a temporary anonymous id) so
   // getOfferings()/purchasePackage() are ready to go as soon as anyone taps
   // a buy button -- identify() re-points it at the real Firebase uid a
   // moment later without losing anything already in progress.
   ensureConfigured();
 }
-```
+ 
