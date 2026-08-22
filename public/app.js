@@ -144,10 +144,13 @@
       // anonymous) customer right after a fresh app launch, wrongly
       // reporting "not purchased" even though it was.
       if (window.LCPurchases.whenIdentified) await window.LCPurchases.whenIdentified();
-      // NOTE: the entitlement's actual identifier in the RevenueCat dashboard
-      // is "removeads" (no underscore) -- this string must match that exactly,
-      // it's not just a descriptive label.
-      adsRemoved = await window.LCPurchases.isEntitled('removeads');
+      // NOTE: confirmed directly from a live customerInfo response --
+      // entitlements.active is keyed by "remove ads" (with a literal space
+      // in it, since that's exactly how the entitlement's identifier was
+      // typed when it was created in the RevenueCat dashboard). Not
+      // "removeads" (that's actually the PRODUCT's identifier, a separate
+      // resource) and not "remove_ads" -- this exact string, space and all.
+      adsRemoved = await window.LCPurchases.isEntitled('remove ads');
     } catch (e) {
       adsRemoved = false;
     }
