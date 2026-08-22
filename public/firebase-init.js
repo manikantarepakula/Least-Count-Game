@@ -87,8 +87,8 @@ const listeners = [];
 
 onAuthStateChanged(auth, (user) => {
   currentUser = user;
-  listeners.forEach((cb) => cb(user));
   if (!user) {
+    listeners.forEach((cb) => cb(user));
     // No session yet (first visit, or just signed out) -- sign in
     // anonymously right away so every player always has a stable identity,
     // even before they ever choose to link a real Google account.
@@ -100,9 +100,22 @@ onAuthStateChanged(auth, (user) => {
   // Keep RevenueCat's identity in sync with this same uid (safe no-op on
   // the regular website, and safe even if revenuecat-init.js hasn't
   // finished loading yet -- see the guard below).
+  //
+  // CRITICAL: this must run BEFORE listeners.forEach() below. app.js's
+  // refreshRemoveAdsUI() (registered via onUserChange) awaits
+  // window.LCPurchases.whenIdentified() to make sure identify() has
+  // finished before checking entitlements -- but whenIdentified() only
+  // actually waits on anything once identify() has been CALLED at least
+  // once (it sets the promise it returns). If listeners fired first, the
+  // entitlement check would run with nothing to wait on yet, check
+  // prematurely, cache a false "not entitled" result, and nothing would
+  // ever re-check it afterward -- confirmed as the actual cause of ads /
+  // the Remove Ads button staying visible even after a real, successful,
+  // already-restored purchase.
   if (window.LCPurchases) {
     window.LCPurchases.identify(user.uid);
   }
+  listeners.forEach((cb) => cb(user));
 });
 
 // Upgrades the current anonymous session to a real Google account while
