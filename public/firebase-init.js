@@ -1,4 +1,3 @@
-```js
 // --------------------------------------------------------------------------
 // Firebase client setup. Handles ONLY sign-in identity for now (anonymous
 // guest sessions, upgradeable to a real Google account) -- Firestore
