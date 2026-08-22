@@ -1,4 +1,3 @@
-```js
 // --------------------------------------------------------------------------
 // RevenueCat (in-app purchases) -- native Android app only, same idea as
 // admob-init.js: purchases only make sense inside the real Play
