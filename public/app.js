@@ -228,9 +228,21 @@
       const opt = document.createElement('option');
       opt.value = String(v);
       opt.textContent = String(v);
-      if (v === currentValue) opt.selected = true;
+      // Intentionally NOT relying on opt.selected here (see selectEl.value
+      // below) -- setting .selected on an <option> before it's attached to
+      // the DOM is unreliable on some Android WebView versions: it can
+      // silently fail to stick, leaving the <select> defaulting to its
+      // FIRST option instead. That's the actual root cause behind "I set
+      // max score to 250, and next round it's back to 200" -- 200 just
+      // happened to be the first surviving option in the filtered list at
+      // whatever score range the board was in when the bug was reported,
+      // not a value anyone actually chose or that the server reverted to.
       selectEl.appendChild(opt);
     });
+    // Authoritative, WebView-safe way to set the selection: assign the
+    // <select>'s own .value AFTER every <option> is already attached. This
+    // works consistently everywhere, unlike per-option .selected above.
+    selectEl.value = String(currentValue);
   }
 
   // ---------------- your-turn visual pulse ----------------
@@ -679,8 +691,24 @@
   }
 
   // ---------------- landing screen ----------------
-  document.getElementById('btn-create').onclick = () => {
+  // Remembers whatever name was last typed/submitted, so returning players
+  // never have to retype it -- previously the name field was blank on every
+  // fresh visit even though it visually looked like it should be "sticky".
+  // Pre-filled once on load below; every submit path re-saves in case they
+  // changed it since.
+  const NAME_STORAGE_KEY = 'leastcount_name';
+  (function prefillSavedName() {
+    const saved = localStorage.getItem(NAME_STORAGE_KEY);
+    if (saved) document.getElementById('input-name').value = saved;
+  })();
+  function getPlayerName() {
     const name = document.getElementById('input-name').value.trim();
+    if (name) localStorage.setItem(NAME_STORAGE_KEY, name);
+    return name;
+  }
+
+  document.getElementById('btn-create').onclick = () => {
+    const name = getPlayerName();
     if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
     socket.emit('create_room', { name, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
@@ -693,12 +721,23 @@
   };
 
   document.getElementById('btn-join').onclick = () => {
-    const name = document.getElementById('input-name').value.trim();
+    const name = getPlayerName();
     const roomCode = document.getElementById('input-roomcode').value.trim().toUpperCase();
     if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
     if (!roomCode) return setLandingError('Enter room code (రూమ్ కోడ్ రాయండి)');
     socket.emit('join_room', { roomCode, name, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
+      // room.phase was already 'playing' when the request landed -- the
+      // server held it as a pending request instead of joining outright
+      // (see server.js' join_room). Show the waiting screen and stop here;
+      // join_admitted/join_denied (registered further down) take it from here.
+      if (res.pending) {
+        pendingJoinRoomCode = res.roomCode;
+        pendingJoinPlayerId = res.playerId;
+        document.getElementById('waiting-host-name').textContent = 'the host';
+        showScreen('screen-waiting-host');
+        return;
+      }
       logAnalytics('room_joined');
       saveSession(res.roomCode, res.playerId);
       loadChatHistory(res.chatHistory);
@@ -706,6 +745,68 @@
       showScreen('screen-lobby');
     });
   };
+
+  // Only set while genuinely waiting on a mid-game join request -- distinct
+  // from myRoomCode/myPlayerId (which mean "I'm an actual member of this
+  // room"), since a pending requester isn't in room.players at all yet.
+  let pendingJoinRoomCode = null;
+  let pendingJoinPlayerId = null;
+
+  document.getElementById('btn-cancel-waiting').onclick = () => {
+    if (pendingJoinRoomCode && pendingJoinPlayerId) {
+      socket.emit('cancel_join_request', { roomCode: pendingJoinRoomCode, playerId: pendingJoinPlayerId });
+    }
+    pendingJoinRoomCode = null;
+    pendingJoinPlayerId = null;
+    showScreen('screen-landing');
+  };
+
+  socket.on('join_admitted', ({ roomCode, playerId }) => {
+    pendingJoinRoomCode = null;
+    pendingJoinPlayerId = null;
+    logAnalytics('room_joined_midgame');
+    saveSession(roomCode, playerId);
+    // The very next room_update/game_state (already on its way as a side
+    // effect of the host's admit on the server) will render the real
+    // lobby/game screen; showing the game screen now avoids a flash of the
+    // waiting screen lingering for the instant before that arrives.
+    showScreen('screen-game');
+  });
+
+  socket.on('join_denied', ({ reason }) => {
+    pendingJoinRoomCode = null;
+    pendingJoinPlayerId = null;
+    showScreen('screen-landing');
+    const messages = {
+      declined: 'The host declined your request to join.',
+      timeout: 'The host didn’t respond in time. Try again.',
+      disconnected: '',
+      cancelled: '',
+    };
+    setLandingError(messages[reason] || 'Could not join that room.');
+  });
+
+  // ---------------- mid-game join approval: host-side banner ----------------
+  function renderJoinRequestsBanner(pending) {
+    const banner = document.getElementById('join-requests-banner');
+    banner.classList.toggle('hidden', !pending || pending.length === 0);
+    banner.innerHTML = '';
+    (pending || []).forEach((req) => {
+      const row = document.createElement('div');
+      row.className = 'join-request-row';
+      row.innerHTML = `<span class="jr-text"><b>${escapeHtml(req.name)}</b> wants to join</span>
+        <button class="jr-admit" type="button">Admit</button>
+        <button class="jr-ignore" type="button">Ignore</button>`;
+      row.querySelector('.jr-admit').onclick = () => {
+        socket.emit('admit_join_request', { roomCode: myRoomCode, playerId: req.playerId });
+      };
+      row.querySelector('.jr-ignore').onclick = () => {
+        socket.emit('ignore_join_request', { roomCode: myRoomCode, playerId: req.playerId });
+      };
+      banner.appendChild(row);
+    });
+  }
+  socket.on('join_requests', ({ pending }) => renderJoinRequestsBanner(pending));
 
   function setLandingError(msg) { document.getElementById('landing-error').textContent = msg || ''; }
 
@@ -722,12 +823,8 @@
     }
   })();
 
-  document.getElementById('btn-solo-toggle').onclick = () => {
-    document.getElementById('solo-panel').classList.toggle('hidden');
-  };
-
   document.getElementById('btn-solo-start').onclick = () => {
-    const name = document.getElementById('input-name').value.trim();
+    const name = getPlayerName();
     if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
     socket.emit('create_solo_room', { name, botCount, firebaseUid: currentFirebaseUid() }, (res) => {
@@ -742,6 +839,81 @@
       showScreen('screen-game');
     });
   };
+
+  // Footer nav on the landing screen re-triggers existing, already-wired
+  // functionality rather than duplicating it -- Home is just the landing
+  // screen itself (no-op, it's already there), Stats reuses the existing
+  // stats button, Rules reuses the existing rules overlay (normally only
+  // reachable from the lobby, now also reachable before ever joining a room).
+  document.getElementById('btn-footer-stats').onclick = () => document.getElementById('btn-my-stats').click();
+  document.getElementById('btn-footer-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
+
+  // ---------------- "Play Online" matchmaking ----------------
+  const QUEUE_PROMPT_DELAY_MS = 40000; // ~40s of real waiting before offering wait/bots/cancel
+  let queueTimeoutTimer = null;
+  let queuedPlayerCount = null;
+
+  function clearQueueTimeoutTimer() {
+    if (queueTimeoutTimer) { clearTimeout(queueTimeoutTimer); queueTimeoutTimer = null; }
+  }
+
+  document.getElementById('btn-play-online').onclick = () => {
+    const name = getPlayerName();
+    if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
+    const playerCount = Number(document.getElementById('input-online-playercount').value) || 3;
+    socket.emit('queue_join', { playerCount, name, firebaseUid: currentFirebaseUid() }, (res) => {
+      if (!res.ok) return setLandingError(res.error);
+      queuedPlayerCount = playerCount;
+      document.getElementById('queue-waiting-count').textContent = String(playerCount);
+      document.getElementById('queue-waiting-choice').classList.add('hidden');
+      document.getElementById('queue-waiting-hint').classList.remove('hidden');
+      showScreen('screen-queue-waiting');
+      clearQueueTimeoutTimer();
+      queueTimeoutTimer = setTimeout(() => {
+        document.getElementById('queue-waiting-hint').classList.add('hidden');
+        document.getElementById('queue-waiting-choice').classList.remove('hidden');
+      }, QUEUE_PROMPT_DELAY_MS);
+    });
+  };
+
+  document.getElementById('btn-queue-keep-waiting').onclick = () => {
+    // Just re-hides the choice and gives it another full waiting window --
+    // still queued the whole time, this only affects when the prompt reappears.
+    document.getElementById('queue-waiting-choice').classList.add('hidden');
+    document.getElementById('queue-waiting-hint').classList.remove('hidden');
+    clearQueueTimeoutTimer();
+    queueTimeoutTimer = setTimeout(() => {
+      document.getElementById('queue-waiting-hint').classList.add('hidden');
+      document.getElementById('queue-waiting-choice').classList.remove('hidden');
+    }, QUEUE_PROMPT_DELAY_MS);
+  };
+
+  document.getElementById('btn-queue-fill-bots').onclick = () => {
+    clearQueueTimeoutTimer();
+    socket.emit('queue_fill_bots', {}, (res) => {
+      if (!res.ok) { setLandingError(res.error); showScreen('screen-landing'); }
+      // On success, queue_matched (below) takes it from here.
+    });
+  };
+
+  document.getElementById('btn-queue-cancel').onclick = () => {
+    clearQueueTimeoutTimer();
+    socket.emit('queue_cancel', {});
+    queuedPlayerCount = null;
+    showScreen('screen-landing');
+  };
+
+  socket.on('queue_matched', ({ roomCode, playerId, chatHistory }) => {
+    clearQueueTimeoutTimer();
+    queuedPlayerCount = null;
+    logAnalytics('online_match_found');
+    saveSession(roomCode, playerId);
+    loadChatHistory(chatHistory);
+    showChatFab();
+    // Same as solo play -- matched rooms skip the lobby and go straight into
+    // the countdown/deal sequence, already in progress by the time this arrives.
+    showScreen('screen-game');
+  });
 
   // ---------------- lobby screen ----------------
   populateMaxScoreSelect(document.getElementById('input-maxscore'), DEFAULT_MAX_SCORE, 0);
@@ -1186,10 +1358,22 @@
 
   function setGameError(msg) { document.getElementById('game-error').textContent = msg || ''; }
 
+  // Remembers every name this client has ever seen for a playerId, and never
+  // forgets one -- unlike latestRoom.players, which the server actively
+  // DELETES someone from the moment they call leave_room (see server.js'
+  // leave_room handler: room.players.delete(playerId)). That's correct for
+  // the live lobby/seat list, but it broke the final "Ashok wins!" scoreboard:
+  // an eliminated player who then left showed up with their real score but
+  // the name "?" instead, because by the time that screen rendered,
+  // latestRoom no longer had any record of them at all. This cache is
+  // populated every time a name is seen (see the room_update handler below)
+  // and is the fallback playerName() reaches for once the live lookup misses.
+  const knownPlayerNames = {};
+
   function playerName(playerId) {
-    if (!latestRoom) return '?';
-    const p = latestRoom.players.find((x) => x.playerId === playerId);
-    return p ? p.name : '?';
+    const p = latestRoom && latestRoom.players.find((x) => x.playerId === playerId);
+    if (p) return p.name;
+    return knownPlayerNames[playerId] || '?';
   }
 
   // ---------------- round result / scores / game over overlays ----------------
@@ -2134,6 +2318,9 @@
 
   socket.on('room_update', (room) => {
     latestRoom = room;
+    // Top up the name cache with everyone currently in the room -- see
+    // knownPlayerNames/playerName() above. Cheap no-op for names already known.
+    room.players.forEach((p) => { knownPlayerNames[p.playerId] = p.name; });
     if (room.phase === 'lobby') {
       latestGame = null;
       window.__lastRoundResultShownFor = null;
