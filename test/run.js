@@ -19,7 +19,10 @@ function check(name, fn) {
 
 // 1. Deck count table
 check('deck count table matches spec', () => {
-  const table = { 2: 3, 3: 3, 4: 3, 5: 4, 6: 4, 7: 5, 8: 5, 9: 6, 10: 6 };
+  // Tuned down (see gameLogic.js' DECK_COUNT_TABLE comment) -- fewer decks
+  // per player count means fewer duplicate copies of any given card in the
+  // shoe, while still comfortably covering a full round's worth of dealing.
+  const table = { 2: 2, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4, 9: 5, 10: 5 };
   for (const [p, d] of Object.entries(table)) {
     assert.strictEqual(deckCountForPlayers(Number(p)), d, `players=${p}`);
   }
@@ -648,6 +651,53 @@ check('getPublicState exposes the current eliminationScore', () => {
 
 check('MAX_SCORE_OPTIONS is the expected fixed dropdown list', () => {
   assert.deepStrictEqual(MAX_SCORE_OPTIONS, [100, 150, 200, 250, 300, 350, 400, 450, 500]);
+});
+
+// 12b. addPlayer() -- mid-game join approval (host admits someone, they
+// enter starting next round at the current highest score on the board).
+check('addPlayer enters a new player at the current highest score, not 0', () => {
+  const g = new LeastCountGame(['A', 'B', 'C'], 250);
+  g.startRound();
+  g.roundOver = true; // simulate "between rounds" -- addPlayer requires this
+  g.scores = { A: 20, B: 90, C: 55 };
+  g.addPlayer('D');
+  assert.strictEqual(g.scores.D, 90);
+  assert.ok(g.playerIds.includes('D'));
+});
+
+check('addPlayer refuses to add mid-round', () => {
+  const g = new LeastCountGame(['A', 'B'], 250);
+  g.startRound(); // roundOver is now false
+  assert.throws(() => g.addPlayer('C'), /mid-round/);
+});
+
+check('addPlayer refuses once the game is already over', () => {
+  const g = new LeastCountGame(['A', 'B'], 250);
+  g.startRound();
+  g.roundOver = true;
+  g.gameOver = true;
+  assert.throws(() => g.addPlayer('C'), /already over/);
+});
+
+check('addPlayer is a safe no-op if that player is already in the game', () => {
+  const g = new LeastCountGame(['A', 'B'], 250);
+  g.startRound();
+  g.roundOver = true;
+  g.scores = { A: 20, B: 90 };
+  g.addPlayer('A'); // already present
+  assert.strictEqual(g.playerIds.filter((id) => id === 'A').length, 1);
+  assert.strictEqual(g.scores.A, 20); // unchanged, not reset to the max
+});
+
+check('a player added via addPlayer is actually dealt into the next startRound', () => {
+  const g = new LeastCountGame(['A', 'B'], 250);
+  g.startRound();
+  g.roundOver = true;
+  g.scores = { A: 20, B: 40 };
+  g.addPlayer('C');
+  g.startRound();
+  assert.ok(g.turnOrder.includes('C'));
+  assert.strictEqual(g.hands.C.length, 13);
 });
 
 // 13. Per-player discard history (public, for the "recent discards" UI)
