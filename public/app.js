@@ -28,9 +28,28 @@
         console.log('[Firebase] no user yet, signing in...');
       }
       updateSigninUI(user);
+      maybeUseGoogleDisplayName(user);
     });
   } else {
     console.warn('[Firebase] LCAuth not found -- check that firebase-init.js loaded before app.js.');
+  }
+
+  // If someone signs in with Google and has never typed/saved a name here
+  // before, use their Google account name as a starting point instead of
+  // leaving the field blank -- they can still change it, this is just a
+  // sensible default so "enter your name" isn't the very first thing a
+  // signed-in user hits. Never overwrites a name they already typed/saved
+  // (that always wins). Inlines the storage key rather than referencing
+  // NAME_STORAGE_KEY (declared further down) since this callback can in
+  // principle fire before that line runs.
+  function maybeUseGoogleDisplayName(user) {
+    if (!user || user.isAnonymous || !user.displayName) return;
+    const nameInput = document.getElementById('input-name');
+    if (!nameInput) return;
+    const alreadySaved = localStorage.getItem('leastcount_name');
+    if (alreadySaved || nameInput.value.trim()) return;
+    nameInput.value = user.displayName;
+    localStorage.setItem('leastcount_name', user.displayName);
   }
 
   // Current Firebase uid (if any), sent along with create/join so the server
@@ -808,15 +827,34 @@
   }
   socket.on('join_requests', ({ pending }) => renderJoinRequestsBanner(pending));
 
-  // landing-error now lives inside the profile dropdown (see
-  // profile-menu-panel below) rather than sitting permanently visible on
-  // the page -- opening the panel whenever there's actually something to
-  // show is what makes that message reachable at all, most commonly "Enter
-  // your name", right next to the field it's about.
+  // Errors get TWO independent signals now, not just one easy-to-miss one:
+  // 1) the inline toast banner in the main page flow (visible regardless of
+  //    whether the profile dropdown is open), and 2) the same text inside
+  //    the dropdown itself (#landing-error) plus a brief pulse on the
+  //    avatar, for anyone who does have it open already. Whichever a
+  //    player actually notices, the message gets through.
   function setLandingError(msg) {
     document.getElementById('landing-error').textContent = msg || '';
-    const panel = document.getElementById('profile-menu-panel');
-    if (msg && panel) panel.classList.remove('hidden');
+    const toast = document.getElementById('landing-toast-error');
+    if (toast) {
+      if (msg) {
+        toast.textContent = msg;
+        toast.classList.remove('hidden');
+        // Restart the shake animation even if the same message fires twice
+        // in a row (e.g. tapping "Create Room" repeatedly with no name).
+        toast.style.animation = 'none';
+        void toast.offsetWidth;
+        toast.style.animation = '';
+      } else {
+        toast.classList.add('hidden');
+      }
+    }
+    const avatar = document.getElementById('btn-profile-menu');
+    if (msg && avatar) {
+      avatar.classList.remove('attn-pulse');
+      void avatar.offsetWidth;
+      avatar.classList.add('attn-pulse');
+    }
   }
 
   // ---------------- profile dropdown (sign-in + name) ----------------
@@ -828,17 +866,51 @@
   // profile button not responding.
   const btnProfileMenu = document.getElementById('btn-profile-menu');
   const profileMenuPanel = document.getElementById('profile-menu-panel');
+  const profileMenuBackdrop = document.getElementById('profile-menu-backdrop');
+  function openProfileMenu() {
+    if (profileMenuPanel) profileMenuPanel.classList.remove('hidden');
+    if (profileMenuBackdrop) profileMenuBackdrop.classList.remove('hidden');
+  }
+  function closeProfileMenu() {
+    if (profileMenuPanel) profileMenuPanel.classList.add('hidden');
+    if (profileMenuBackdrop) profileMenuBackdrop.classList.add('hidden');
+  }
   if (btnProfileMenu && profileMenuPanel) {
     btnProfileMenu.onclick = (e) => {
       e.stopPropagation();
-      profileMenuPanel.classList.toggle('hidden');
+      if (profileMenuPanel.classList.contains('hidden')) openProfileMenu();
+      else closeProfileMenu();
     };
     // Tapping anywhere outside the open panel (and not the avatar itself,
-    // already handled above) closes it -- standard dropdown behavior.
+    // already handled above) closes it -- standard dropdown behavior. The
+    // backdrop is also a full-screen close target on its own, for anyone
+    // who taps it directly rather than some unrelated bit of the page.
     document.addEventListener('click', (e) => {
       if (profileMenuPanel.classList.contains('hidden')) return;
       if (profileMenuPanel.contains(e.target) || e.target === btnProfileMenu) return;
-      profileMenuPanel.classList.add('hidden');
+      closeProfileMenu();
+    });
+    if (profileMenuBackdrop) profileMenuBackdrop.onclick = closeProfileMenu;
+  }
+
+  // Tapping the toast jumps straight to fixing the problem -- opens the
+  // dropdown (if it wasn't already) and focuses the name field, since
+  // "enter your name" is by far the most common reason it appears.
+  const landingToastError = document.getElementById('landing-toast-error');
+  if (landingToastError) {
+    landingToastError.onclick = () => {
+      openProfileMenu();
+      const nameInput = document.getElementById('input-name');
+      if (nameInput) nameInput.focus();
+    };
+  }
+
+  // Clears the error the moment they start fixing it, instead of leaving a
+  // stale "enter your name" banner up after they've already typed one.
+  const inputNameEl = document.getElementById('input-name');
+  if (inputNameEl) {
+    inputNameEl.addEventListener('input', () => {
+      if (inputNameEl.value.trim()) setLandingError('');
     });
   }
 
