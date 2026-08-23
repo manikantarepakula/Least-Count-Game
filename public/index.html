@@ -13,6 +13,16 @@
 </head>
 <body>
 
+<!-- Dimmed backdrop for the profile dropdown -- deliberately placed here,
+     as a direct child of body, NOT nested inside #screen-landing. That
+     screen has overflow:hidden (to contain its background pattern), and a
+     position:fixed element gets clipped by ANY ancestor with
+     overflow:hidden even though it's positioned relative to the viewport --
+     a classic CSS trap. Nested inside #screen-landing, this backdrop would
+     silently fail to cover the page once scrolled. Living here instead, it
+     always covers the full viewport no matter which screen is active. -->
+<div id="profile-menu-backdrop" class="profile-menu-backdrop hidden"></div>
+
 <!-- 3-second intro splash, pure CSS -- shows the same card fan full-screen
      for ~2.4s then fades itself out and away automatically (no JS timer
      needed, so it can never get stuck open). No wordmark here (dropped per
@@ -35,10 +45,9 @@
       <!-- Sign-in + name now live in this dropdown off the profile icon,
            instead of always sitting open on the landing page. Same element
            IDs as before, so nothing in app.js needed to change -- only
-           where they physically sit in the page. A dimmed full-screen
-           backdrop appears behind it while open, both so it reads clearly
-           as a modal and so tapping anywhere outside closes it. -->
-      <div id="profile-menu-backdrop" class="profile-menu-backdrop hidden"></div>
+           where they physically sit in the page. The dimmed backdrop that
+           appears behind it while open lives at the top of body (see
+           #profile-menu-backdrop near the top of this file), not here. -->
       <div id="profile-menu-panel" class="profile-menu-panel hidden">
         <div class="signin-row">
           <span id="signin-status" class="signin-status">Playing as Guest</span>
