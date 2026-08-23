@@ -116,12 +116,27 @@ body.game-active {
   transform-style: preserve-3d;
 }
 .landing-card span { margin-left: 3px; }
-/* Slight perspective tilt on the outer two cards (rotateY) for depth, on top
-   of the same fan rotation the old hero used -- reads as "glossy 3D render"
-   at a fraction of the cost, no actual 3D asset needed. */
-.landing-card-1 { transform: translate(-118%, 10px) rotate(-14deg) rotateY(18deg); color: #c0392b; z-index: 1; }
-.landing-card-2 { transform: translate(-50%, -6px) rotate(0deg); color: #1a1a1a; z-index: 3; box-shadow: 0 22px 36px rgba(0,0,0,0.6), 0 2px 0 rgba(255,255,255,0.08) inset; }
-.landing-card-3 { transform: translate(18%, 10px) rotate(14deg) rotateY(-18deg); color: #c0392b; z-index: 2; }
+/* Continuous, slow floating/tilting motion -- like a product turntable shot
+   or chess.com's animated hero piece -- rather than a static tilt, since a
+   still image alone didn't read as "3D" no matter how the shadows/angles
+   were set. Each card runs its own keyframe (translate stays fixed at its
+   fanned-out position; only rotation and a small vertical bob animate) with
+   a staggered delay so the three don't move in obvious lockstep. */
+.landing-card-1 { color: #c0392b; z-index: 1; animation: landingCardFloat1 6s ease-in-out infinite; }
+.landing-card-2 { color: #1a1a1a; z-index: 3; box-shadow: 0 22px 36px rgba(0,0,0,0.6), 0 2px 0 rgba(255,255,255,0.08) inset; animation: landingCardFloat2 6s ease-in-out infinite; animation-delay: -1.3s; }
+.landing-card-3 { color: #c0392b; z-index: 2; animation: landingCardFloat3 6s ease-in-out infinite; animation-delay: -2.6s; }
+@keyframes landingCardFloat1 {
+  0%, 100% { transform: translate(-118%, 10px) rotate(-14deg) rotateY(14deg); }
+  50%      { transform: translate(-118%, 0px) rotate(-18deg) rotateY(28deg); }
+}
+@keyframes landingCardFloat2 {
+  0%, 100% { transform: translate(-50%, -6px) rotate(0deg) rotateY(0deg); }
+  50%      { transform: translate(-50%, -16px) rotate(3deg) rotateY(8deg); }
+}
+@keyframes landingCardFloat3 {
+  0%, 100% { transform: translate(18%, 10px) rotate(14deg) rotateY(-14deg); }
+  50%      { transform: translate(18%, 0px) rotate(18deg) rotateY(-28deg); }
+}
 .landing-hero-fade {
   position: absolute; inset: 0;
   background: linear-gradient(180deg, rgba(8,8,10,0) 0%, rgba(8,8,10,0.85) 60%, #08080a 88%);
@@ -137,14 +152,161 @@ body.game-active {
   -webkit-background-clip: text; background-clip: text; color: transparent;
   text-shadow: 0 6px 24px rgba(216,31,38,0.25);
 }
-.landing-tagline { color: #b9b9c0; font-size: 12px; margin: 6px 0 0; letter-spacing: 0.3px; }
+.landing-tagline { color: #b9b9c0; font-size: 12px; margin: 6px 0 0; letter-spacing: 0.3px; text-align: center; }
+
+/* ---- Landing screen rebuild: card-suit pattern woven into the background
+   across the WHOLE screen (not a separate hero block), a chess.com-style
+   top bar (avatar/streak left, wordmark center, premium/stats right), and
+   three separate cards -- one per way to start a game -- instead of one
+   long mixed form. Responsive from small phones up through desktop: full
+   bleed under 1024px, capped to a centered phone-width column above that
+   so it doesn't stretch edge-to-edge on a wide monitor. ---- */
+#screen-landing.screen.active {
+  background: #08080a; position: relative; overflow: hidden;
+  display: flex; flex-direction: column; min-height: 100vh;
+}
+#screen-landing.screen.active::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 8%, rgba(216,31,38,0.22), transparent 55%),
+    repeating-linear-gradient(135deg, rgba(255,255,255,0.02) 0 2px, transparent 2px 34px);
+}
+#screen-landing .landing-topbar,
+#screen-landing .landing-body,
+#screen-landing .landing-footer-nav { position: relative; z-index: 1; }
+
+#screen-landing .landing-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.landing-topbar-left, .landing-topbar-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.landing-avatar {
+  width: 30px; height: 30px; border-radius: 50%; background: rgba(255,255,255,0.1);
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+}
+.landing-wordmark-sm { font-size: 18px; letter-spacing: 1.5px; }
+
+#screen-landing .landing-body {
+  flex: 1; display: flex; flex-direction: column; gap: 14px;
+  padding: 14px 16px 10px; max-width: 480px; width: 100%; margin: 0 auto; box-sizing: border-box;
+}
+
+.landing-shared-card,
+.mode-block {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px; padding: 14px 16px;
+}
+.landing-shared-card .signin-row { margin-bottom: 12px; padding-bottom: 10px; }
+.landing-shared-card .error { margin: 6px 0 0; }
+
+.mode-blocks { display: flex; flex-direction: column; gap: 12px; }
+.mode-block h3 { margin: 0 0 4px; font-size: 15px; color: #f2504f; }
+.mode-block-sub { margin: 0 0 8px; font-size: 11px; color: #9a9aa2; }
+.mode-block .row { margin-top: 10px; }
+.mode-block-join-row { display: flex; gap: 8px; margin-top: 8px; }
+.mode-block-join-row input { flex: 1; margin: 0; }
+.mode-block-join-row button { width: auto; margin: 0; padding: 0 16px; white-space: nowrap; }
+
+#screen-landing .landing-footer-nav {
+  display: flex; align-items: center; justify-content: space-around;
+  padding: 8px 4px; border-top: 1px solid rgba(255,255,255,0.08);
+  max-width: 480px; width: 100%; margin: 0 auto;
+}
+.footer-nav-item {
+  background: none; border: none; color: #9a9aa2; font-size: 10px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 4px 10px; width: auto;
+}
+.footer-nav-item span { font-size: 17px; }
+.footer-nav-item.active { color: #f2504f; }
+
+.queue-waiting-choice { margin-top: 18px; }
+.queue-waiting-choice button { margin-top: 8px; }
+
+/* ---- tablets (768-1023px): a bit more breathing room, everything else
+   scales naturally since it's already flex-based rather than fixed px. ---- */
+@media (min-width: 768px) {
+  #screen-landing .landing-body { max-width: 560px; padding: 20px 24px 14px; gap: 18px; }
+  #screen-landing .landing-footer-nav { max-width: 560px; }
+  .landing-shared-card, .mode-block { padding: 18px 20px; }
+}
+
+/* ---- laptop/desktop (1024px+): the phone-style full-bleed layout would
+   look broken stretched across a wide browser window, so the content column
+   gets capped and centered -- the background pattern still fills the full
+   viewport width behind it, so it doesn't look like a narrow box floating
+   on blank space. ---- */
+@media (min-width: 1024px) {
+  #screen-landing .landing-topbar { max-width: 480px; margin: 0 auto; width: 100%; }
+  #screen-landing .landing-body { max-width: 480px; padding: 24px 16px 14px; }
+  #screen-landing .landing-footer-nav { max-width: 480px; }
+}
+
+/* ---- 3-second intro splash (matches the reference chess.com launch clip
+   the user sent: solid near-black screen, one simple mark centered and held,
+   then a quick cut/fade straight into the real app underneath -- no busy
+   motion, no separate loading text). Same #08080a backdrop as the landing
+   hero so the fade-out is seamless with zero color flash. Pure CSS, timed
+   entirely with animation-delay so it can never get stuck open even if JS
+   is slow to attach anything. ---- */
+#screen-intro {
+  position: fixed; inset: 0; z-index: 999;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: #08080a; overflow: hidden;
+  animation: introFadeOut 0.6s ease forwards;
+  animation-delay: 2.2s;
+}
+.intro-glow {
+  position: absolute; width: 420px; height: 420px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(216,31,38,0.4), rgba(216,31,38,0) 68%);
+  filter: blur(2px);
+  animation: introGlowPulse 2.6s ease-in-out infinite;
+}
+.intro-cards {
+  position: relative; width: 100%; height: 132px; perspective: 900px;
+  margin-bottom: 22px;
+  opacity: 0;
+  animation: introCardsIn 0.7s cubic-bezier(.22,.9,.3,1.2) forwards;
+  animation-delay: 0.15s;
+}
+.intro-wordmark {
+  position: relative; font-size: 40px;
+  opacity: 0;
+  animation: introWordmarkIn 0.6s ease forwards;
+  animation-delay: 0.55s;
+}
+@keyframes introCardsIn {
+  0%   { opacity: 0; transform: scale(0.7) translateY(20px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes introWordmarkIn {
+  0%   { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes introGlowPulse {
+  0%, 100% { transform: scale(1); opacity: 0.7; }
+  50%      { transform: scale(1.15); opacity: 1; }
+}
+/* Holds fully visible, then fades the WHOLE overlay away and drops it out of
+   the layout/click-path entirely (visibility+pointer-events) -- the landing
+   screen underneath has already been sitting there fully loaded/interactive
+   the entire time, so this is a pure visual reveal, nothing to wait on. */
+@keyframes introFadeOut {
+  0%   { opacity: 1; visibility: visible; }
+  99%  { opacity: 0; visibility: visible; }
+  100% { opacity: 0; visibility: hidden; pointer-events: none; }
+}
 
 /* Sign-in row + form on the landing screen only -- overrides the shared
    green-tinted .landing-form defaults below with the crimson/neutral palette,
    scoped with #screen-landing so the lobby screen's own use of .landing-form
    is completely unaffected. */
 #screen-landing .landing-form label,
+#screen-waiting-host .landing-form label,
+#screen-queue-waiting .landing-form label,
 #screen-landing .landing-form .hint,
+#screen-waiting-host .landing-form .hint,
+#screen-queue-waiting .landing-form .hint,
 #screen-landing .landing-form .divider,
 #screen-landing .signin-status { color: #9a9aa2; }
 #screen-landing .landing-form input[type=text] {
@@ -155,11 +317,22 @@ body.game-active {
   background: linear-gradient(135deg, #e5252c, #a8151a); color: #fff;
   box-shadow: 0 10px 24px rgba(216,31,38,0.35);
 }
-#screen-landing .landing-form button.secondary {
+#screen-landing .landing-form button.secondary,
+#screen-waiting-host .landing-form button.secondary,
+#screen-queue-waiting .landing-form button.secondary {
   background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: #e8e8ec;
 }
 #screen-landing .icon-btn { background: rgba(255,255,255,0.08); color: #fff; }
 #screen-landing .signin-row { border-bottom: 1px solid rgba(255,255,255,0.1); }
+
+/* The two flow screens that branch off the landing screen (mid-game join
+   "waiting for host", and Play Online's "finding players") share its dark
+   backdrop and heading color so the whole flow reads as one continuous
+   experience instead of snapping back to the lobby's green theme mid-flow. */
+#screen-waiting-host.screen.active,
+#screen-queue-waiting.screen.active { background: #08080a; }
+#screen-waiting-host .landing-form h2,
+#screen-queue-waiting .landing-form h2 { color: #fff; }
 
 .landing-form { max-width: 420px; margin: 10px auto 24px; padding: 0 24px 24px; }
 .landing-form label { color: #9fd8b8; }
@@ -592,6 +765,37 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .overlay.hidden { display: none; }
 
 .hidden { display: none !important; }
+
+/* ---- mid-game join approval: requester's waiting screen + host's banner ---- */
+.waiting-host-panel { text-align: center; padding-top: 60px; }
+.waiting-host-spinner {
+  width: 44px; height: 44px; margin: 0 auto 20px; border-radius: 50%;
+  border: 3px solid rgba(212,160,23,0.25); border-top-color: #d4a017;
+  animation: waitingHostSpin 0.9s linear infinite;
+}
+@keyframes waitingHostSpin { to { transform: rotate(360deg); } }
+
+/* Floating, host-only strip -- sits above whatever screen (lobby or the
+   live game) the host happens to be on, since a join request can arrive at
+   any time. Stacks vertically if more than one person is waiting at once. */
+.join-requests-banner {
+  position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+  width: min(92vw, 420px); z-index: 60;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.join-requests-banner.hidden { display: none; }
+.join-request-row {
+  background: #1c1c1f; border: 1px solid rgba(212,160,23,0.4); border-radius: 10px;
+  padding: 10px 12px; display: flex; align-items: center; gap: 10px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.5);
+}
+.join-request-row .jr-text { flex: 1; font-size: 13px; color: #f0f0f0; }
+.join-request-row .jr-text b { color: #ffcb6b; }
+.join-request-row button {
+  width: auto; padding: 7px 12px; margin: 0; font-size: 12px; border-radius: 7px;
+}
+.join-request-row .jr-admit { background: #1e5631; color: #fff; }
+.join-request-row .jr-ignore { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #ddd; }
 
 .round-result-emoji { text-align: center; font-size: 48px; line-height: 1; margin-bottom: 4px; }
 @keyframes scoreCardEmojiPop {
