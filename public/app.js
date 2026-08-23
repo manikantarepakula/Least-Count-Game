@@ -857,40 +857,36 @@
     }
   }
 
-  // ---------------- profile dropdown (sign-in + name) ----------------
+  // ---------------- profile modal (sign-in + name) ----------------
   // Guarded with existence checks (unlike a plain .onclick= on a possibly-
   // missing element) -- if index.html and app.js ever get out of sync during
   // a deploy (old index.html + new app.js, or vice versa), a missing element
   // here would otherwise throw and silently kill every handler registered
   // AFTER this point in the file, which explains a lot more than just the
   // profile button not responding.
+  // #profile-menu-panel is itself the full-screen .overlay now (see
+  // index.html) -- opening/closing it is just toggling one class on one
+  // element, no separate backdrop to keep in sync.
   const btnProfileMenu = document.getElementById('btn-profile-menu');
   const profileMenuPanel = document.getElementById('profile-menu-panel');
-  const profileMenuBackdrop = document.getElementById('profile-menu-backdrop');
   function openProfileMenu() {
     if (profileMenuPanel) profileMenuPanel.classList.remove('hidden');
-    if (profileMenuBackdrop) profileMenuBackdrop.classList.remove('hidden');
   }
   function closeProfileMenu() {
     if (profileMenuPanel) profileMenuPanel.classList.add('hidden');
-    if (profileMenuBackdrop) profileMenuBackdrop.classList.add('hidden');
   }
   if (btnProfileMenu && profileMenuPanel) {
     btnProfileMenu.onclick = (e) => {
       e.stopPropagation();
-      if (profileMenuPanel.classList.contains('hidden')) openProfileMenu();
-      else closeProfileMenu();
+      openProfileMenu();
     };
-    // Tapping anywhere outside the open panel (and not the avatar itself,
-    // already handled above) closes it -- standard dropdown behavior. The
-    // backdrop is also a full-screen close target on its own, for anyone
-    // who taps it directly rather than some unrelated bit of the page.
-    document.addEventListener('click', (e) => {
-      if (profileMenuPanel.classList.contains('hidden')) return;
-      if (profileMenuPanel.contains(e.target) || e.target === btnProfileMenu) return;
-      closeProfileMenu();
+    const btnCloseProfileMenu = document.getElementById('btn-close-profile-menu');
+    if (btnCloseProfileMenu) btnCloseProfileMenu.onclick = closeProfileMenu;
+    // Tapping the dimmed backdrop itself (i.e. the overlay element but not
+    // its inner card) closes it too, same as tapping Close.
+    profileMenuPanel.addEventListener('click', (e) => {
+      if (e.target === profileMenuPanel) closeProfileMenu();
     });
-    if (profileMenuBackdrop) profileMenuBackdrop.onclick = closeProfileMenu;
   }
 
   // Tapping the toast jumps straight to fixing the problem -- opens the
