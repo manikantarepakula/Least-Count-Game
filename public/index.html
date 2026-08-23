@@ -13,55 +13,107 @@
 </head>
 <body>
 
+<!-- 3-second intro splash, pure CSS -- shows the same card fan full-screen
+     for ~2.4s then fades itself out and away automatically (no JS timer
+     needed, so it can never get stuck open). No wordmark here (dropped per
+     feedback -- looked off against the floating cards); the cards alone
+     carry it. The real landing screen underneath is already fully
+     loaded/interactive the whole time, just visually covered until this fades. -->
+<div id="screen-intro">
+  <div class="intro-glow"></div>
+  <div class="intro-cards">
+    <div class="landing-card landing-card-1">K<span>♣</span></div>
+    <div class="landing-card landing-card-2">Q<span>♠</span></div>
+    <div class="landing-card landing-card-3">2<span>♥</span></div>
+  </div>
+</div>
+
 <div id="screen-landing" class="screen active">
-  <div class="landing-hero">
-    <div class="landing-hero-glow"></div>
-    <div class="landing-hero-cards">
-      <div class="landing-card landing-card-1">K<span>♣</span></div>
-      <div class="landing-card landing-card-2">Q<span>♠</span></div>
-      <div class="landing-card landing-card-3">2<span>♥</span></div>
+  <div class="landing-topbar">
+    <div class="landing-topbar-left">
+      <span class="landing-avatar" aria-hidden="true">👤</span>
     </div>
-    <div class="landing-hero-fade"></div>
-    <div class="landing-hero-content">
-      <h1 class="landing-wordmark">LEAST COUNT</h1>
-      <p class="landing-tagline">Real cards. Real family. One link.</p>
+    <h1 class="landing-wordmark landing-wordmark-sm">LEAST COUNT</h1>
+    <div class="landing-topbar-right">
+      <button id="btn-remove-ads" class="icon-btn hidden" type="button" title="Remove Ads">💎</button>
+      <button id="btn-my-stats" class="icon-btn" type="button" title="My Stats">📊</button>
     </div>
   </div>
-  <div class="landing-form">
-    <div class="signin-row">
-      <span id="signin-status" class="signin-status">Playing as Guest</span>
-      <button id="btn-my-stats" class="icon-btn" type="button" title="My Stats">📊</button>
-      <button id="btn-remove-ads" class="secondary tiny hidden" type="button">🚫 Remove Ads</button>
-      <button id="btn-google-signin" class="secondary tiny" type="button">Sign in with Google</button>
+
+  <div class="landing-body">
+    <p class="landing-tagline">Real cards. Real family. One link.</p>
+
+    <div class="landing-shared-card">
+      <div class="signin-row">
+        <span id="signin-status" class="signin-status">Playing as Guest</span>
+        <button id="btn-google-signin" class="secondary tiny" type="button">Sign in with Google</button>
+      </div>
+      <label>Your name (మీ పేరు)</label>
+      <input id="input-name" type="text" maxlength="20" placeholder="e.g. Manikanta" />
+      <p id="landing-error" class="error"></p>
     </div>
 
-    <label>Your name (మీ పేరు)</label>
-    <input id="input-name" type="text" maxlength="20" placeholder="e.g. Manikanta" />
+    <div class="mode-blocks">
+      <div class="mode-block">
+        <h3>🌐 Play Online</h3>
+        <p class="mode-block-sub">Get matched with strangers</p>
+        <label for="input-online-playercount">No. of players</label>
+        <select id="input-online-playercount">
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
+        </select>
+        <div class="row">
+          <button id="btn-play-online" class="primary">Find Match</button>
+        </div>
+      </div>
 
-    <div class="row">
-      <button id="btn-create" class="primary">Create Room (కొత్త రూమ్)</button>
-    </div>
+      <div class="mode-block">
+        <h3>👥 Play with Friends</h3>
+        <div class="row">
+          <button id="btn-create" class="secondary">Create Room (కొత్త రూమ్)</button>
+        </div>
+        <div class="mode-block-join-row">
+          <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
+          <button id="btn-join" class="secondary">Join (జాయిన్)</button>
+        </div>
+      </div>
 
-    <div class="divider">OR (లేదా)</div>
-
-    <label>Room Code (రూమ్ కోడ్)</label>
-    <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
-    <div class="row">
-      <button id="btn-join" class="secondary">Join Room (జాయిన్)</button>
-    </div>
-
-    <div class="divider">OR (లేదా)</div>
-
-    <button id="btn-solo-toggle" class="secondary" type="button">🤖 Play Solo vs Bots</button>
-    <div id="solo-panel" class="solo-panel hidden">
-      <label for="input-bot-count">Number of Bots</label>
-      <select id="input-bot-count"></select>
-      <div class="row">
-        <button id="btn-solo-start" class="primary">Start Solo Game</button>
+      <div class="mode-block">
+        <h3>🤖 Play with Bots</h3>
+        <label for="input-bot-count">No. of bots</label>
+        <select id="input-bot-count"></select>
+        <div class="row">
+          <button id="btn-solo-start" class="secondary">Start</button>
+        </div>
       </div>
     </div>
+  </div>
 
-    <p id="landing-error" class="error"></p>
+  <div class="landing-footer-nav">
+    <button class="footer-nav-item active" type="button"><span>🏠</span>Home</button>
+    <button id="btn-footer-stats" class="footer-nav-item" type="button"><span>📊</span>Stats</button>
+    <button id="btn-footer-rules" class="footer-nav-item" type="button"><span>📜</span>Rules</button>
+  </div>
+</div>
+
+<!-- "Play Online" matchmaking wait screen. Client-side timer (not the
+     server) decides when to reveal the wait/fill-bots/cancel choice -- the
+     server has no opinion on that, it just keeps the queue and matches
+     instantly whenever enough strangers are waiting, whether that's before
+     or after this prompt appears. -->
+<div id="screen-queue-waiting" class="screen">
+  <div class="landing-form waiting-host-panel">
+    <div class="waiting-host-spinner" aria-hidden="true"></div>
+    <h2>Finding players&hellip;</h2>
+    <p class="hint" id="queue-waiting-hint">Looking for <span id="queue-waiting-count">3</span> players online.</p>
+    <div id="queue-waiting-choice" class="queue-waiting-choice hidden">
+      <p class="hint">Still looking -- what would you like to do?</p>
+      <button id="btn-queue-keep-waiting" class="secondary" type="button">Keep Waiting</button>
+      <button id="btn-queue-fill-bots" class="secondary" type="button">Fill with Bots</button>
+      <button id="btn-queue-cancel" class="secondary leave-btn" type="button">Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -94,6 +146,26 @@
     <p id="lobby-error" class="error"></p>
   </div>
 </div>
+
+
+<!-- Shown to someone who tried to join a room that's already mid-game --
+     the request sits with the host (see join-requests-banner below) instead
+     of dropping them straight in. Auto-resolves itself within 2 minutes
+     either way (admitted or denied), driven entirely by server events
+     (join_admitted / join_denied) -- no client-side timer to get out of sync. -->
+<div id="screen-waiting-host" class="screen">
+  <div class="landing-form waiting-host-panel">
+    <div class="waiting-host-spinner" aria-hidden="true"></div>
+    <h2>Waiting for host</h2>
+    <p class="hint">The game's already in progress -- <span id="waiting-host-name">the host</span> needs to let you in. You'll join starting next round.</p>
+    <button id="btn-cancel-waiting" class="secondary leave-btn" type="button">Cancel</button>
+  </div>
+</div>
+
+<!-- Host-only, floating over whatever screen they're on (lobby or mid-game)
+     -- a Teams-style waiting-room strip listing everyone currently asking to
+     join, each with Admit/Ignore. Hidden entirely whenever nobody's waiting. -->
+<div id="join-requests-banner" class="join-requests-banner hidden"></div>
 
 <div id="screen-game" class="screen">
   <div class="game-top">
