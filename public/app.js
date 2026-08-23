@@ -808,7 +808,39 @@
   }
   socket.on('join_requests', ({ pending }) => renderJoinRequestsBanner(pending));
 
-  function setLandingError(msg) { document.getElementById('landing-error').textContent = msg || ''; }
+  // landing-error now lives inside the profile dropdown (see
+  // profile-menu-panel below) rather than sitting permanently visible on
+  // the page -- opening the panel whenever there's actually something to
+  // show is what makes that message reachable at all, most commonly "Enter
+  // your name", right next to the field it's about.
+  function setLandingError(msg) {
+    document.getElementById('landing-error').textContent = msg || '';
+    const panel = document.getElementById('profile-menu-panel');
+    if (msg && panel) panel.classList.remove('hidden');
+  }
+
+  // ---------------- profile dropdown (sign-in + name) ----------------
+  // Guarded with existence checks (unlike a plain .onclick= on a possibly-
+  // missing element) -- if index.html and app.js ever get out of sync during
+  // a deploy (old index.html + new app.js, or vice versa), a missing element
+  // here would otherwise throw and silently kill every handler registered
+  // AFTER this point in the file, which explains a lot more than just the
+  // profile button not responding.
+  const btnProfileMenu = document.getElementById('btn-profile-menu');
+  const profileMenuPanel = document.getElementById('profile-menu-panel');
+  if (btnProfileMenu && profileMenuPanel) {
+    btnProfileMenu.onclick = (e) => {
+      e.stopPropagation();
+      profileMenuPanel.classList.toggle('hidden');
+    };
+    // Tapping anywhere outside the open panel (and not the avatar itself,
+    // already handled above) closes it -- standard dropdown behavior.
+    document.addEventListener('click', (e) => {
+      if (profileMenuPanel.classList.contains('hidden')) return;
+      if (profileMenuPanel.contains(e.target) || e.target === btnProfileMenu) return;
+      profileMenuPanel.classList.add('hidden');
+    });
+  }
 
   // ---------------- solo play vs bots ----------------
   const MAX_BOTS = 7;
@@ -840,12 +872,13 @@
     });
   };
 
-  // Footer nav on the landing screen re-triggers existing, already-wired
-  // functionality rather than duplicating it -- Home is just the landing
-  // screen itself (no-op, it's already there), Stats reuses the existing
-  // stats button, Rules reuses the existing rules overlay (normally only
-  // reachable from the lobby, now also reachable before ever joining a room).
-  document.getElementById('btn-footer-stats').onclick = () => document.getElementById('btn-my-stats').click();
+  // Footer nav on the landing screen. Home is just the landing screen itself
+  // (no-op, it's already there). Stats is the SAME #btn-my-stats element the
+  // header used to also show -- it only lives in the footer now, no
+  // duplicate icon, and its real click handler (elsewhere in this file,
+  // guarded with `if (myStatsBtn)`) attaches to it exactly the same either
+  // way. Rules reuses the existing rules overlay (normally only reachable
+  // from the lobby, now also reachable before ever joining a room).
   document.getElementById('btn-footer-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
 
   // ---------------- "Play Online" matchmaking ----------------
