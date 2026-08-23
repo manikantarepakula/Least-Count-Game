@@ -81,6 +81,86 @@ body.game-active {
 .hero-content h1 { color: #fff; font-size: 27px; font-weight: 700; margin: 0; }
 .hero-subtitle { color: #9fd8b8; font-size: 12px; margin: 4px 0 0; }
 
+/* ---- Landing screen only: cinematic dark hero, redesigned separately from
+   the green "tabletop hero" the lobby screen still uses above (.hero-landing
+   etc.) -- scoped under #screen-landing throughout so nothing here leaks
+   into the lobby. Netflix-style bold dark backdrop + a chess.com-style
+   glossy floating card visual as the hero, instead of a green felt circle. ---- */
+#screen-landing.screen.active { background: #08080a; }
+
+.landing-hero {
+  position: relative; height: 360px; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  background: #08080a;
+}
+/* Soft crimson glow radiating from behind the card fan -- the one spot of
+   color in an otherwise near-black hero, so the cards and wordmark read as
+   the deliberate focal point instead of everything competing for attention. */
+.landing-hero-glow {
+  position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+  width: 380px; height: 380px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(216,31,38,0.35), rgba(216,31,38,0) 68%);
+  filter: blur(2px);
+}
+.landing-hero-cards {
+  position: relative; width: 100%; height: 132px; margin-top: 26px;
+  perspective: 900px;
+}
+.landing-card {
+  position: absolute; top: 0; left: 50%;
+  width: 68px; height: 96px; border-radius: 8px;
+  background: linear-gradient(155deg, #ffffff 0%, #f2f2f4 55%, #e2e2e6 100%);
+  display: flex; align-items: center; justify-content: center;
+  font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 23px;
+  box-shadow: 0 18px 30px rgba(0,0,0,0.55), 0 2px 0 rgba(255,255,255,0.06) inset;
+  transform-style: preserve-3d;
+}
+.landing-card span { margin-left: 3px; }
+/* Slight perspective tilt on the outer two cards (rotateY) for depth, on top
+   of the same fan rotation the old hero used -- reads as "glossy 3D render"
+   at a fraction of the cost, no actual 3D asset needed. */
+.landing-card-1 { transform: translate(-118%, 10px) rotate(-14deg) rotateY(18deg); color: #c0392b; z-index: 1; }
+.landing-card-2 { transform: translate(-50%, -6px) rotate(0deg); color: #1a1a1a; z-index: 3; box-shadow: 0 22px 36px rgba(0,0,0,0.6), 0 2px 0 rgba(255,255,255,0.08) inset; }
+.landing-card-3 { transform: translate(18%, 10px) rotate(14deg) rotateY(-18deg); color: #c0392b; z-index: 2; }
+.landing-hero-fade {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(8,8,10,0) 0%, rgba(8,8,10,0.85) 60%, #08080a 88%);
+}
+.landing-hero-content {
+  position: relative; text-align: center; padding: 0 16px 14px; z-index: 4;
+}
+.landing-wordmark {
+  font-family: 'Bebas Neue', Georgia, 'Times New Roman', sans-serif;
+  font-size: 44px; letter-spacing: 3px; font-weight: 400; margin: 0;
+  line-height: 1;
+  background: linear-gradient(180deg, #ffffff 0%, #f2d9d9 55%, #e5252c 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  text-shadow: 0 6px 24px rgba(216,31,38,0.25);
+}
+.landing-tagline { color: #b9b9c0; font-size: 12px; margin: 6px 0 0; letter-spacing: 0.3px; }
+
+/* Sign-in row + form on the landing screen only -- overrides the shared
+   green-tinted .landing-form defaults below with the crimson/neutral palette,
+   scoped with #screen-landing so the lobby screen's own use of .landing-form
+   is completely unaffected. */
+#screen-landing .landing-form label,
+#screen-landing .landing-form .hint,
+#screen-landing .landing-form .divider,
+#screen-landing .signin-status { color: #9a9aa2; }
+#screen-landing .landing-form input[type=text] {
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.14); color: #fff;
+}
+#screen-landing .landing-form input[type=text]:focus { border-color: #e5252c; }
+#screen-landing .landing-form button.primary {
+  background: linear-gradient(135deg, #e5252c, #a8151a); color: #fff;
+  box-shadow: 0 10px 24px rgba(216,31,38,0.35);
+}
+#screen-landing .landing-form button.secondary {
+  background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: #e8e8ec;
+}
+#screen-landing .icon-btn { background: rgba(255,255,255,0.08); color: #fff; }
+#screen-landing .signin-row { border-bottom: 1px solid rgba(255,255,255,0.1); }
+
 .landing-form { max-width: 420px; margin: 10px auto 24px; padding: 0 24px 24px; }
 .landing-form label { color: #9fd8b8; }
 .landing-form input[type=text] {
@@ -131,6 +211,22 @@ select:focus { border-color: #1e5631; }
 
 .rules-btn { margin-top: 14px; font-size: 13px; padding: 9px; }
 
+/* Small, non-blocking sign-in row at the top of the landing form -- lets a
+   guest optionally upgrade to a real Google account (keeping their existing
+   stats via the linkWithPopup path in firebase-init.js) without forcing a
+   choice before they can just start playing. */
+.signin-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 16px; padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.signin-status { color: #9fd8b8; font-size: 12px; flex: 1; }
+.signin-row button.tiny { margin: 0; white-space: nowrap; }
+.icon-btn {
+  width: auto; flex: 0 0 auto; padding: 6px 9px; font-size: 15px; line-height: 1;
+  background: rgba(255,255,255,0.12); color: #fff; border-radius: 8px;
+}
+
 .rules-panel { max-width: 480px; width: 92vw; text-align: left; }
 .rules-panel h2 { text-align: center; }
 .rules-body { max-height: 60vh; overflow-y: auto; padding-right: 4px; margin-bottom: 14px; }
@@ -175,7 +271,9 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .player-list { list-style: none; padding: 0; }
 .player-list li {
   padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between;
+  position: relative; /* anchors the report/mute popover for tappable rows */
 }
+.player-list li.tappable { cursor: pointer; }
 .player-list .status { font-size: 11px; color: #999; }
 .player-list .host-tag { color: #1e5631; font-weight: 700; font-size: 11px; }
 
@@ -247,6 +345,43 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .seat.active .seat-chip { background: #d4a017; color: #1a1a1a; font-weight: 700; }
 .seat.eliminated { opacity: 0.4; }
 .seat.quit { opacity: 0.35; }
+.seat.tappable { cursor: pointer; }
+
+/* ---------------- player action popover (report / mute) ----------------
+   Replaces the old 🚩/🔇 icons that used to sit on every chat message.
+   Tap a player's seat (in-game) or their row in the lobby list (pre-game)
+   and this appears anchored to that element -- both .seat and .player-list
+   li are already a positioning context, so it's just appended as a child
+   and placed with plain CSS. Tap anywhere else on screen to dismiss it. */
+.player-action-popover {
+  position: absolute; z-index: 25;
+  background: #1a1a1a; border-radius: 10px; padding: 6px;
+  display: flex; flex-direction: column; gap: 4px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+  animation: popoverFadeIn 0.12s ease-out both;
+}
+@keyframes popoverFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.seat .player-action-popover {
+  bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 8px;
+}
+.seat .player-action-popover.align-left { left: 0; transform: none; }
+.seat .player-action-popover.align-right { left: auto; right: 0; transform: none; }
+.player-list li .player-action-popover {
+  top: 100%; right: 0; margin-top: 2px;
+}
+.player-action-btn {
+  background: #2a2a2a; color: #fff; border: none; border-radius: 6px;
+  padding: 8px 12px; font-size: 12.5px; white-space: nowrap; text-align: left;
+  cursor: pointer;
+}
+.player-action-btn:hover { background: #3a3a3a; }
+.player-action-btn:disabled { opacity: 0.6; cursor: default; }
+.player-action-btn.report { color: #ff8a80; }
+.player-action-btn.mute { color: #ffcb6b; }
+.player-action-stats {
+  color: #cfead9; font-size: 11.5px; padding: 4px 8px 6px; white-space: nowrap;
+  border-bottom: 1px solid rgba(255,255,255,0.12); margin-bottom: 2px;
+}
 
 /* Your-turn visual pulse: only ever applied to your OWN seat, and only once
    you've gone quiet for 5+ seconds on your own turn (see app.js) -- a purely
