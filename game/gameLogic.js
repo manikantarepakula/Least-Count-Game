@@ -5,11 +5,19 @@
 const SUITS = ['S', 'H', 'D', 'C'];
 const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
+// Tuned down from the original {2:3,3:3,4:3,5:4,6:4,...} table -- that many
+// decks meant 3-4 physical copies of every single card in the shoe, which is
+// exactly why players kept seeing "the same card" reappear so often. Each
+// count below is sized to comfortably cover a full round's worth of cards
+// (initial 13-card hands + open/joker reveal + a realistic amount of stock
+// drawn over ~10 turns/player) with some safety margin before the stock
+// needs a mid-round reshuffle, while using the fewest decks that still do
+// that -- fewer decks = fewer duplicate copies of any given card in play.
 const DECK_COUNT_TABLE = {
-  2: 3, 3: 3, 4: 3,
-  5: 4, 6: 4,
-  7: 5, 8: 5,
-  9: 6, 10: 6,
+  2: 2, 3: 2, 4: 2,
+  5: 3, 6: 3,
+  7: 4, 8: 4,
+  9: 5, 10: 5,
 };
 
 function deckCountForPlayers(numPlayers) {
@@ -172,6 +180,27 @@ class LeastCountGame {
       this.gameOver = true;
       this.winner = stillActive[0] || null;
     }
+    return this.getPublicState();
+  }
+
+  /**
+   * Adds a brand-new player to an already-running game -- the "someone wants
+   * to join mid-game, host admitted them" flow. Only allowed between rounds
+   * (same restriction as removePlayer -- never mid-hand), and the new player
+   * enters at a score equal to the current highest score among everyone else
+   * already on the board, not 0. That's deliberate: starting them fresh at 0
+   * against players who've already built up 50-100+ points would hand them
+   * an unfair head start in a game about staying LOW, so instead they enter
+   * exactly as "at risk" of elimination as whoever's currently doing worst.
+   */
+  addPlayer(playerId) {
+    if (this.gameOver) throw new Error('Game already over');
+    if (!this.roundOver) throw new Error('Cannot add a player mid-round');
+    if (this.playerIds.includes(playerId)) return this.getPublicState();
+    const startingScore = Math.max(0, ...Object.values(this.scores));
+    this.playerIds.push(playerId);
+    this.scores[playerId] = startingScore;
+    this.log.push({ type: 'joined', round: this.roundNumber, playerId, startingScore });
     return this.getPublicState();
   }
 
@@ -514,7 +543,16 @@ class LeastCountGame {
     this.lastRoundResult = {
       declaredBy: playerId, correct, values, roundScores,
       cumulativeScores: { ...this.scores },
-      newlyEliminated: this.turnOrder.filter((id) => this.eliminated.has(id) && preScores[id] < ELIMINATION_SCORE),
+      // Uses this.eliminationScore (the room's actual configured max score --
+      // e.g. 250 if the host raised it), NOT the hardcoded ELIMINATION_SCORE
+      // default (200). Using the hardcoded constant here was a real bug:
+      // with a custom max score above 200, a player entering a round already
+      // past 200 (but still under the real threshold) who then crossed the
+      // real threshold this round WAS correctly eliminated (see .eliminated
+      // above), but never showed up in this newlyEliminated list -- so the
+      // round-result screen just silently dropped them with no announcement,
+      // making it look like the custom max score hadn't taken effect at all.
+      newlyEliminated: this.turnOrder.filter((id) => this.eliminated.has(id) && preScores[id] < this.eliminationScore),
     };
     this.roundOver = true;
 
