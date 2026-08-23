@@ -198,31 +198,26 @@ body.game-active {
 .landing-avatar:hover { background: rgba(255,255,255,0.16); }
 .landing-wordmark-sm { font-size: 18px; letter-spacing: 1.5px; }
 
-/* Dropdown off the profile icon -- sign-in status + name input live here
-   instead of sitting permanently open on the landing page. Positioned
-   relative to .landing-topbar-left (see above), so it always hangs directly
-   under the avatar regardless of screen width. A dimmed backdrop (below)
-   sits behind it while open, both to read clearly as a modal and to give a
-   tap-anywhere-to-close target. Small drop/fade-in on open so it visibly
-   announces itself rather than just snapping into place. */
-.profile-menu-panel {
-  position: absolute; top: 40px; left: 0; z-index: 20;
-  width: 260px; max-width: 80vw;
-  background: #17171a; border: 1px solid rgba(255,255,255,0.14); border-radius: 12px;
-  padding: 14px 16px; box-shadow: 0 16px 32px rgba(0,0,0,0.55);
-  animation: profilePanelIn 0.15s ease-out;
+/* Profile panel -- reuses the app's existing .overlay (full-screen dim +
+   centered flex) and .card-panel (white rounded card) pattern, the same
+   one Rules/Scores/My Stats already use reliably. .profile-modal-panel
+   only overrides the colors to match the dark/crimson theme instead of
+   card-panel's default white -- no custom positioning of its own, so it
+   can't drift, get clipped, or let page content bleed through the way the
+   previous anchored-dropdown version repeatedly did. */
+.profile-modal-panel {
+  background: #17171a; color: #e8e8ec; max-width: 320px; width: 100%;
+  border: 1px solid rgba(255,255,255,0.14);
 }
-.profile-menu-panel.hidden { display: none; }
-.profile-menu-panel .signin-row { margin-bottom: 12px; padding-bottom: 10px; }
-.profile-menu-panel .error { margin: 6px 0 0; }
-@keyframes profilePanelIn {
-  from { opacity: 0; transform: translateY(-6px); }
-  to { opacity: 1; transform: translateY(0); }
+.profile-modal-panel h2 { color: #fff; font-size: 18px; text-align: center; }
+.profile-modal-panel label { color: #9a9aa2; }
+.profile-modal-panel input[type=text] {
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
 }
-.profile-menu-backdrop {
-  position: fixed; inset: 0; z-index: 19; background: rgba(0,0,0,0.5);
+.profile-modal-panel .signin-status { color: #9a9aa2; }
+.profile-modal-panel .secondary {
+  background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: #e8e8ec;
 }
-.profile-menu-backdrop.hidden { display: none; }
 
 /* Nudges attention to the avatar itself right after a blocked action (e.g.
    trying to create/join/start without a name yet) -- pairs with the toast
