@@ -152,6 +152,14 @@ app.get('/api/gif-search', async (req, res) => {
 const rooms = new Map(); // roomCode -> Room
 const socketIndex = new Map(); // socket.id -> { roomCode, playerId }
 
+// "Play Online" matchmaking -- queue by desired table size (3-6), matched
+// with strangers the instant enough people are waiting for the same size.
+// Deliberately separate from `rooms`/`socketIndex`: a queued player isn't in
+// any room yet, so there's nothing there for them until they're matched.
+const QUEUE_SIZES = [3, 4, 5, 6];
+const matchQueues = new Map(QUEUE_SIZES.map((n) => [n, []])); // playerCount -> array of queued entries
+const queueIndex = new Map(); // socket.id -> playerCount (which bucket they're in, for cleanup)
+
 // Reduced from 30s -> 20s: with the sound-only "your turn" cue proving easy
 // to miss, a snappier timer keeps a distracted player from stalling the
 // table for too long even before the new visual pulse (client-side) kicks in.
@@ -263,6 +271,31 @@ function broadcastRoom(room) {
   }
 }
 
+// Pushes the CURRENT full list of pending mid-game join requests to the
+// host only -- sent as a complete list (not a diff) every time it changes,
+// so a host who's mid-round and only glances at the banner occasionally
+// always sees an accurate, current picture rather than needing to track a
+// stream of individual add/remove events.
+function notifyHostOfJoinRequest(room) {
+  const host = room.players.get(room.hostPlayerId);
+  if (!host || !host.connected || !host.socketId || !room.pendingJoins) return;
+  const pending = Array.from(room.pendingJoins.entries()).map(([playerId, r]) => ({ playerId, name: r.name }));
+  io.to(host.socketId).emit('join_requests', { pending });
+}
+
+// Shared by both the hard 2-minute timeout and an explicit host Ignore --
+// in both cases the requester is told the same thing and sent back to the
+// landing screen, and the pending record + its timer are cleaned up.
+function denyJoinRequest(room, playerId, reason) {
+  if (!room.pendingJoins || !room.pendingJoins.has(playerId)) return;
+  const entry = room.pendingJoins.get(playerId);
+  clearTimeout(entry.timer);
+  room.pendingJoins.delete(playerId);
+  socketIndex.delete(entry.socketId);
+  io.to(entry.socketId).emit('join_denied', { reason });
+  notifyHostOfJoinRequest(room);
+}
+
 function broadcastGameState(room) {
   if (!room.game) return;
   for (const pid of room.order) {
@@ -273,6 +306,61 @@ function broadcastGameState(room) {
       io.to(p.socketId).emit('game_state', state);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// "Play Online" matchmaking. Pulls exactly `playerCount` entries off the
+// front of that size's queue (assumes the caller already confirmed there are
+// enough), builds a fresh room for them -- same shape as create_room, just
+// with every seat already filled by real strangers instead of one player
+// waiting in a lobby -- and starts the game immediately (no lobby step at
+// all, matching how create_solo_room skips it too).
+function startMatchedRoom(entries) {
+  const code = makeRoomCode();
+  const hostPlayerId = entries[0].playerId; // arbitrary but consistent -- first to queue "hosts" (next-round max-score changes etc.)
+  const room = {
+    code,
+    hostPlayerId,
+    players: new Map(),
+    order: [],
+    phase: 'lobby',
+    game: null,
+    turnTimer: null,
+    turnDeadline: null,
+    dealTimer: null,
+    revealTimer: null,
+    chatHistory: [],
+    statsRecorded: false,
+    pendingJoins: new Map(),
+  };
+  for (const e of entries) {
+    room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null });
+    room.order.push(e.playerId);
+    socketIndex.set(e.socketId, { roomCode: code, playerId: e.playerId });
+    const s = io.sockets.sockets.get(e.socketId);
+    if (s) s.join(code);
+  }
+  rooms.set(code, room);
+  room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
+  room.game.startRound();
+  for (const e of entries) {
+    io.to(e.socketId).emit('queue_matched', { roomCode: code, playerId: e.playerId, chatHistory: room.chatHistory });
+  }
+  beginStartSequence(room, code);
+}
+
+// Checks whether the given queue size now has enough people waiting to fill
+// a table, and if so, matches the first `playerCount` of them immediately.
+// Called after every queue_join AND after queue_fill_bots removes people
+// from a bucket (in case that bucket was already independently ready --
+// shouldn't normally happen since this runs on every join too, but cheap
+// and safe to double-check).
+function tryMatchQueue(playerCount) {
+  const bucket = matchQueues.get(playerCount);
+  if (!bucket || bucket.length < playerCount) return;
+  const entries = bucket.splice(0, playerCount);
+  for (const e of entries) queueIndex.delete(e.socketId);
+  startMatchedRoom(entries);
 }
 
 // ---------------------------------------------------------------------------
@@ -498,6 +586,7 @@ io.on('connection', (socket) => {
         revealTimer: null,
         chatHistory: [],
         statsRecorded: false,
+        pendingJoins: new Map(), // mid-game join requests awaiting host approval -- see join_room below
       };
       room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: firebaseUid || null });
       room.order.push(playerId);
@@ -558,23 +647,192 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ---------------- "Play Online" matchmaking ----------------
+  // Joins the waiting queue for a specific table size. Matches immediately
+  // if enough strangers are already waiting for that same size; otherwise
+  // just confirms they're queued -- the client shows its own waiting screen
+  // and, after a while with no match, offers wait/fill-with-bots/cancel.
+  // Actual matching happens via queue_matched (pushed, not an ack reply),
+  // since a match can land seconds or minutes after this call returns.
+  socket.on('queue_join', ({ playerCount, name, firebaseUid }, ack) => {
+    try {
+      if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
+      const n = Math.round(Number(playerCount));
+      if (!QUEUE_SIZES.includes(n)) throw new Error('Invalid player count for online matchmaking.');
+      if (queueIndex.has(socket.id)) throw new Error('Already in a matchmaking queue.');
+      const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const playerId = makePlayerId();
+      matchQueues.get(n).push({ playerId, socketId: socket.id, name: cleanName, firebaseUid: firebaseUid || null });
+      queueIndex.set(socket.id, n);
+      ack && ack({ ok: true, queued: true, playerId });
+      tryMatchQueue(n);
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('queue_cancel', (_data, ack) => {
+    const n = queueIndex.get(socket.id);
+    if (n !== undefined) {
+      const bucket = matchQueues.get(n);
+      const idx = bucket.findIndex((e) => e.socketId === socket.id);
+      if (idx !== -1) bucket.splice(idx, 1);
+      queueIndex.delete(socket.id);
+    }
+    ack && ack({ ok: true });
+  });
+
+  // Host's choice after the client-side "still waiting" prompt times out:
+  // take everyone currently queued for this exact size (usually just this
+  // one player, occasionally a couple of others who were also waiting) and
+  // start right away, padding whatever's left up to the ORIGINAL target size
+  // with bots -- rather than leaving them stuck waiting indefinitely for
+  // strangers who may never come.
+  socket.on('queue_fill_bots', (_data, ack) => {
+    try {
+      const n = queueIndex.get(socket.id);
+      if (n === undefined) throw new Error('Not currently in a queue.');
+      const bucket = matchQueues.get(n);
+      const idx = bucket.findIndex((e) => e.socketId === socket.id);
+      if (idx === -1) throw new Error('Not currently in a queue.');
+      const entries = bucket.splice(0); // take EVERYONE currently waiting for this size, not just self
+      for (const e of entries) queueIndex.delete(e.socketId);
+
+      const code = makeRoomCode();
+      const hostPlayerId = entries[0].playerId;
+      const room = {
+        code, hostPlayerId, players: new Map(), order: [], phase: 'lobby', game: null,
+        turnTimer: null, turnDeadline: null, dealTimer: null, revealTimer: null,
+        chatHistory: [], statsRecorded: false, pendingJoins: new Map(),
+      };
+      for (const e of entries) {
+        room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null });
+        room.order.push(e.playerId);
+        socketIndex.set(e.socketId, { roomCode: code, playerId: e.playerId });
+        const s = io.sockets.sockets.get(e.socketId);
+        if (s) s.join(code);
+      }
+      let botNum = 1;
+      while (room.order.length < n) {
+        const botId = makePlayerId();
+        room.players.set(botId, { name: `🤖 Bot ${botNum}`, socketId: null, connected: true, isBot: true });
+        room.order.push(botId);
+        botNum += 1;
+      }
+      rooms.set(code, room);
+      room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
+      room.game.startRound();
+      for (const e of entries) {
+        io.to(e.socketId).emit('queue_matched', { roomCode: code, playerId: e.playerId, chatHistory: room.chatHistory });
+      }
+      beginStartSequence(room, code);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
   socket.on('join_room', ({ roomCode, name, firebaseUid }, ack) => {
     try {
       if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
       const code = (roomCode || '').trim().toUpperCase();
       const room = rooms.get(code);
       if (!room) throw new Error('Room not found. Check the code.');
-      if (room.phase !== 'lobby') throw new Error('Game already started in this room.');
       if (room.order.length >= 10) throw new Error('Room is full (max 10 players).');
-
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+
+      // Room hasn't started yet -- exactly the original behavior, join
+      // straight into the lobby, no approval needed.
+      if (room.phase === 'lobby') {
+        const playerId = makePlayerId();
+        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: firebaseUid || null });
+        room.order.push(playerId);
+        socketIndex.set(socket.id, { roomCode: code, playerId });
+        socket.join(code);
+        ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+        broadcastRoom(room);
+        return;
+      }
+
+      if (room.phase === 'starting') throw new Error('Game is starting -- try again in a few seconds.');
+      if (room.phase === 'game_over') throw new Error('This game has already ended.');
+
+      // Mid-game join request: the room is actively 'playing'. Rather than
+      // dropping straight in, this holds as a pending request the host has
+      // to explicitly approve (see admit_join_request/ignore_join_request
+      // below) -- privacy/consent for whoever's already at the table, same
+      // idea as a meeting "waiting room". Not added to room.players/order
+      // yet at all, so they don't show up anywhere in the UI until admitted.
+      if (!room.pendingJoins) room.pendingJoins = new Map();
+      if (room.pendingJoins.size + room.order.length >= 10) throw new Error('Room is full (max 10 players).');
       const playerId = makePlayerId();
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: firebaseUid || null });
-      room.order.push(playerId);
-      socketIndex.set(socket.id, { roomCode: code, playerId });
+      const JOIN_REQUEST_TIMEOUT_MS = 120000; // 2 minutes -- see the "Waiting for host" screen client-side
+      const timer = setTimeout(() => denyJoinRequest(room, playerId, 'timeout'), JOIN_REQUEST_TIMEOUT_MS);
+      room.pendingJoins.set(playerId, {
+        name: cleanName, firebaseUid: firebaseUid || null, socketId: socket.id, requestedAt: Date.now(), timer,
+      });
+      socketIndex.set(socket.id, { roomCode: code, playerId, pending: true });
       socket.join(code);
-      ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+      ack && ack({ ok: true, pending: true, roomCode: code, playerId });
+      notifyHostOfJoinRequest(room);
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('admit_join_request', ({ roomCode, playerId }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const hostEntry = socketIndex.get(socket.id);
+      if (!hostEntry || hostEntry.playerId !== room.hostPlayerId) throw new Error('Only the host can admit players.');
+      if (!room.pendingJoins || !room.pendingJoins.has(playerId)) throw new Error('That request is no longer waiting.');
+      const req = room.pendingJoins.get(playerId);
+      clearTimeout(req.timer);
+      room.pendingJoins.delete(playerId);
+
+      room.players.set(playerId, { name: req.name, socketId: req.socketId, connected: true, isBot: false, firebaseUid: req.firebaseUid });
+      room.order.push(playerId);
+      const sockEntry = socketIndex.get(req.socketId);
+      if (sockEntry) sockEntry.pending = false;
+      // Actual game-engine entry (addPlayer) happens in next_round, right
+      // before startRound() -- never here. addPlayer() requires roundOver,
+      // and admitting can happen at any point in a round (or between
+      // rounds); deferring it to a single place keeps "joins next round, at
+      // the current max score" true no matter when the host actually taps
+      // Admit.
+      io.to(req.socketId).emit('join_admitted', { roomCode, playerId });
       broadcastRoom(room);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // The requester backing out of their own still-pending request (tapping
+  // Cancel on the "Waiting for host" screen) -- distinct from the host's
+  // ignore_join_request below, but shares the same cleanup path.
+  socket.on('cancel_join_request', ({ roomCode, playerId }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.playerId !== playerId) throw new Error('Not your request.');
+      denyJoinRequest(room, playerId, 'cancelled');
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('ignore_join_request', ({ roomCode, playerId }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const hostEntry = socketIndex.get(socket.id);
+      if (!hostEntry || hostEntry.playerId !== room.hostPlayerId) throw new Error('Only the host can respond to join requests.');
+      denyJoinRequest(room, playerId, 'declined');
+      ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
@@ -596,6 +854,12 @@ io.on('connection', (socket) => {
       // genuinely NEW connection for this player, not a same-socket ping.
       const isFreshReconnect = p.socketId !== socket.id || !p.connected;
       p.socketId = socket.id;
+      // If this reconnecting player is the host and someone's currently
+      // waiting to be let in, re-send the banner -- otherwise a host who
+      // refreshes mid-request would lose it until the next unrelated change.
+      if (playerId === room.hostPlayerId && room.pendingJoins && room.pendingJoins.size) {
+        notifyHostOfJoinRequest(room);
+      }
       p.connected = true;
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
@@ -712,6 +976,16 @@ io.on('connection', (socket) => {
           if (!MAX_SCORE_OPTIONS.includes(n)) throw new Error('Invalid max score option.');
           room.game.setEliminationScore(n);
         }
+      }
+
+      // Anyone admitted mid-game (see admit_join_request above) sits in
+      // room.order/room.players already, but was deliberately never added to
+      // the GAME itself until now -- this is the one moment "joins starting
+      // next round" actually happens, right before the deal, at whatever the
+      // current max score is (addPlayer() sets their starting score to the
+      // current highest on the board).
+      for (const pid of room.order) {
+        if (!room.game.playerIds.includes(pid)) room.game.addPlayer(pid);
       }
 
       room.game.startRound();
@@ -922,11 +1196,28 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     rateBuckets.delete(socket.id); // this socket is gone -- no point keeping its rate-limit history around
+    // Clean up matchmaking queue membership too -- someone who closes the
+    // app while waiting for a match shouldn't count toward filling a table.
+    const queuedSize = queueIndex.get(socket.id);
+    if (queuedSize !== undefined) {
+      const bucket = matchQueues.get(queuedSize);
+      const idx = bucket.findIndex((e) => e.socketId === socket.id);
+      if (idx !== -1) bucket.splice(idx, 1);
+      queueIndex.delete(socket.id);
+    }
     const entry = socketIndex.get(socket.id);
     if (!entry) return;
     socketIndex.delete(socket.id);
     const room = rooms.get(entry.roomCode);
     if (!room) return;
+    // A still-pending mid-game join requester who closes the app/loses
+    // connection isn't in room.players at all -- clean up their waiting
+    // request (and its timer) immediately instead of leaving it sitting in
+    // the host's banner for up to 2 minutes for someone who's already gone.
+    if (entry.pending) {
+      denyJoinRequest(room, entry.playerId, 'disconnected');
+      return;
+    }
     const p = room.players.get(entry.playerId);
     if (p) {
       p.connected = false;
