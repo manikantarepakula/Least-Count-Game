@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Privacy Policy - Least Count</title>
+<style>
+  body {
+    font-family: Georgia, 'Times New Roman', serif;
+    background: #f7f5ee;
+    color: #1a1a1a;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 32px 20px 64px;
+    line-height: 1.6;
+  }
+  h1 { font-size: 26px; margin-bottom: 4px; }
+  .updated { color: #666; font-size: 13px; margin-bottom: 32px; }
+  h2 { font-size: 18px; color: #1e5631; margin-top: 32px; }
+  p, li { font-size: 15px; }
+  ul { padding-left: 20px; }
+  a { color: #1e5631; }
+  .contact-box {
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    padding: 16px 20px; margin-top: 32px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Privacy Policy - Least Count</h1>
+<p class="updated">Last updated: August 24, 2026</p>
+
+<p>This Privacy Policy explains what information the Least Count mobile app and website ("Least Count", "we", "us") collects, why we collect it, and how it's used. Least Count is a multiplayer card game developed and operated by an individual developer (contact details below), not a company.</p>
+
+<h2>1. Information We Collect</h2>
+<p>We collect only what's needed to run the game and let you play with friends and strangers:</p>
+<ul>
+  <li><strong>Name:</strong> the display name you type in, or your Google account name if you choose to sign in with Google. This name is visible to other players in your game room.</li>
+  <li><strong>Account identifier:</strong> every player is assigned an anonymous Firebase account automatically, even if you never sign in with Google. If you do sign in with Google, that anonymous account is linked to your Google account (name, email, profile photo) so your stats can follow you across devices.</li>
+  <li><strong>Gameplay data:</strong> games played, rounds, scores, and wins, stored so we can show you your own stats.</li>
+  <li><strong>In-game chat:</strong> text messages and GIFs you send in a game's chat panel are visible to other players in that same room, and stored temporarily for moderation purposes (see Section 5).</li>
+  <li><strong>Usage/analytics data:</strong> general app usage events (e.g. a room was created, a game finished) collected via Firebase/Google Analytics, used only in aggregate to understand how the app is used.</li>
+  <li><strong>Advertising identifiers:</strong> if you're on the free (ad-supported) version, Google AdMob may collect device/advertising identifiers to show ads. If you purchase "Remove Ads," this stops.</li>
+  <li><strong>Purchase records:</strong> if you buy "Remove Ads" or any other in-app item, the purchase is processed entirely by Google Play Billing. We never see or store your payment card details -- we only receive confirmation that a purchase was made, via RevenueCat.</li>
+</ul>
+<p>We do <strong>not</strong> collect your precise location, contacts, photos, or any government ID.</p>
+
+<h2>2. How We Use Your Information</h2>
+<ul>
+  <li>To run the core game: matching you with other players, dealing cards, tracking scores, and letting you rejoin a game in progress.</li>
+  <li>To show your name to other players in your room, so everyone knows whose turn it is.</li>
+  <li>To show you your own game history and stats.</li>
+  <li>To show ads (free version only) and process purchases (if you choose to buy something).</li>
+  <li>To detect abuse: if another player reports inappropriate chat messages, we may review the reported message to decide whether to mute or restrict that account.</li>
+  <li>To understand overall usage patterns and improve the app.</li>
+</ul>
+
+<h2>3. Who We Share Information With</h2>
+<p>We don't sell your information. It's shared only with the service providers that make the app work:</p>
+<ul>
+  <li><strong>Google Firebase</strong> (Authentication, Firestore database, Analytics) -- <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's Privacy Policy</a></li>
+  <li><strong>Google AdMob</strong> (advertising, free version only) -- <a href="https://policies.google.com/technologies/ads" target="_blank" rel="noopener">Google's Ads Policy</a></li>
+  <li><strong>RevenueCat</strong> (in-app purchase management) -- <a href="https://www.revenuecat.com/privacy" target="_blank" rel="noopener">RevenueCat's Privacy Policy</a></li>
+  <li><strong>Google Play Billing</strong> (payment processing) -- your payment details are handled entirely by Google, never by us.</li>
+  <li><strong>Other players in your game room</strong> can see your display name and any chat messages/GIFs you send during that game.</li>
+</ul>
+
+<h2>4. Data Retention and Deletion</h2>
+<p>Your account and gameplay stats are kept for as long as your account is active. If you'd like your data deleted, email us at the address below with your player name and, if known, your account ID -- we'll delete your stored data within a reasonable time.</p>
+
+<h2>5. Chat, Reporting, and Moderation</h2>
+<p>Least Count includes a basic profanity filter and lets players report or mute other players during a game. Reported messages may be reviewed to enforce fair play. Muting only affects what you personally see -- it doesn't notify or restrict the other player.</p>
+
+<h2>6. Children's Privacy</h2>
+<p>Least Count is not directed at children under 13, and we do not knowingly collect personal information from children under 13. If you believe a child has provided us with personal information, please contact us and we'll remove it.</p>
+
+<h2>7. Security</h2>
+<p>We rely on Google Firebase's security infrastructure to store account and game data, and Google Play Billing/RevenueCat for purchases, both of which use industry-standard encryption and access controls.</p>
+
+<h2>8. Your Choices</h2>
+<ul>
+  <li>You can play as a guest without ever signing in with Google.</li>
+  <li>You can mute or report any player during a game.</li>
+  <li>You can request deletion of your data at any time (see Section 4).</li>
+  <li>You can purchase "Remove Ads" to stop seeing advertising identifiers being used for ads.</li>
+</ul>
+
+<h2>9. Changes to This Policy</h2>
+<p>We may update this policy from time to time as the app changes. The "Last updated" date at the top will always reflect the latest version.</p>
+
+<div class="contact-box">
+  <h2 style="margin-top:0;">Contact Us</h2>
+  <p>If you have questions about this Privacy Policy or want to request data deletion, email:<br>
+  <strong>manikantarepakula9999@gmail.com</strong></p>
+</div>
+
+</body>
+</html>
