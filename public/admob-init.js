@@ -19,20 +19,16 @@
 
   const AdMob = window.Capacitor.Plugins.AdMob;
 
-  // Google's official, permanent test banner ad unit ID -- safe to leave
-  // calling this as much as we want during development without generating
-  // real (invalid) impressions/clicks on the real ad unit.
-  //
-  // TODO: once test ads are confirmed working end-to-end on a real device,
-  // swap this for the real ad unit ID: ca-app-pub-1398110480284026/3640352329
-  const BANNER_AD_ID = 'ca-app-pub-3940256099942544/6300978111';
+  // Real, live AdMob banner ad unit ID for this app (test ads confirmed
+  // working end-to-end on a real device, switched over for release).
+  const BANNER_AD_ID = 'ca-app-pub-1398110480284026/3640352329';
 
   let initPromise = null;
   let bannerShown = false;
 
   function ensureInit() {
     if (!initPromise) {
-      initPromise = AdMob.initialize({ initializeForTesting: true }).catch((e) => {
+      initPromise = AdMob.initialize({ initializeForTesting: false }).catch((e) => {
         console.warn('[AdMob] initialize failed:', e && e.message);
       });
     }
