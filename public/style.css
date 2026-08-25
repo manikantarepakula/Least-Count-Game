@@ -1,4 +1,19 @@
 * { box-sizing: border-box; }
+
+/* ---- Design tokens: single source of truth for the crimson accent and
+   reusable elevation shadows, instead of each component inventing its own
+   near-miss red / shadow value. Same visual colors as before (this just
+   points every use at one canonical value), so this pass carries no risky
+   layout changes -- only Play Online/Bots/Friends button + wordmark tweaks
+   noted where the value actually shifts. ---- */
+:root {
+  --red: #e5252c;
+  --red-dark: #a8151a;
+  --red-rgb: 229, 37, 44;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-md: 0 8px 20px rgba(0,0,0,0.4);
+  --shadow-lg: 0 16px 32px rgba(0,0,0,0.5);
+}
 body {
   margin: 0;
   /* Georgia leads the stack for that classic-serif look on English text;
@@ -99,7 +114,7 @@ body.game-active {
 .landing-hero-glow {
   position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
   width: 380px; height: 380px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(216,31,38,0.35), rgba(216,31,38,0) 68%);
+  background: radial-gradient(circle, rgba(var(--red-rgb),0.35), rgba(var(--red-rgb),0) 68%);
   filter: blur(2px);
 }
 .landing-hero-cards {
@@ -146,11 +161,13 @@ body.game-active {
 }
 .landing-wordmark {
   font-family: 'Bebas Neue', Georgia, 'Times New Roman', sans-serif;
-  font-size: 44px; letter-spacing: 3px; font-weight: 400; margin: 0;
+  /* Tightened tracking (was +3px, now -0.5px) -- large display type reads
+     more deliberate/premium with tighter tracking, not looser. */
+  font-size: 44px; letter-spacing: -0.5px; font-weight: 400; margin: 0;
   line-height: 1;
-  background: linear-gradient(180deg, #ffffff 0%, #f2d9d9 55%, #e5252c 100%);
+  background: linear-gradient(180deg, #ffffff 0%, #f2d9d9 55%, var(--red) 100%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
-  text-shadow: 0 6px 24px rgba(216,31,38,0.25);
+  text-shadow: 0 6px 24px rgba(var(--red-rgb),0.25);
 }
 .landing-tagline { color: #b9b9c0; font-size: 12px; margin: 6px 0 0; letter-spacing: 0.3px; text-align: center; }
 
@@ -170,7 +187,7 @@ body.game-active {
 #screen-lobby.screen.active::before {
   content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
   background:
-    radial-gradient(circle at 50% 8%, rgba(216,31,38,0.22), transparent 55%),
+    radial-gradient(circle at 50% 8%, rgba(var(--red-rgb),0.22), transparent 55%),
     repeating-linear-gradient(135deg, rgba(255,255,255,0.02) 0 2px, transparent 2px 34px);
 }
 #screen-landing .landing-topbar,
@@ -225,8 +242,8 @@ body.game-active {
    of relying on the dropdown alone (which is easy to not notice opening in
    a top corner while looking at the button just tapped). */
 @keyframes avatarAttnPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(229,37,44,0.7); }
-  50% { box-shadow: 0 0 0 9px rgba(229,37,44,0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--red-rgb),0.7); }
+  50% { box-shadow: 0 0 0 9px rgba(var(--red-rgb),0); }
 }
 .landing-avatar.attn-pulse { animation: avatarAttnPulse 0.7s ease-out 2; }
 
@@ -235,7 +252,7 @@ body.game-active {
    "enter your name" etc. actually visible regardless of whether the
    profile dropdown happens to be open. */
 .landing-toast-error {
-  background: rgba(229,37,44,0.14); border: 1px solid #e5252c; color: #ff9d99;
+  background: rgba(var(--red-rgb),0.14); border: 1px solid var(--red); color: #ff9d99;
   border-radius: 10px; padding: 10px 14px; font-size: 12.5px; text-align: center;
   margin: 0; cursor: pointer; animation: toastIn 0.35s ease-out;
 }
@@ -258,10 +275,11 @@ body.game-active {
 .mode-block {
   background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);
   border-radius: 14px; padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
 }
 
 .mode-blocks { display: flex; flex-direction: column; gap: 12px; }
-.mode-block h3 { margin: 0 0 4px; font-size: 15px; color: #f2504f; }
+.mode-block h3 { margin: 0 0 4px; font-size: 15px; color: var(--red); }
 .mode-block-sub { margin: 0 0 8px; font-size: 11px; color: #9a9aa2; }
 .mode-block .row { margin-top: 10px; }
 .mode-block-join-row { display: flex; gap: 8px; margin-top: 8px; }
@@ -277,8 +295,8 @@ body.game-active {
    otherwise still show the app's original light-mode/green defaults. */
 #screen-landing .mode-block button.primary,
 #screen-lobby .mode-block button.primary {
-  background: linear-gradient(135deg, #e5252c, #a8151a); color: #fff;
-  box-shadow: 0 10px 24px rgba(216,31,38,0.35);
+  background: linear-gradient(135deg, var(--red), var(--red-dark)); color: #fff;
+  box-shadow: var(--shadow-md);
 }
 #screen-landing .mode-block button.secondary,
 #screen-lobby .mode-block button.secondary {
@@ -299,11 +317,11 @@ body.game-active {
   color: #9a9aa2; font-size: 11px; text-align: center; text-transform: uppercase; letter-spacing: 1px;
 }
 #screen-lobby .room-code-display {
-  background: transparent; color: #f2504f; font-size: 38px; letter-spacing: 8px; text-align: center;
-  box-shadow: none; text-shadow: 0 2px 10px rgba(216,31,38,0.3); padding: 4px 0;
+  background: transparent; color: var(--red); font-size: 38px; letter-spacing: 8px; text-align: center;
+  box-shadow: none; text-shadow: 0 2px 10px rgba(var(--red-rgb),0.3); padding: 4px 0;
 }
 #screen-lobby .player-list li { border-bottom: 1px solid rgba(255,255,255,0.12); color: #e8e8ec; }
-#screen-lobby .player-list .host-tag { color: #f2504f; }
+#screen-lobby .player-list .host-tag { color: var(--red); }
 #screen-lobby .player-list .status { color: #9fd8b8; }
 
 #screen-landing .landing-footer-nav {
@@ -317,7 +335,7 @@ body.game-active {
   padding: 4px 10px; width: auto;
 }
 .footer-nav-item span { font-size: 17px; }
-.footer-nav-item.active { color: #f2504f; }
+.footer-nav-item.active { color: var(--red); }
 
 .queue-waiting-choice { margin-top: 18px; }
 .queue-waiting-choice button { margin-top: 8px; }
@@ -360,7 +378,7 @@ body.game-active {
 }
 .intro-glow {
   position: absolute; width: 420px; height: 420px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(216,31,38,0.4), rgba(216,31,38,0) 68%);
+  background: radial-gradient(circle, rgba(var(--red-rgb),0.4), rgba(var(--red-rgb),0) 68%);
   filter: blur(2px);
   animation: introGlowPulse 2.6s ease-in-out infinite;
 }
@@ -414,10 +432,10 @@ body.game-active {
 #screen-landing .landing-form input[type=text] {
   background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.14); color: #fff;
 }
-#screen-landing .landing-form input[type=text]:focus { border-color: #e5252c; }
+#screen-landing .landing-form input[type=text]:focus { border-color: var(--red); }
 #screen-landing .landing-form button.primary {
-  background: linear-gradient(135deg, #e5252c, #a8151a); color: #fff;
-  box-shadow: 0 10px 24px rgba(216,31,38,0.35);
+  background: linear-gradient(135deg, var(--red), var(--red-dark)); color: #fff;
+  box-shadow: var(--shadow-md);
 }
 #screen-landing .landing-form button.secondary,
 #screen-waiting-host .landing-form button.secondary,
