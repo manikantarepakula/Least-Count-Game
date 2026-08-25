@@ -863,7 +863,42 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .hand-jokers-cards { display: flex; flex-wrap: wrap; gap: 5px; }
 .card.wild-zero { border-color: #d4a017; }
 
-.hand-header { font-size: 12px; margin: 2px 4px; flex-shrink: 0; }
+.hand-header {
+  font-size: 12px; margin: 2px 4px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+
+/* ---- Bots-only "Help me play" assist: a toggle to enable it, then a
+   per-turn button to reveal a suggestion (never auto-plays for you). ---- */
+.help-toggle-row { margin: 2px 4px 4px; flex-shrink: 0; }
+.help-toggle {
+  width: auto; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2);
+  color: #cfead9; font-size: 11.5px; padding: 5px 10px; border-radius: 20px;
+}
+.help-toggle[aria-pressed="true"] {
+  background: rgba(var(--red-rgb),0.18); border-color: var(--red); color: #fff;
+}
+@keyframes helpTogglePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--red-rgb),0.55); }
+  50% { box-shadow: 0 0 0 8px rgba(var(--red-rgb),0); }
+}
+.help-toggle.attn-pulse { animation: helpTogglePulse 1.6s ease-in-out infinite; }
+
+.hint-btn {
+  width: auto; background: rgba(212,160,23,0.18); border: 1px solid #d4a017;
+  color: #ffcb6b; font-size: 11px; padding: 4px 10px; border-radius: 14px;
+}
+.hint-banner {
+  background: rgba(212,160,23,0.14); border: 1px solid #d4a017; color: #ffe3a3;
+  border-radius: 10px; padding: 8px 12px; margin: 0 4px 6px; font-size: 12.5px;
+  line-height: 1.4; flex-shrink: 0;
+}
+.card.hint-suggested {
+  box-shadow: 0 0 0 3px #d4a017, var(--shadow-sm); transform: translateY(-4px);
+}
+#btn-declare.hint-suggested {
+  box-shadow: 0 0 0 3px #d4a017;
+}
 .hand {
   display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 4px;
   /* Sized to actual content (about 2 rows of cards) instead of stretching to
