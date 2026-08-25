@@ -45,15 +45,12 @@ if (!isNative) {
   // start purchases and read its own product catalog, not move money or
   // read other users' data.
   //
-  // TEMPORARY: pointed at the "Test Store" app right now so we can build
-  // and verify the whole purchase flow (button -> purchase -> entitlement
-  // unlocked) using fake, no-money purchases, since the real Google Play
-  // merchant account is still pending Google's video KYC step.
-  //
-  // Real Play Store key (swap back in once the merchant account clears and
-  // the real "remove_ads" product exists in Play Console):
-  //   goog_RYLEYrOOSMJLfryTHvdoOslNOUN
-  const RC_API_KEY = 'test_CpMMMcHaECSeYdgRjrrTxPWUpTh';
+  // Real Play Store production key. NOTE: as of this build, the Google Play
+  // merchant account (video KYC) and the real "remove_ads" in-app product in
+  // Play Console may not be fully finished yet -- if so, getOfferings() will
+  // simply return null / no packages until that setup completes, but the app
+  // will no longer force-close like it did with the test_ key.
+  const RC_API_KEY = 'goog_RYLEYrOOSMJLfryTHvdoOslNOUN';
 
   let configured = false;
   let configuring = null;
