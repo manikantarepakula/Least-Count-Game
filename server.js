@@ -5,7 +5,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
-const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, DECLARE_MAX_VALUE } = require('./game/gameLogic');
+const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, cardValue, DECLARE_MAX_VALUE } = require('./game/gameLogic');
 
 const app = express();
 const server = http.createServer(app);
@@ -212,6 +212,7 @@ const RATE_LIMITS = {
   chat_message: { max: 5, windowMs: 10000 },       // 5 chat/GIF messages per 10s
   play_turn: { max: 10, windowMs: 5000 },           // 10 moves per 5s
   declare: { max: 5, windowMs: 5000 },
+  request_hint: { max: 10, windowMs: 10000 },
   create_room: { max: 5, windowMs: 60000 },
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
@@ -932,6 +933,58 @@ io.on('connection', (socket) => {
       else scheduleTurnTimer(room);
       broadcastGameState(room);
       ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // "Help me play" -- bots-mode-only assist. Reuses the exact same decision
+  // logic the bots themselves act on (autoPickDiscard/declare threshold), but
+  // returns it as a suggestion for the requesting human instead of playing it
+  // automatically. Gated to solo-vs-bots rooms only (no other real player at
+  // the table) so it can never give one human an edge over another in a real
+  // match, and to the requester's own turn only.
+  socket.on('request_hint', ({ roomCode }, ack) => {
+    try {
+      if (isRateLimited(socket, 'request_hint')) throw new Error('Too many actions too quickly. Please slow down.');
+      const room = rooms.get(roomCode);
+      if (!room || !room.game) throw new Error('Game not active.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      const pid = entry.playerId;
+      const game = room.game;
+      if (game.currentPlayer() !== pid) throw new Error('Hints are only available on your own turn.');
+
+      const realPlayers = room.order.filter((id) => !room.players.get(id).isBot);
+      if (realPlayers.length !== 1 || realPlayers[0] !== pid) {
+        throw new Error('Hints are only available in a solo game against bots.');
+      }
+
+      const hand = game.hands[pid] || [];
+      let hint;
+      if (game.chainCount > 0) {
+        const two = hand.find((c) => c.rank === '2');
+        hint = two
+          ? { type: 'discard', cardIds: [two.id], reason: 'Play your 2 to pass the +2 penalty on instead of taking it.' }
+          : { type: 'take_penalty', cardIds: [], reason: `You don't have a 2 -- take the ${game.chainCount * 2}-card penalty now.` };
+      } else {
+        const myValue = handValue(hand, game.roundJokerRank);
+        if (myValue <= DECLARE_MAX_VALUE) {
+          hint = { type: 'declare', cardIds: [], reason: `Your hand is worth ${myValue} -- low enough to declare "Least Count!" now.` };
+        } else {
+          const cardIds = game.autoPickDiscard(pid);
+          const chosen = hand.filter((c) => cardIds.includes(c.id));
+          const rank = chosen[0] && chosen[0].rank;
+          const plural = chosen.length > 1 ? 's' : '';
+          const openCard = game.discardPile[game.discardPile.length - 1];
+          const matchesOpen = openCard && rank === openCard.rank;
+          const groupValue = chosen.reduce((sum, c) => sum + cardValue(c, game.roundJokerRank), 0);
+          hint = matchesOpen
+            ? { type: 'discard', cardIds, reason: `Discard your ${rank}${plural} -- it matches the open card, so no penalty card.` }
+            : { type: 'discard', cardIds, reason: `No match for the open card. Release your ${rank}${plural} (worth ${groupValue} pts) -- your highest-value group, so it costs you the least.` };
+        }
+      }
+      ack && ack({ ok: true, hint });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
