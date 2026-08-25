@@ -232,6 +232,13 @@
   let chatUnread = 0;
   let timerInterval = null;
 
+  // ---- "Help me play" (bots-mode-only assist) ----
+  const HELP_ENABLED_KEY = 'leastcount_help_enabled';
+  const HELP_EVER_USED_KEY = 'leastcount_help_ever_used';
+  let helpEnabled = localStorage.getItem(HELP_ENABLED_KEY) === '1';
+  let currentHint = null; // { type, cardIds, reason } for whoever's turn it currently is
+  let hintTurnKey = null; // identifies which turn currentHint belongs to, so it clears on turn change
+
   // Fixed max-score choices offered to the host, both at game creation and
   // again after every round (mirrors MAX_SCORE_OPTIONS in game/gameLogic.js --
   // the server independently validates against its own copy of this list).
@@ -1086,6 +1093,7 @@
     if (opts.selectable) el.classList.add('selectable');
     if (opts.selected) el.classList.add('selected');
     if (opts.wild) el.classList.add('wild-zero');
+    if (opts.hinted) el.classList.add('hint-suggested');
     return el;
   }
 
@@ -1307,13 +1315,15 @@
   function renderHandTiles(container, groups, isMyTurn, game, duringChain) {
     container.innerHTML = '';
     const wildRank = game.roundJokerRank;
+    const hintCardIds = (currentHint && currentHint.type !== 'declare') ? currentHint.cardIds : null;
     groups.forEach((g) => {
       const rep = g.cards[0];
       let selectable = isMyTurn && !game.roundOver;
       if (duringChain) selectable = selectable && g.rank === '2';
       const allSelected = g.cards.every((c) => selectedIds.has(c.id));
       const isWild = rep.rank !== 'JOKER' && wildRank && rep.rank === wildRank;
-      const el = cardEl(rep, { selectable, selected: allSelected, wild: isWild });
+      const hinted = !!(hintCardIds && hintCardIds.length && g.cards.some((c) => hintCardIds.includes(c.id)));
+      const el = cardEl(rep, { selectable, selected: allSelected, wild: isWild, hinted });
       if (g.cards.length > 1) {
         const badge = document.createElement('span');
         badge.className = 'card-count-badge';
@@ -1401,6 +1411,40 @@
     discardBtn.classList.toggle('hidden', duringChain);
     declareBtn.classList.toggle('hidden', duringChain);
 
+    // "Help me play" -- only ever shown in a solo game against bots (no
+    // other real player at the table), never in Play Online/Friends.
+    const soloBotMode = !!(latestRoom && latestRoom.players.filter((p) => !p.isBot).length === 1);
+    const helpToggleRow = document.getElementById('help-toggle-row');
+    const helpToggleBtn = document.getElementById('btn-help-toggle');
+    helpToggleRow.classList.toggle('hidden', !soloBotMode);
+    if (soloBotMode) {
+      helpToggleBtn.setAttribute('aria-pressed', String(helpEnabled));
+      helpToggleBtn.classList.toggle(
+        'attn-pulse',
+        !helpEnabled && localStorage.getItem(HELP_EVER_USED_KEY) !== '1',
+      );
+    }
+
+    // Clear any hint that belonged to a now-past turn (hand size, current
+    // player, chain state, or round changing all mean the old hint is stale).
+    const turnKey = `${game.currentPlayer}|${hand.length}|${game.chainCount}|${game.roundNumber}`;
+    if (turnKey !== hintTurnKey) {
+      currentHint = null;
+      hintTurnKey = turnKey;
+    }
+
+    const showHintBtn = document.getElementById('btn-show-hint');
+    const hintBanner = document.getElementById('hint-banner');
+    const canHint = soloBotMode && helpEnabled && isMyTurn && !game.roundOver;
+    showHintBtn.classList.toggle('hidden', !(canHint && !currentHint));
+    hintBanner.classList.toggle('hidden', !(canHint && currentHint));
+    if (canHint && currentHint) {
+      document.getElementById('hint-text').textContent = '💡 ' + currentHint.reason;
+      if (currentHint.type === 'declare') declareBtn.classList.add('hint-suggested');
+    } else {
+      declareBtn.classList.remove('hint-suggested');
+    }
+
     // Every round, once it's over, show the merged result screen -- podium,
     // everyone's revealed cards, and the round-score math, all in one place
     // (see showRoundResult / renderHandRevealRows). On the final round this
@@ -1454,6 +1498,23 @@
   document.getElementById('btn-take-penalty').onclick = () => {
     socket.emit('play_turn', { roomCode: myRoomCode, cardIds: [] }, (res) => {
       if (!res.ok) setGameError(res.error);
+    });
+  };
+
+  document.getElementById('btn-help-toggle').onclick = () => {
+    helpEnabled = !helpEnabled;
+    localStorage.setItem(HELP_ENABLED_KEY, helpEnabled ? '1' : '0');
+    localStorage.setItem(HELP_EVER_USED_KEY, '1'); // stop pulsing once they've touched it, on or off
+    currentHint = null;
+    renderGame(latestGame);
+  };
+
+  document.getElementById('btn-show-hint').onclick = () => {
+    socket.emit('request_hint', { roomCode: myRoomCode }, (res) => {
+      if (!res.ok) return setGameError(res.error);
+      currentHint = res.hint;
+      setGameError('');
+      renderGame(latestGame);
     });
   };
 
