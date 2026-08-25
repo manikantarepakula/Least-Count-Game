@@ -228,8 +228,21 @@
     <div id="hand-jokers" class="hand-jokers-cards"></div>
   </div>
 
+  <!-- Bots-only assist: reuses the same decision logic the bots themselves
+       play with, but shows it as a suggestion for the human to act on
+       instead of auto-playing. Only ever shown in a solo-vs-bots game (no
+       other real player at the table), so it never gives anyone an edge
+       over a real opponent. -->
+  <div id="help-toggle-row" class="help-toggle-row hidden">
+    <button id="btn-help-toggle" class="help-toggle" type="button" aria-pressed="false">🎓 Help me play</button>
+  </div>
+  <div id="hint-banner" class="hint-banner hidden">
+    <span id="hint-text"></span>
+  </div>
+
   <div class="hand-header">
     <span>Your cards (మీ కార్డులు) (Value: <b id="hand-value">0</b>)</span>
+    <button id="btn-show-hint" class="hint-btn hidden" type="button">💡 Show hint</button>
   </div>
   <div id="hand" class="hand"></div>
 
