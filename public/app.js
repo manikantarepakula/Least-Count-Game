@@ -233,9 +233,7 @@
   let timerInterval = null;
 
   // ---- "Help me play" (bots-mode-only assist) ----
-  const HELP_ENABLED_KEY = 'leastcount_help_enabled';
   const HELP_EVER_USED_KEY = 'leastcount_help_ever_used';
-  let helpEnabled = localStorage.getItem(HELP_ENABLED_KEY) === '1';
   let currentHint = null; // { type, cardIds, reason } for whoever's turn it currently is
   let hintTurnKey = null; // identifies which turn currentHint belongs to, so it clears on turn change
 
@@ -1412,18 +1410,9 @@
     declareBtn.classList.toggle('hidden', duringChain);
 
     // "Help me play" -- only ever shown in a solo game against bots (no
-    // other real player at the table), never in Play Online/Friends.
+    // other real player at the table), never in Play Online/Friends. One
+    // button, tap any turn -- no separate on/off toggle needed.
     const soloBotMode = !!(latestRoom && latestRoom.players.filter((p) => !p.isBot).length === 1);
-    const helpToggleRow = document.getElementById('help-toggle-row');
-    const helpToggleBtn = document.getElementById('btn-help-toggle');
-    helpToggleRow.classList.toggle('hidden', !soloBotMode);
-    if (soloBotMode) {
-      helpToggleBtn.setAttribute('aria-pressed', String(helpEnabled));
-      helpToggleBtn.classList.toggle(
-        'attn-pulse',
-        !helpEnabled && localStorage.getItem(HELP_EVER_USED_KEY) !== '1',
-      );
-    }
 
     // Clear any hint that belonged to a now-past turn (hand size, current
     // player, chain state, or round changing all mean the old hint is stale).
@@ -1435,8 +1424,11 @@
 
     const showHintBtn = document.getElementById('btn-show-hint');
     const hintBanner = document.getElementById('hint-banner');
-    const canHint = soloBotMode && helpEnabled && isMyTurn && !game.roundOver;
+    const canHint = soloBotMode && isMyTurn && !game.roundOver;
     showHintBtn.classList.toggle('hidden', !(canHint && !currentHint));
+    if (canHint && !currentHint) {
+      showHintBtn.classList.toggle('attn-pulse', localStorage.getItem(HELP_EVER_USED_KEY) !== '1');
+    }
     hintBanner.classList.toggle('hidden', !(canHint && currentHint));
     if (canHint && currentHint) {
       document.getElementById('hint-text').textContent = '💡 ' + currentHint.reason;
@@ -1501,15 +1493,8 @@
     });
   };
 
-  document.getElementById('btn-help-toggle').onclick = () => {
-    helpEnabled = !helpEnabled;
-    localStorage.setItem(HELP_ENABLED_KEY, helpEnabled ? '1' : '0');
-    localStorage.setItem(HELP_EVER_USED_KEY, '1'); // stop pulsing once they've touched it, on or off
-    currentHint = null;
-    renderGame(latestGame);
-  };
-
   document.getElementById('btn-show-hint').onclick = () => {
+    localStorage.setItem(HELP_EVER_USED_KEY, '1'); // stop pulsing once they've tapped it once, ever
     socket.emit('request_hint', { roomCode: myRoomCode }, (res) => {
       if (!res.ok) return setGameError(res.error);
       currentHint = res.hint;
