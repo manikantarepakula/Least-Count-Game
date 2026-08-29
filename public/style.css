@@ -981,19 +981,26 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .full-scorecard { margin: 4px 0 8px; }
 .scorecard-hint { text-align: center; color: #999; font-size: 11px; margin: 0 0 8px; }
 .scorecard-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-#scorecard-table {
+/* Shared by both #scorecard-table (in-game Scores overlay) and
+   #scorecard-table-rr (post-round result screen) -- a class instead of an
+   ID selector so the exact same styling applies to both instances. */
+#scorecard-table, #scorecard-table-rr {
   border-collapse: collapse; font-size: 12.5px; white-space: nowrap; width: 100%;
 }
-#scorecard-table th, #scorecard-table td { padding: 6px 8px; text-align: center; }
-#scorecard-table th { color: #666; font-weight: 600; border-bottom: 2px solid #eee; font-size: 11px; }
-#scorecard-table th:first-child, #scorecard-table td:first-child {
+#scorecard-table th, #scorecard-table td,
+#scorecard-table-rr th, #scorecard-table-rr td { padding: 6px 8px; text-align: center; }
+#scorecard-table th, #scorecard-table-rr th { color: #666; font-weight: 600; border-bottom: 2px solid #eee; font-size: 11px; }
+#scorecard-table th:first-child, #scorecard-table td:first-child,
+#scorecard-table-rr th:first-child, #scorecard-table-rr td:first-child {
   position: sticky; left: 0; background: #fff; text-align: left;
   color: #1a1a1a; font-weight: 600; box-shadow: 2px 0 4px rgba(0,0,0,0.06);
 }
-#scorecard-table th:last-child, #scorecard-table td:last-child {
+#scorecard-table th:last-child, #scorecard-table td:last-child,
+#scorecard-table-rr th:last-child, #scorecard-table-rr td:last-child {
   font-weight: 700; border-left: 2px solid #eee;
 }
-#scorecard-table tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
+#scorecard-table tr:not(:last-child) td,
+#scorecard-table-rr tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
 .scorecard-out { color: #c0392b; font-size: 9px; font-weight: 700; margin-left: 3px; }
 .scorecard-dash { color: #ccc; }
 
