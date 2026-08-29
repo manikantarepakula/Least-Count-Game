@@ -289,8 +289,19 @@ function pickNextHost(room, excludePlayerId) {
     const pl = room.players.get(id);
     return !!(pl && pl.connected && !pl.isBot);
   };
+  // Last-resort fallback must still never be a bot -- if every human has
+  // disconnected (e.g. the sole human in a solo-bots room), host is left
+  // pointing at whichever human it already was (via the null return below,
+  // which both call sites treat as "leave hostPlayerId unchanged") so it's
+  // instantly valid again the moment that human reconnects, instead of
+  // getting stuck assigned to a bot that never takes an action to hand it
+  // off again.
+  const isHuman = (id) => {
+    const pl = room.players.get(id);
+    return !!(pl && !pl.isBot);
+  };
   const candidates = room.order.filter((id) => id !== excludePlayerId);
-  return candidates.find(isActive) || candidates.find(isConnectedHuman) || candidates[0] || null;
+  return candidates.find(isActive) || candidates.find(isConnectedHuman) || candidates.find(isHuman) || null;
 }
 
 function broadcastRoom(room) {
