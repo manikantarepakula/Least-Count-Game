@@ -10,21 +10,47 @@
   --red: #e5252c;
   --red-dark: #a8151a;
   --red-rgb: 229, 37, 44;
+  /* One jade canvas for the entire app (replaces the old near-black
+     landing/lobby, bright-green felt body background, plain white modals,
+     and light-cream round-result/scorecard -- four different systems that
+     used to make each screen look like a different app). Deep, slightly
+     blue-leaning green rather than a generic bright "poker felt" green, so
+     it still reads as a card table to anyone who plays this genre without
+     being a copy of every other rummy/teen-patti app's default green. */
+  --jade-bg: #123d30;
+  --jade-bg-dark: #081f19;
+  --jade-panel: #0d2a22;
+  --jade-panel-alt: #0a231c;
+  --jade-border: rgba(255,255,255,0.14);
+  --text-light: #e8e6ec;
+  --text-muted: #9fc4b5;
+  /* Two-tier gold: bright for headings/highlights/score moments, a richer
+     deep gold reserved for the declare button -- never the same value
+     reused for both roles. */
+  --gold: #d4a017;
+  --gold-bright: #f2c14e;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
   --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
   --shadow-md: 0 8px 20px rgba(0,0,0,0.4);
   --shadow-lg: 0 16px 32px rgba(0,0,0,0.5);
 }
 body {
   margin: 0;
-  /* Georgia leads the stack for that classic-serif look on English text;
-     it has no Telugu glyphs, so the browser automatically falls through
-     to Noto Sans Telugu (and system defaults) for Telugu characters --
-     no separate rule needed to keep that text readable. */
-  font-family: Georgia, 'Times New Roman', 'Noto Sans Telugu', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: radial-gradient(circle at top, #1e5631, #0b2e1a);
-  color: #f0f0f0;
+  /* Georgia leads the stack for that classic-serif look on English text --
+     Telugu support is no longer needed since all Telugu text was removed. */
+  font-family: Georgia, 'Times New Roman', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: radial-gradient(circle at top, var(--jade-bg), var(--jade-bg-dark));
+  color: var(--text-light);
   min-height: 100vh;
 }
+.icon {
+  width: 18px; height: 18px; display: inline-block; vertical-align: -4px;
+  flex-shrink: 0;
+}
+button .icon { margin-right: 6px; }
+button .icon:only-child { margin-right: 0; }
 
 /* On mobile, 100vh can mean the LARGER viewport (as if the address bar were
    hidden), taller than what's actually visible. That leftover min-height
@@ -41,10 +67,19 @@ body.game-active {
 .screen { display: none; min-height: 100vh; padding: 16px; }
 .screen.active { display: block; }
 
-/* Game screen fits one viewport height, no page scroll, on any device */
+/* Game screen fits one viewport height, no page scroll, on any device.
+   justify-content:center matters on screens taller than the oval table's own
+   max-height cap below (a big desktop monitor, or a modern tall-aspect-ratio
+   phone like a Pixel) -- on a SHORT screen the oval's flex-grow already
+   consumes all available room before centering ever gets a say, so this
+   changes nothing there. It only kicks in once the oval hits its cap and
+   stops growing, and instead of the leftover room piling up as dead space
+   below the action buttons, it gets split evenly as breathing room above
+   and below the whole table+hand+buttons group. */
 #screen-game.screen.active {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   min-height: 0;
   height: 100vh;
   height: 100dvh;
@@ -53,13 +88,14 @@ body.game-active {
 }
 
 .card-panel {
-  background: #ffffff;
-  color: #1a1a1a;
-  border-radius: 16px;
+  background: var(--jade-panel);
+  color: var(--text-light);
+  border: 1px solid var(--jade-border);
+  border-radius: var(--radius-lg);
   padding: 24px;
   max-width: 420px;
   margin: 24px auto;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  box-shadow: var(--shadow-lg);
 }
 
 /* ---- Landing / lobby "tabletop hero" screens ---- */
@@ -73,7 +109,7 @@ body.game-active {
 .hero-felt {
   position: absolute; top: -150px; left: 50%; transform: translateX(-50%);
   width: 420px; height: 420px; border-radius: 50%;
-  background: radial-gradient(circle, #1f6b3a, #0d3319 70%);
+  background: radial-gradient(circle, var(--jade-bg), var(--jade-bg-dark) 70%);
 }
 .hero-card {
   position: absolute; top: 46px; left: 50%;
@@ -88,7 +124,7 @@ body.game-active {
 .hero-card-3 { transform: translate(46%, 2px) rotate(-23deg); color: #c0392b; }
 .hero-fade {
   position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(11,46,26,0) 0%, rgba(11,46,26,0.92) 55%, #0b2e1a 78%);
+  background: linear-gradient(180deg, rgba(8,31,25,0) 0%, rgba(8,31,25,0.92) 55%, var(--jade-bg-dark) 78%);
 }
 .hero-content {
   position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; padding: 0 16px;
@@ -101,12 +137,12 @@ body.game-active {
    etc.) -- scoped under #screen-landing throughout so nothing here leaks
    into the lobby. Netflix-style bold dark backdrop + a chess.com-style
    glossy floating card visual as the hero, instead of a green felt circle. ---- */
-#screen-landing.screen.active { background: #08080a; }
+#screen-landing.screen.active { background: var(--jade-bg-dark); }
 
 .landing-hero {
   position: relative; height: 360px; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
-  background: #08080a;
+  background: var(--jade-bg-dark);
 }
 /* Soft crimson glow radiating from behind the card fan -- the one spot of
    color in an otherwise near-black hero, so the cards and wordmark read as
@@ -154,17 +190,20 @@ body.game-active {
 }
 .landing-hero-fade {
   position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(8,8,10,0) 0%, rgba(8,8,10,0.85) 60%, #08080a 88%);
+  background: linear-gradient(180deg, rgba(8,31,25,0) 0%, rgba(8,31,25,0.85) 60%, var(--jade-bg-dark) 88%);
 }
 .landing-hero-content {
   position: relative; text-align: center; padding: 0 16px 14px; z-index: 4;
 }
 .landing-wordmark {
-  font-family: 'Bebas Neue', Georgia, 'Times New Roman', sans-serif;
-  /* Tightened tracking (was +3px, now -0.5px) -- large display type reads
-     more deliberate/premium with tighter tracking, not looser. */
-  font-size: 44px; letter-spacing: -0.5px; font-weight: 400; margin: 0;
-  line-height: 1;
+  /* Cinzel -- Roman-inscription capitals, a regal/imperial display face --
+     reserved exclusively for this one wordmark, never used for body text or
+     headings elsewhere, so it stays a distinctive brand moment rather than
+     getting diluted. Cinzel wants open tracking (unlike Bebas Neue, which
+     wanted it tight), so letter-spacing goes positive here. */
+  font-family: 'Cinzel', Georgia, 'Times New Roman', serif;
+  font-size: 40px; letter-spacing: 1.5px; font-weight: 800; margin: 0;
+  line-height: 1.1;
   background: linear-gradient(180deg, #ffffff 0%, #f2d9d9 55%, var(--red) 100%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
   text-shadow: 0 6px 24px rgba(var(--red-rgb),0.25);
@@ -180,7 +219,7 @@ body.game-active {
    so it doesn't stretch edge-to-edge on a wide monitor. ---- */
 #screen-landing.screen.active,
 #screen-lobby.screen.active {
-  background: #08080a; position: relative; overflow: hidden;
+  background: var(--jade-bg-dark); position: relative; overflow: hidden;
   display: flex; flex-direction: column; min-height: 100vh;
 }
 #screen-landing.screen.active::before,
@@ -222,10 +261,7 @@ body.game-active {
    card-panel's default white -- no custom positioning of its own, so it
    can't drift, get clipped, or let page content bleed through the way the
    previous anchored-dropdown version repeatedly did. */
-.profile-modal-panel {
-  background: #17171a; color: #e8e8ec; max-width: 320px; width: 100%;
-  border: 1px solid rgba(255,255,255,0.14);
-}
+.profile-modal-panel { max-width: 320px; width: 100%; }
 .profile-modal-panel h2 { color: #fff; font-size: 18px; text-align: center; }
 .profile-modal-panel label { color: #9a9aa2; }
 .profile-modal-panel input[type=text] {
@@ -334,7 +370,8 @@ body.game-active {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   padding: 4px 10px; width: auto;
 }
-.footer-nav-item span { font-size: 17px; }
+.footer-nav-item .nav-icon { width: 20px; height: 20px; display: flex; }
+.footer-nav-item .icon { width: 20px; height: 20px; margin: 0; }
 .footer-nav-item.active { color: var(--red); }
 
 .queue-waiting-choice { margin-top: 18px; }
@@ -365,14 +402,14 @@ body.game-active {
 /* ---- 3-second intro splash (matches the reference chess.com launch clip
    the user sent: solid near-black screen, one simple mark centered and held,
    then a quick cut/fade straight into the real app underneath -- no busy
-   motion, no separate loading text). Same #08080a backdrop as the landing
+   motion, no separate loading text). Same jade-bg-dark backdrop as the landing
    hero so the fade-out is seamless with zero color flash. Pure CSS, timed
    entirely with animation-delay so it can never get stuck open even if JS
    is slow to attach anything. ---- */
 #screen-intro {
   position: fixed; inset: 0; z-index: 999;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  background: #08080a; overflow: hidden;
+  background: var(--jade-bg-dark); overflow: hidden;
   animation: introFadeOut 0.6s ease forwards;
   animation-delay: 2.2s;
 }
@@ -450,7 +487,7 @@ body.game-active {
    backdrop and heading color so the whole flow reads as one continuous
    experience instead of snapping back to the lobby's green theme mid-flow. */
 #screen-waiting-host.screen.active,
-#screen-queue-waiting.screen.active { background: #08080a; }
+#screen-queue-waiting.screen.active { background: var(--jade-bg-dark); }
 #screen-waiting-host .landing-form h2,
 #screen-queue-waiting .landing-form h2 { color: #fff; }
 
@@ -460,16 +497,16 @@ body.game-active {
   background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
 }
 .landing-form input[type=text]::placeholder { color: rgba(255,255,255,0.4); }
-.landing-form input[type=text]:focus { border-color: #d4a017; }
-.landing-form button.primary { background: #d4a017; color: #1a1a1a; }
+.landing-form input[type=text]:focus { border-color: var(--gold); }
+.landing-form button.primary { background: var(--gold); color: #1a1a1a; }
 .landing-form button.secondary {
-  background: transparent; border: 1.5px solid #d4a017; color: #d4a017;
+  background: transparent; border: 1.5px solid var(--gold); color: var(--gold);
 }
 .landing-form .divider { color: #6ba889; }
 .landing-form .hint { color: #9fd8b8; }
 .landing-form .error { color: #ff8a80; }
 .landing-form h3 {
-  color: #d4a017; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--gold); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
   margin: 20px 0 8px;
 }
 .landing-form .room-code-label {
@@ -477,19 +514,23 @@ body.game-active {
   text-shadow: 0 1px 3px rgba(0,0,0,0.6); margin-top: 4px;
 }
 .landing-form .room-code-display {
-  background: transparent; color: #ffcb6b; font-size: 38px; letter-spacing: 8px;
+  background: transparent; color: var(--gold-bright); font-size: 38px; letter-spacing: 8px;
   box-shadow: none; text-shadow: 0 2px 10px rgba(0,0,0,0.4); padding: 4px 0;
 }
 .landing-form .player-list li { border-bottom: 1px solid rgba(255,255,255,0.12); }
-.landing-form .player-list .host-tag { color: #ffcb6b; }
+.landing-form .player-list .host-tag { color: var(--gold-bright); }
 .landing-form .player-list .status { color: #6ba889; }
 .landing-form .leave-btn { border-color: #c0392b; color: #e0736a; }
 
+/* The native <select> stays in the DOM for its value/behavior (see
+   initDropdown() in app.js) but is visually replaced by the .dd themed
+   button+list below it, so its own appearance barely matters -- kept
+   reasonably sane here only as a fallback if JS hasn't run yet. */
 select {
-  width: 100%; padding: 12px; font-size: 16px; border-radius: 10px;
-  border: 1px solid #ccc; background: #fff; color: #1a1a1a; outline: none;
+  width: 100%; padding: 12px; font-size: 16px; border-radius: var(--radius-sm);
+  border: 1px solid var(--jade-border); background: var(--jade-panel-alt); color: var(--text-light); outline: none;
 }
-select:focus { border-color: #1e5631; }
+select:focus { border-color: var(--gold); }
 .landing-form select {
   background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
 }
@@ -501,6 +542,39 @@ select:focus { border-color: #1e5631; }
 .solo-panel { margin: 12px 0; }
 .solo-panel.hidden { display: none; }
 .solo-panel label { color: #9fd8b8; }
+
+/* ---- Custom themed dropdown (replaces the native <select> UI everywhere --
+   see initDropdown()/syncDropdown() in app.js). The <select> itself is
+   pushed off-screen rather than display:none, so it stays focusable/
+   readable to a screen reader and keeps working as the source of truth for
+   .value that the rest of app.js already reads/writes. ---- */
+.dd { position: relative; }
+.dd-native-select {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+.dd-toggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; font-size: 15px; border-radius: var(--radius-sm);
+  border: 1px solid var(--jade-border); background: var(--jade-panel-alt); color: var(--text-light);
+  cursor: pointer; font-family: inherit; font-weight: 600;
+}
+.dd-toggle[aria-expanded="true"] { border-color: var(--gold); }
+.dd-chevron { width: 16px; height: 16px; flex-shrink: 0; transition: transform 0.15s; }
+.dd-toggle[aria-expanded="true"] .dd-chevron { transform: rotate(180deg); }
+.dd-list {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30;
+  background: var(--jade-panel); border: 1px solid var(--jade-border);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-md);
+  list-style: none; margin: 0; padding: 4px; max-height: 240px; overflow-y: auto;
+}
+.dd-list.hidden { display: none; }
+.dd-list li {
+  padding: 9px 12px; border-radius: 6px; font-size: 14px; color: var(--text-light);
+  cursor: pointer;
+}
+.dd-list li:hover, .dd-list li:focus { background: rgba(255,255,255,0.08); outline: none; }
+.dd-list li[aria-selected="true"] { background: rgba(212,160,23,0.18); color: var(--gold-bright); font-weight: 700; }
 
 .rules-btn { margin-top: 14px; font-size: 13px; padding: 9px; }
 
@@ -521,40 +595,49 @@ select:focus { border-color: #1e5631; }
 }
 
 .rules-panel { max-width: 480px; width: 92vw; text-align: left; }
-.rules-panel h2 { text-align: center; }
+.rules-panel h2 { text-align: center; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .rules-body { max-height: 60vh; overflow-y: auto; padding-right: 4px; margin-bottom: 14px; }
 .rules-item { margin-bottom: 14px; }
 .rules-item:last-child { margin-bottom: 0; }
-.rules-heading { font-weight: 700; color: #1e5631; font-size: 14px; margin-bottom: 3px; }
-.rules-item p { margin: 0; font-size: 13px; line-height: 1.45; color: #333; }
+/* Gold marks a heading/highlight moment throughout the app -- a rules
+   section title counts, same role as a score or achievement callout. */
+.rules-heading { font-weight: 700; color: var(--gold-bright); font-size: 14px; margin-bottom: 3px; }
+.rules-item p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--text-light); }
 
 h1 { text-align: center; margin: 0 0 4px; font-size: 28px; }
 h2 { margin-top: 0; }
-.subtitle { text-align: center; color: #666; margin-top: 0; }
+.subtitle { text-align: center; color: var(--text-muted); margin-top: 0; }
 
-label { display: block; font-size: 13px; margin: 14px 0 4px; color: #444; }
+label { display: block; font-size: 13px; margin: 14px 0 4px; color: var(--text-muted); }
 input[type=text] {
-  width: 100%; padding: 12px; font-size: 18px; border-radius: 10px;
-  border: 1px solid #ccc; outline: none;
+  width: 100%; padding: 12px; font-size: 18px; border-radius: var(--radius-sm);
+  border: 1px solid var(--jade-border); background: var(--jade-panel-alt); color: var(--text-light); outline: none;
 }
-input[type=text]:focus { border-color: #1e5631; }
+input[type=text]:focus { border-color: var(--gold); }
+input[type=text]::placeholder { color: var(--text-muted); }
 
 .row { margin-top: 16px; }
 button {
-  width: 100%; padding: 14px; font-size: 16px; border-radius: 10px;
+  width: 100%; padding: 14px; font-size: 16px; border-radius: var(--radius-sm);
   border: none; cursor: pointer; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
 }
-button.primary { background: #1e5631; color: white; }
-button.secondary { background: #e8e8e8; color: #222; }
-button.danger { background: #c0392b; color: white; margin-top: 8px; }
-button.declare { background: #d4a017; color: #1a1a1a; }
+/* Primary = the main call-to-action on a screen -- always red (action /
+   urgency), never a screen-specific color. Declare = a scoring moment, so
+   it keeps the deep-gold token. Secondary = a plain ghost button everywhere
+   now that every screen shares the same dark canvas, instead of the old
+   light-gray fill that only made sense back when some screens were white. */
+button.primary { background: linear-gradient(135deg, var(--red), var(--red-dark)); color: #fff; box-shadow: var(--shadow-md); }
+button.secondary { background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: var(--text-light); }
+button.danger { background: var(--red-dark); color: white; margin-top: 8px; }
+button.declare { background: var(--gold); color: #1a1a1a; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
-button.tiny { width: auto; padding: 6px 12px; font-size: 12px; }
-button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c0392b; margin-top: 10px; }
+button.tiny { width: auto; padding: 8px 14px; font-size: 13px; }
+button.leave-btn { background: transparent; color: var(--red); border: 1px solid var(--red); margin-top: 10px; }
 
-.divider { text-align: center; margin: 20px 0; color: #999; font-size: 12px; }
-.error { color: #c0392b; font-size: 13px; min-height: 16px; }
-.hint { color: #777; font-size: 12px; text-align: center; }
+.divider { text-align: center; margin: 20px 0; color: var(--text-muted); font-size: 12px; }
+.error { color: #ff8a80; font-size: 13px; min-height: 16px; }
+.hint { color: var(--text-muted); font-size: 12px; text-align: center; }
 
 .room-code-row {
   display: flex; align-items: stretch; gap: 8px; margin: 8px 0;
@@ -562,7 +645,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .room-code-display {
   flex: 1; min-width: 0;
   font-size: 40px; letter-spacing: 8px; text-align: center; font-weight: 800;
-  background: #f0f0f0; border-radius: 12px; padding: 12px 4px; margin: 0;
+  background: var(--jade-panel-alt); color: var(--text-light); border-radius: var(--radius-md); padding: 12px 4px; margin: 0;
   overflow: hidden;
 }
 /* Small square icon buttons, same look as the other icon-btns (mute, remove
@@ -580,12 +663,12 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 
 .player-list { list-style: none; padding: 0; }
 .player-list li {
-  padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between;
+  padding: 10px; border-bottom: 1px solid var(--jade-border); display: flex; justify-content: space-between;
   position: relative; /* anchors the report/mute popover for tappable rows */
 }
 .player-list li.tappable { cursor: pointer; }
-.player-list .status { font-size: 11px; color: #999; }
-.player-list .host-tag { color: #1e5631; font-weight: 700; font-size: 11px; }
+.player-list .status { font-size: 11px; color: var(--text-muted); }
+.player-list .host-tag { color: var(--gold-bright); font-weight: 700; font-size: 11px; }
 
 /* ---------------- Game screen ---------------- */
 .game-top {
@@ -594,11 +677,21 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .top-actions { display: flex; gap: 6px; align-items: center; }
 .mute-btn { padding: 6px 9px !important; font-size: 13px !important; line-height: 1; }
+.mute-btn .icon { width: 16px; height: 16px; margin: 0; }
 
+/* Floating, not in the normal document flow -- and crucially, a z-index
+   above .chat-panel's (25), so the countdown stays visible even if chat is
+   reopened mid-turn instead of getting buried under it (see issue #5: the
+   chat panel used to be able to cover this entirely, and the auto-minimize
+   in app.js only handles the moment your turn STARTS, not every subsequent
+   tap of the chat bubble during that turn). */
 .turn-timer {
+  position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 30;
   text-align: center; font-size: 12px; font-weight: 700;
-  background: rgba(0,0,0,0.35); border-radius: 20px; padding: 3px 10px;
-  width: fit-content; margin: 2px auto; transition: color 0.2s; flex-shrink: 0;
+  background: rgba(0,0,0,0.55); border: 1px solid var(--jade-border);
+  border-radius: 20px; padding: 4px 12px;
+  width: fit-content; transition: color 0.2s;
+  box-shadow: var(--shadow-sm);
 }
 .turn-timer.low { color: #ff6b6b; }
 .turn-timer.hidden { display: none; }
@@ -609,12 +702,24 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
    This is now the flex-grow element in the game screen's column layout --
    it absorbs whatever vertical space the hand row (below) isn't using,
    instead of that space sitting empty. Still capped by max-height/max-width
-   so it can't grow unreasonably large on tall/wide screens. */
+   so it can't grow unreasonably large on tall/wide screens -- raised from
+   the original 400px (tuned for a fairly short phone) to 560px so a big
+   monitor or a modern tall-screened phone (Pixel-class, 900px+ of usable
+   height) gets a visibly bigger table instead of just more empty margin;
+   any space left over past this cap is now centered by #screen-game's
+   justify-content instead of dumped below the action buttons. */
 .oval-table {
   position: relative;
   width: auto;
-  max-height: min(48vh, 400px);
-  max-width: 94vw;
+  max-height: min(56vh, 560px);
+  /* Capped at 94vw minus a fixed side inset (not just a smaller vw
+     percentage) so the table itself never spans truly edge-to-edge on a
+     narrow phone. Every seat is positioned as a plain percentage of this
+     box's own width/height (see renderOvalTable() in app.js), so tightening
+     the container here pulls every seat in with it automatically -- the
+     side seats no longer land flush against the screen bezel with zero
+     breathing room, without needing to touch the seat-angle math at all. */
+  max-width: min(94vw, calc(100vw - 40px));
   aspect-ratio: 1 / 1.05;
   margin: 2px auto 6px;
   flex: 1 1 auto;
@@ -622,9 +727,9 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .table-felt {
   position: absolute; inset: 12%;
-  background: radial-gradient(circle, #1f6b3a, #0d3319 75%);
+  background: radial-gradient(circle, var(--jade-bg), var(--jade-bg-dark) 75%);
   border-radius: 50%;
-  border: 6px solid #0a2314;
+  border: 6px solid #061712;
   box-shadow: inset 0 0 30px rgba(0,0,0,0.45);
 }
 .stock-badge {
@@ -649,11 +754,17 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   gap: 3px; z-index: 3; width: 96px; text-align: center;
 }
 .seat-chip {
-  background: rgba(255,255,255,0.14); border-radius: 10px; padding: 5px 9px;
+  background: rgba(255,255,255,0.14); border-radius: var(--radius-sm); padding: 5px 9px;
   font-size: 11.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: 100%; width: 100%;
 }
-.seat.active .seat-chip { background: #d4a017; color: #1a1a1a; font-weight: 700; }
+.seat.active .seat-chip { background: var(--gold); color: #1a1a1a; font-weight: 700; }
+/* "This is my seat" gets a plain neutral ring, deliberately NOT gold --
+   gold is reserved for "whose turn is it" (the fill above, plus the pulse
+   animation further down), both of which can already be active on this
+   exact element at the same time as this ring. A third gold treatment
+   stacked on top would just look muddy instead of adding information. */
+.seat.own-seat .seat-chip { box-shadow: 0 0 0 2px rgba(255,255,255,0.55); }
 .seat.eliminated { opacity: 0.4; }
 .seat.quit { opacity: 0.35; }
 .seat.tappable { cursor: pointer; }
@@ -666,7 +777,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
    and placed with plain CSS. Tap anywhere else on screen to dismiss it. */
 .player-action-popover {
   position: absolute; z-index: 25;
-  background: #1a1a1a; border-radius: 10px; padding: 6px;
+  background: var(--jade-panel-alt); border: 1px solid var(--jade-border); border-radius: var(--radius-sm); padding: 6px;
   display: flex; flex-direction: column; gap: 4px;
   box-shadow: 0 6px 18px rgba(0,0,0,0.4);
   animation: popoverFadeIn 0.12s ease-out both;
@@ -681,16 +792,16 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   top: 100%; right: 0; margin-top: 2px;
 }
 .player-action-btn {
-  background: #2a2a2a; color: #fff; border: none; border-radius: 6px;
-  padding: 8px 12px; font-size: 12.5px; white-space: nowrap; text-align: left;
-  cursor: pointer;
+  background: var(--jade-panel); color: var(--text-light); border: none; border-radius: var(--radius-sm);
+  padding: 8px 12px; font-size: 12.5px; white-space: nowrap;
+  justify-content: flex-start; gap: 6px; cursor: pointer;
 }
-.player-action-btn:hover { background: #3a3a3a; }
+.player-action-btn:hover { background: var(--jade-bg); }
 .player-action-btn:disabled { opacity: 0.6; cursor: default; }
 .player-action-btn.report { color: #ff8a80; }
-.player-action-btn.mute { color: #ffcb6b; }
+.player-action-btn.mute { color: var(--gold-bright); }
 .player-action-stats {
-  color: #cfead9; font-size: 11.5px; padding: 4px 8px 6px; white-space: nowrap;
+  color: var(--text-muted); font-size: 11.5px; padding: 4px 8px 6px; white-space: nowrap;
   border-bottom: 1px solid rgba(255,255,255,0.12); margin-bottom: 2px;
 }
 
@@ -768,7 +879,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
      screen's overflow:hidden on cramped mobile layouts, especially for
      seats near the top of the table. */
   position: absolute; top: 50%; left: 50%; width: 44px; height: 44px; border-radius: 50%;
-  background: #1a4a2c; border: 2px solid #d4a017; display: flex; align-items: center; justify-content: center;
+  background: #1a4a2c; border: 2px solid var(--gold); display: flex; align-items: center; justify-content: center;
   font-size: 28px; z-index: 5; animation: seatReactionPop 3.4s ease both;
 }
 @keyframes seatReactionPop {
@@ -789,7 +900,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   display: flex; align-items: center; justify-content: center; gap: 2px;
   white-space: normal; margin-top: 3px;
 }
-.seat-discard-label { font-size: 8px; color: #ffcb6b; font-weight: 700; margin-right: 1px; }
+.seat-discard-label { font-size: 8px; color: var(--gold-bright); font-weight: 700; margin-right: 1px; }
 .mini-card-back {
   width: 26px; height: 36px; border-radius: 4px;
   background: repeating-linear-gradient(45deg, #234, #234 4px, #1a2f42 4px, #1a2f42 8px);
@@ -850,7 +961,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   background: repeating-linear-gradient(45deg, #234, #234 6px, #1a2f42 6px, #1a2f42 12px);
   border: 2px solid #0b1a26;
 }
-.card.selected { border-color: #d4a017; transform: translateY(-8px); }
+.card.selected { border-color: var(--gold); transform: translateY(-8px); }
 .card.selectable { cursor: pointer; }
 
 .chain-banner {
@@ -875,22 +986,32 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   to { transform: scale(1); opacity: 1; }
 }
 
-.hand-jokers { flex-shrink: 0; margin: 2px 4px 0; }
+/* Everything below the table shares one centered max-width column with it
+   on wide screens (a phone is already narrower than this cap, so nothing
+   changes there) -- otherwise on a desktop/laptop the hand of cards and the
+   action buttons stretch edge-to-edge while the table stays centered above
+   them, leaving the cards looking left-aligned and disconnected from the
+   table instead of sitting under it. */
+.hand-jokers, .hand-header, .hand, .action-bar, .hint-banner {
+  max-width: 640px; width: 100%; margin-left: auto; margin-right: auto;
+}
+
+.hand-jokers { flex-shrink: 0; margin-top: 2px; }
 .hand-jokers.hidden { display: none; }
-.hand-jokers-label { font-size: 10px; color: #d4a017; margin-bottom: 3px; }
+.hand-jokers-label { font-size: 10px; color: var(--gold); margin-bottom: 3px; }
 .hand-jokers-cards { display: flex; flex-wrap: wrap; gap: 5px; }
-.card.wild-zero { border-color: #d4a017; }
+.card.wild-zero { border-color: var(--gold); }
 
 .hand-header {
-  font-size: 12px; margin: 2px 4px; flex-shrink: 0;
+  font-size: 12px; margin-top: 2px; margin-bottom: 2px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 
 /* ---- Bots-only "Help me play" assist: one button, tap any turn to reveal
    a suggestion (never auto-plays for you). ---- */
 .hint-btn {
-  width: auto; background: rgba(212,160,23,0.18); border: 1px solid #d4a017;
-  color: #ffcb6b; font-size: 11px; padding: 4px 10px; border-radius: 14px;
+  width: auto; background: rgba(212,160,23,0.18); border: 1px solid var(--gold);
+  color: var(--gold-bright); font-size: 11px; padding: 4px 10px; border-radius: 14px;
 }
 @keyframes hintBtnPulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(212,160,23,0.6); }
@@ -898,15 +1019,15 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .hint-btn.attn-pulse { animation: hintBtnPulse 1.6s ease-in-out infinite; }
 .hint-banner {
-  background: rgba(212,160,23,0.14); border: 1px solid #d4a017; color: #ffe3a3;
-  border-radius: 10px; padding: 8px 12px; margin: 0 4px 6px; font-size: 12.5px;
-  line-height: 1.4; flex-shrink: 0;
+  background: rgba(212,160,23,0.14); border: 1px solid var(--gold); color: var(--gold-bright);
+  border-radius: 10px; padding: 8px 12px; margin-top: 0; margin-bottom: 6px;
+  font-size: 12.5px; line-height: 1.4; flex-shrink: 0;
 }
 .card.hint-suggested {
-  box-shadow: 0 0 0 3px #d4a017, var(--shadow-sm); transform: translateY(-4px);
+  box-shadow: 0 0 0 3px var(--gold), var(--shadow-sm); transform: translateY(-4px);
 }
 #btn-declare.hint-suggested {
-  box-shadow: 0 0 0 3px #d4a017;
+  box-shadow: 0 0 0 3px var(--gold);
 }
 .hand {
   display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 4px;
@@ -935,7 +1056,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .waiting-host-panel > .leave-btn { margin-top: 20px; }
 .waiting-host-spinner {
   width: 44px; height: 44px; margin: 0 auto 20px; border-radius: 50%;
-  border: 3px solid rgba(212,160,23,0.25); border-top-color: #d4a017;
+  border: 3px solid rgba(212,160,23,0.25); border-top-color: var(--gold);
   animation: waitingHostSpin 0.9s linear infinite;
 }
 @keyframes waitingHostSpin { to { transform: rotate(360deg); } }
@@ -950,17 +1071,17 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 }
 .join-requests-banner.hidden { display: none; }
 .join-request-row {
-  background: #1c1c1f; border: 1px solid rgba(212,160,23,0.4); border-radius: 10px;
+  background: var(--jade-panel-alt); border: 1px solid rgba(212,160,23,0.4); border-radius: var(--radius-sm);
   padding: 10px 12px; display: flex; align-items: center; gap: 10px;
   box-shadow: 0 8px 20px rgba(0,0,0,0.5);
 }
-.join-request-row .jr-text { flex: 1; font-size: 13px; color: #f0f0f0; }
-.join-request-row .jr-text b { color: #ffcb6b; }
+.join-request-row .jr-text { flex: 1; font-size: 13px; color: var(--text-light); }
+.join-request-row .jr-text b { color: var(--gold-bright); }
 .join-request-row button {
-  width: auto; padding: 7px 12px; margin: 0; font-size: 12px; border-radius: 7px;
+  width: auto; padding: 7px 12px; margin: 0; font-size: 12px; border-radius: var(--radius-sm);
 }
-.join-request-row .jr-admit { background: #1e5631; color: #fff; }
-.join-request-row .jr-ignore { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #ddd; }
+.join-request-row .jr-admit { background: #1e7a4a; color: #fff; }
+.join-request-row .jr-ignore { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: var(--text-muted); }
 
 .round-result-emoji { text-align: center; font-size: 48px; line-height: 1; margin-bottom: 4px; }
 @keyframes scoreCardEmojiPop {
@@ -970,8 +1091,8 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   85% { transform: scale(1); opacity: 1; }
   100% { transform: scale(0.85); opacity: 0; }
 }
-.result-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 14px; }
-.result-row.winner-row { font-weight: 700; color: #1e5631; }
+.result-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--jade-border); font-size: 14px; color: var(--text-light); }
+.result-row.winner-row { font-weight: 700; color: var(--gold-bright); }
 
 /* ---- Full scorecard (players in rows, rounds in columns + Total) ---- */
 .link-btn {
@@ -979,7 +1100,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   padding: 6px 0; width: 100%; text-decoration: underline;
 }
 .full-scorecard { margin: 4px 0 8px; }
-.scorecard-hint { text-align: center; color: #999; font-size: 11px; margin: 0 0 8px; }
+.scorecard-hint { text-align: center; color: var(--text-muted); font-size: 11px; margin: 0 0 8px; }
 .scorecard-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 /* One shared #scorecard-table living on its own dedicated overlay
    (#overlay-full-scorecard), opened from either the in-game Scores overlay
@@ -987,19 +1108,20 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
    to style (and keep in sync). */
 #scorecard-table {
   border-collapse: collapse; font-size: 12.5px; white-space: nowrap; width: 100%;
+  color: var(--text-light);
 }
 #scorecard-table th, #scorecard-table td { padding: 6px 8px; text-align: center; }
-#scorecard-table th { color: #666; font-weight: 600; border-bottom: 2px solid #eee; font-size: 11px; }
+#scorecard-table th { color: var(--text-muted); font-weight: 600; border-bottom: 2px solid var(--jade-border); font-size: 11px; }
 #scorecard-table th:first-child, #scorecard-table td:first-child {
-  position: sticky; left: 0; background: #fff; text-align: left;
-  color: #1a1a1a; font-weight: 600; box-shadow: 2px 0 4px rgba(0,0,0,0.06);
+  position: sticky; left: 0; background: var(--jade-panel-alt); text-align: left;
+  color: var(--text-light); font-weight: 600; box-shadow: 2px 0 4px rgba(0,0,0,0.3);
 }
 #scorecard-table th:last-child, #scorecard-table td:last-child {
-  font-weight: 700; border-left: 2px solid #eee;
+  font-weight: 700; border-left: 2px solid var(--jade-border);
 }
-#scorecard-table tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
-.scorecard-out { color: #c0392b; font-size: 9px; font-weight: 700; margin-left: 3px; }
-.scorecard-dash { color: #ccc; }
+#scorecard-table tr:not(:last-child) td { border-bottom: 1px solid var(--jade-border); }
+.scorecard-out { color: #ff8a80; font-size: 9px; font-weight: 700; margin-left: 3px; }
+.scorecard-dash { color: var(--text-muted); }
 
 /* ---- Podium-style score card (shown every round) ---- */
 .podium-panel {
@@ -1011,10 +1133,10 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   max-height: 96dvh; overflow-y: auto;
 }
 .round-result-maxscore {
-  text-align: center; font-size: 12px; color: #8a5c00; font-weight: 700;
+  text-align: center; font-size: 12px; color: var(--gold-bright); font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;
 }
-.round-result-note { text-align: center; font-size: 12.5px; color: #c0392b; margin-bottom: 8px; }
+.round-result-note { text-align: center; font-size: 12.5px; color: #ff8a80; margin-bottom: 8px; }
 .podium {
   display: flex; align-items: flex-end; justify-content: center; gap: 7px;
   margin: 4px 0 8px;
@@ -1022,7 +1144,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 /* Shrunk down (not the reveal rows below) so the whole round-result screen
    fits on one mobile viewport without needing to scroll. */
 .podium-slot {
-  background: #fff8e6; border: 1.5px solid #d4a017; border-radius: 10px;
+  background: var(--jade-panel-alt); border: 1.5px solid var(--gold); border-radius: var(--radius-sm);
   padding: 5px 7px; text-align: center; flex: 1; min-width: 0;
 }
 .podium-medal { font-size: 17px; line-height: 1; }
@@ -1030,14 +1152,14 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   font-weight: 700; font-size: 10.5px; margin-top: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.podium-score { font-size: 10px; color: #8a5c00; margin-top: 1px; font-weight: 700; }
-.podium-delta { font-size: 9px; color: #b8860b; margin-top: 1px; font-weight: 700; }
+.podium-score { font-size: 10px; color: var(--gold-bright); margin-top: 1px; font-weight: 700; }
+.podium-delta { font-size: 9px; color: var(--gold-bright); margin-top: 1px; font-weight: 700; }
 /* 1st place sits centered (order: 2, flanked by 2nd/3rd) and visibly higher
    than the other two -- via extra padding/scale + the other two carrying
    their own bottom margin, not a bar-chart height. */
 .podium-place-1 {
   order: 2; padding-top: 8px; padding-bottom: 8px;
-  background: #ffe9ad; border-width: 2px; transform: scale(1.03);
+  background: rgba(212,160,23,0.16); border-width: 2px; transform: scale(1.03);
   box-shadow: 0 3px 10px rgba(212,160,23,0.35);
 }
 .podium-place-1 .podium-medal { font-size: 21px; }
@@ -1048,31 +1170,31 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
    the old separate at-the-seat card reveal -- everyone's actual final hand
    for the round (priciest cards first, capped tiles + "+N"), its value, and
    the round-score math, all in one merged screen. See renderHandRevealRows(). ---- */
-.reveal-rows { border-top: 1.5px solid #f0dfa8; padding-top: 6px; max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
-.reveal-row { background: #f7f5ee; border-radius: 10px; padding: 7px 9px; }
-.reveal-row.declared { background: #fff3d6; border: 1px solid #d4a017; }
+.reveal-rows { border-top: 1.5px solid var(--jade-border); padding-top: 6px; max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.reveal-row { background: var(--jade-panel-alt); border-radius: var(--radius-sm); padding: 7px 9px; }
+.reveal-row.declared { background: rgba(212,160,23,0.14); border: 1px solid var(--gold); }
 .reveal-row.eliminated { opacity: 0.55; }
-.reveal-name { font-size: 11.5px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reveal-name { font-size: 11.5px; font-weight: 700; color: var(--text-light); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reveal-main { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .reveal-cards { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; min-width: 0; }
-.reveal-more { font-size: 10px; color: #8a5c00; font-weight: 700; margin-left: 1px; }
-.reveal-value { font-size: 10.5px; color: #8a5c00; font-weight: 700; margin-left: 3px; white-space: nowrap; }
-.reveal-math { font-size: 11px; color: #666; white-space: nowrap; flex-shrink: 0; }
-.reveal-math b { color: #1e5631; font-size: 12px; }
+.reveal-more { font-size: 10px; color: var(--gold-bright); font-weight: 700; margin-left: 1px; }
+.reveal-value { font-size: 10.5px; color: var(--gold-bright); font-weight: 700; margin-left: 3px; white-space: nowrap; }
+.reveal-math { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.reveal-math b { color: var(--gold-bright); font-size: 12px; }
 
 .round-maxscore-row { margin: 14px 0; }
 .round-maxscore-row.hidden { display: none; }
-.round-maxscore-row label { color: #666; font-size: 12px; }
-.final-round-delta { font-weight: 700; color: #b8860b; background: #fff3d6; padding: 1px 6px; border-radius: 6px; }
+.round-maxscore-row label { color: var(--text-muted); font-size: 12px; }
+.final-round-delta { font-weight: 700; color: var(--gold-bright); background: rgba(212,160,23,0.14); padding: 1px 6px; border-radius: 6px; }
 .final-round-banner {
-  background: #fff3d6; border: 1.5px solid #d4a017; border-radius: 10px;
-  padding: 10px 14px; margin-bottom: 14px; text-align: center; font-size: 14px; color: #6b4a00;
+  background: rgba(212,160,23,0.14); border: 1.5px solid var(--gold); border-radius: var(--radius-sm);
+  padding: 10px 14px; margin-bottom: 14px; text-align: center; font-size: 14px; color: var(--text-light);
 }
 .final-round-banner-label {
   text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; font-weight: 700;
-  color: #b8860b; margin-bottom: 4px;
+  color: var(--gold-bright); margin-bottom: 4px;
 }
-.final-round-banner b { color: #8a5c00; }
+.final-round-banner b { color: var(--gold-bright); }
 
 /* ---- Drawn card reveal ---- */
 .draw-reveal {
@@ -1113,7 +1235,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .deal-phase-badge.hidden { display: none; }
 .deal-phase-badge .start-seq-countdown { font-size: 64px; }
 .start-seq-countdown {
-  font-weight: 700; color: #d4a017;
+  font-weight: 700; color: var(--gold);
   text-shadow: 0 2px 12px rgba(0,0,0,0.6);
   animation: popIn 0.3s ease-out;
 }
@@ -1149,7 +1271,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   background: repeating-linear-gradient(45deg, #234, #234 5px, #1a2f42 5px, #1a2f42 10px);
   border: 1px solid #0b1a26; box-shadow: 0 3px 8px rgba(0,0,0,0.45);
   display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 9px; color: #d4a017; letter-spacing: 0.5px;
+  font-weight: 700; font-size: 9px; color: var(--gold); letter-spacing: 0.5px;
   opacity: 0; transform: translateY(-30px) scale(0.7);
   transition: opacity 0.4s ease, transform 0.4s ease, left 0.3s ease, top 0.3s ease;
 }
@@ -1159,7 +1281,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
   border: 1px solid #0b1a26; box-shadow: 0 3px 8px rgba(0,0,0,0.45);
 }
 /* Brief highlight the instant a card "lands" at a seat. */
-.seat.dealt-flash .seat-chip { background: #d4a017; color: #1a1a1a; transition: background 0.1s; }
+.seat.dealt-flash .seat-chip { background: var(--gold); color: #1a1a1a; transition: background 0.1s; }
 
 .start-sequence {
   position: fixed; inset: 0; background: rgba(9, 38, 22, 0.92);
@@ -1171,7 +1293,7 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .start-seq-reveal { display: flex; flex-direction: column; gap: 18px; animation: popIn 0.3s ease-out; }
 .start-seq-reveal.hidden { display: none; }
 .start-seq-reveal-row { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.start-seq-reveal-label { color: #d4a017; font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+.start-seq-reveal-label { color: var(--gold); font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
 .start-seq-reveal-row .card { width: 76px; height: 108px; }
 .start-seq-reveal-row .card-center .center-rank { font-size: 26px; }
 .start-seq-reveal-row .card-center .center-suit { font-size: 32px; }
@@ -1179,12 +1301,13 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 /* ---- Chat ---- */
 .chat-fab {
   position: fixed; bottom: 16px; right: 16px; width: 52px; height: 52px; border-radius: 50%;
-  background: #1e5631; color: white; display: flex; align-items: center; justify-content: center;
-  font-size: 22px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); cursor: pointer; z-index: 20;
+  background: linear-gradient(135deg, var(--red), var(--red-dark)); color: white; display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--shadow-md); cursor: pointer; z-index: 20;
 }
+.chat-fab .icon { width: 24px; height: 24px; margin: 0; }
 .chat-fab.hidden { display: none; }
 .badge {
-  position: absolute; top: -4px; right: -4px; background: #c0392b; color: white;
+  position: absolute; top: -4px; right: -4px; background: var(--red); color: white;
   border-radius: 50%; font-size: 10px; min-width: 16px; height: 16px; padding: 0 3px;
   display: flex; align-items: center; justify-content: center; font-weight: 700;
 }
@@ -1193,50 +1316,60 @@ button.leave-btn { background: transparent; color: #c0392b; border: 1px solid #c
 .chat-panel {
   position: fixed; bottom: 0; right: 0; left: 0; margin: 0 auto; width: 100%; max-width: 380px;
   height: 60vh; max-height: 480px;
-  background: white; color: #1a1a1a; border-radius: 16px 16px 0 0; z-index: 25;
-  display: flex; flex-direction: column; box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+  background: var(--jade-panel); color: var(--text-light); border: 1px solid var(--jade-border); border-bottom: none;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0; z-index: 25;
+  display: flex; flex-direction: column; box-shadow: var(--shadow-lg);
 }
 .chat-panel.hidden { display: none; }
 .chat-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 10px 14px; border-bottom: 1px solid #eee; font-weight: 700;
+  padding: 10px 14px; border-bottom: 1px solid var(--jade-border); font-weight: 700;
 }
+.chat-header button.tiny .icon, .chat-header span .icon { margin: 0; }
 .chat-messages { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 13px; }
 .chat-msg { margin-bottom: 8px; }
-.chat-msg .chat-name { font-weight: 700; color: #1e5631; }
-.chat-msg.me .chat-name { color: #7d3cff; }
+/* Gold for other players' names (matches the score/highlight role used
+   everywhere else), red for your own -- same "you" accent as the primary
+   button and the timer, instead of the old one-off green/purple pair that
+   didn't relate to any other color in the app. */
+.chat-msg .chat-name { font-weight: 700; color: var(--gold-bright); }
+.chat-msg.me .chat-name { color: var(--red); }
 .chat-msg .chat-text { word-break: break-word; }
 .chat-msg .chat-gif { display: block; max-width: 160px; border-radius: 8px; margin-top: 4px; }
-.chat-empty { color: #999; font-size: 12px; text-align: center; margin-top: 20px; }
-.chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid #eee; }
+.chat-empty { color: var(--text-muted); font-size: 12px; text-align: center; margin-top: 20px; }
+.chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--jade-border); }
 .chat-input-row input {
-  flex: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; font-size: 14px;
+  flex: 1; padding: 10px; border-radius: 20px; border: 1px solid var(--jade-border);
+  background: var(--jade-panel-alt); color: var(--text-light); font-size: 14px;
 }
 .chat-input-row button.tiny { width: auto; padding: 8px 16px; border-radius: 20px; }
-#btn-gif-open { font-weight: 700; font-size: 11px; background: #eee; color: #333; }
+.chat-input-row button.tiny .icon { width: 16px; height: 16px; margin: 0; }
+#btn-gif-open { font-weight: 700; font-size: 11px; background: rgba(255,255,255,0.1); color: var(--text-light); }
 
 /* ---- GIF picker (Giphy search) ---- */
 .gif-picker {
   position: absolute; left: 0; right: 0; bottom: 56px; height: 260px;
-  background: #fff; border-top: 1px solid #eee; z-index: 26;
+  background: var(--jade-panel); border-top: 1px solid var(--jade-border); z-index: 26;
   display: flex; flex-direction: column;
 }
 .gif-picker.hidden { display: none; }
-.gif-picker-header { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid #eee; }
+.gif-picker-header { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--jade-border); }
 .gif-picker-header input {
-  flex: 1; padding: 8px 12px; border-radius: 16px; border: 1px solid #ccc; font-size: 13px;
+  flex: 1; padding: 8px 12px; border-radius: 16px; border: 1px solid var(--jade-border);
+  background: var(--jade-panel-alt); color: var(--text-light); font-size: 13px;
 }
+.gif-picker-header button.tiny .icon { width: 16px; height: 16px; margin: 0; }
 .gif-suggestions {
   display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; flex-shrink: 0;
 }
 .gif-suggestion-chip {
-  flex-shrink: 0; background: #f1f1f1; border: 1px solid #ddd; border-radius: 14px;
-  padding: 5px 12px; font-size: 12px; color: #1a1a1a; white-space: nowrap; cursor: pointer;
+  flex-shrink: 0; background: var(--jade-panel-alt); border: 1px solid var(--jade-border); border-radius: 14px;
+  padding: 5px 12px; font-size: 12px; color: var(--text-light); white-space: nowrap; cursor: pointer;
 }
-.gif-suggestion-chip:active { background: #e3e3e3; }
+.gif-suggestion-chip:active { background: rgba(255,255,255,0.1); }
 .gif-results {
   flex: 1; overflow-y: auto; padding: 8px; display: grid;
   grid-template-columns: repeat(3, 1fr); gap: 6px; align-content: start;
 }
 .gif-results img { width: 100%; height: 72px; object-fit: cover; border-radius: 6px; cursor: pointer; }
-.gif-results-hint { grid-column: 1 / -1; text-align: center; color: #999; font-size: 12px; padding: 24px 0; }
+.gif-results-hint { grid-column: 1 / -1; text-align: center; color: var(--text-muted); font-size: 12px; padding: 24px 0; }
