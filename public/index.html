@@ -309,18 +309,11 @@
     <div id="round-result-note" class="round-result-note"></div>
     <div id="round-result-hands" class="reveal-rows"></div>
 
-    <!-- Same "See full scorecard" toggle as the in-game Scores overlay,
-         also available right here on the round-result screen so players
-         don't have to close this, then separately open Scores, to see the
-         round-by-round history -- rendered via the same renderFullScorecard()
-         function (now parameterized by element id) so both stay in sync. -->
-    <button id="btn-toggle-full-scorecard-rr" class="link-btn" type="button">See full scorecard</button>
-    <div id="full-scorecard-rr" class="full-scorecard hidden">
-      <p class="scorecard-hint hidden" id="scorecard-swipe-hint-rr">swipe for more rounds →</p>
-      <div class="scorecard-scroll">
-        <table id="scorecard-table-rr"></table>
-      </div>
-    </div>
+    <!-- Same "See full scorecard" link as the in-game Scores overlay --
+         opens the dedicated #overlay-full-scorecard on top of this screen
+         (a separate screen, not an inline expansion here) so this
+         already-tall round-result panel doesn't get taller/more cluttered. -->
+    <button id="btn-open-full-scorecard-rr" class="link-btn" type="button">See full scorecard</button>
 
     <div id="round-maxscore-row" class="round-maxscore-row hidden">
       <label for="round-maxscore-select">Change Max Score</label>
@@ -371,18 +364,29 @@
   <div class="card-panel">
     <h2>Scores</h2>
     <div id="scores-body"></div>
-    <button id="btn-toggle-full-scorecard" class="link-btn" type="button">See full scorecard</button>
-    <!-- Round-by-round table: players as rows (capped at 10, so this never
-         needs to scroll), rounds as columns (can grow with a long game, so
-         this side scrolls instead) with the player-name column frozen via
-         CSS position:sticky so it stays visible while scrolling sideways. -->
-    <div id="full-scorecard" class="full-scorecard hidden">
-      <p class="scorecard-hint hidden" id="scorecard-swipe-hint">swipe for more rounds →</p>
-      <div class="scorecard-scroll">
-        <table id="scorecard-table"></table>
-      </div>
-    </div>
+    <!-- Opens the dedicated #overlay-full-scorecard on top of this one,
+         instead of expanding the round-by-round table inline here. -->
+    <button id="btn-open-full-scorecard" class="link-btn" type="button">See full scorecard</button>
     <button id="btn-close-scores" class="secondary">Close</button>
+  </div>
+</div>
+
+<!-- Full round-by-round scorecard, its own separate screen (not an inline
+     expansion) opened from either the Scores overlay above or the
+     round-result screen's own "See full scorecard" link -- both point at
+     this same overlay/table so there's only ever one to keep in sync.
+     Players as rows (capped at 10, so this axis never needs to scroll),
+     rounds as columns (a long game scrolls sideways instead, with the
+     player-name column frozen via CSS position:sticky so it stays visible
+     while scrolling sideways). -->
+<div id="overlay-full-scorecard" class="overlay hidden">
+  <div class="card-panel">
+    <h2>Full Scorecard</h2>
+    <p class="scorecard-hint hidden" id="scorecard-swipe-hint">swipe for more rounds →</p>
+    <div class="scorecard-scroll">
+      <table id="scorecard-table"></table>
+    </div>
+    <button id="btn-close-full-scorecard" class="secondary">Close</button>
   </div>
 </div>
 
