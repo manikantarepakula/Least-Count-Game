@@ -585,6 +585,8 @@
     document.getElementById('btn-declare').disabled = true;
 
     const countdownMs = data.countdownMs || 3000;
+    const introMs = data.introMs || 3400;
+    const deckCount = data.deckCount || 2;
     const dealMs = data.dealMs || 1500;
     const steps = 3; // "3", "2", "1"
     const stepMs = countdownMs / steps;
@@ -593,20 +595,115 @@
       if (n <= 0) {
         countdownEl.classList.add('hidden');
         dealingLabel.classList.remove('hidden');
-        animateDealing(data.players || [], dealMs, data.dealPasses || 13);
+        runDeckIntro(deckCount, introMs, () => {
+          animateDealing(data.players || [], dealMs, data.dealPasses || 13);
+        });
         startSeqTimer = setTimeout(() => {
-          // Countdown + deal animation are done. The board itself will pop
-          // to life the instant the server's post-deal game_state arrives
-          // (see pendingStartReveal handling below) -- we just flag that
-          // we're now waiting for it.
+          // Countdown + intro + deal animation are all done. The board
+          // itself will pop to life the instant the server's post-deal
+          // game_state arrives (see pendingStartReveal handling below) --
+          // we just flag that we're now waiting for it.
           pendingStartReveal = true;
-        }, dealMs);
+        }, introMs + dealMs);
         return;
       }
       countdownEl.textContent = String(n);
       startSeqTimer = setTimeout(() => showCountdownStep(n - 1), stepMs);
     }
     showCountdownStep(steps);
+  }
+
+  // Pre-deal intro: places the real number of decks in play for this table
+  // size (so players can reason about card-count probability -- item
+  // requested after testers asked "how many decks are we even playing
+  // with?"), then a riffle-merge shuffle, before handing off to the
+  // existing, unchanged animateDealing() below. Purely visual -- the actual
+  // shoe is already shuffled server-side; this never blocks real state.
+  function runDeckIntro(deckCount, introMs, onDone) {
+    const oval = document.getElementById('oval-table');
+    const container = document.getElementById('deck-intro');
+    container.innerHTML = '';
+    container.classList.remove('hidden');
+    dealingLabel.textContent = deckCount === 1
+      ? 'Setting up 1 deck...'
+      : `Setting up ${deckCount} decks...`;
+    dealingLabel.classList.remove('hidden');
+
+    function tableCenter() {
+      const r = oval.getBoundingClientRect();
+      return { x: r.width / 2, y: r.height / 2 };
+    }
+    const center = tableCenter();
+    let cancelled = false;
+    const timers = [];
+    const setT = (fn, ms) => { const t = setTimeout(() => { if (!cancelled) fn(); }, ms); timers.push(t); return t; };
+
+    dealAnimationCancel = () => {
+      cancelled = true;
+      timers.forEach(clearTimeout);
+      container.innerHTML = '';
+      container.classList.add('hidden');
+    };
+
+    // Step 1: decks drop in, fanned apart so the count is visible/countable,
+    // then slide together into one spot.
+    const decks = [];
+    for (let i = 0; i < deckCount; i++) {
+      const d = document.createElement('div');
+      d.className = 'deck-stack';
+      d.textContent = 'LC';
+      const spread = (i - (deckCount - 1) / 2) * 46;
+      d.style.left = (center.x - 20 + spread) + 'px';
+      d.style.top = (center.y - 28) + 'px';
+      container.appendChild(d);
+      decks.push(d);
+      setT(() => { d.style.opacity = '1'; d.style.transform = 'translateY(0) scale(1)'; }, 60 + i * 150);
+    }
+    setT(() => {
+      decks.forEach((d) => { d.style.left = (center.x - 20) + 'px'; d.style.top = (center.y - 28) + 'px'; });
+    }, 750);
+
+    // Step 2: riffle-merge shuffle -- the combined deck "splits" into two
+    // halves that zipper together in the center, alternating cards rapidly.
+    setT(() => {
+      dealingLabel.textContent = 'Shuffling...';
+      decks.forEach((d) => { d.style.opacity = '0'; });
+    }, 1150);
+
+    setT(() => {
+      const leftStack = { x: center.x - 42, y: center.y };
+      const rightStack = { x: center.x + 18, y: center.y };
+      const mid = { x: center.x - 11, y: center.y };
+      const total = 22;
+      for (let i = 0; i < total; i++) {
+        const fromLeft = i % 2 === 0;
+        const src = fromLeft ? leftStack : rightStack;
+        const c = document.createElement('div');
+        c.className = 'shuffle-card';
+        c.style.left = src.x + 'px';
+        c.style.top = src.y + 'px';
+        c.style.zIndex = String(i);
+        c.style.transition = 'left 0.18s ease, top 0.18s ease, transform 0.18s ease';
+        container.appendChild(c);
+        setT(() => {
+          c.style.left = mid.x + 'px';
+          c.style.top = (mid.y - i * 0.55) + 'px';
+          c.style.transform = 'rotate(' + (fromLeft ? -8 : 8) + 'deg)';
+        }, i * 55);
+      }
+      setT(() => {
+        container.querySelectorAll('.shuffle-card').forEach((c) => { c.style.transition = 'opacity 0.25s ease'; c.style.opacity = '0'; });
+        setT(() => {
+          container.innerHTML = '';
+          container.classList.add('hidden');
+          // Hand the label back to its default "Dealing cards..." text
+          // (we borrowed it above for "Setting up N decks.../Shuffling...")
+          // before the existing per-card deal animation takes over.
+          dealingLabel.textContent = 'Dealing cards... (కార్డులు ఇస్తున్నారు)';
+          if (!cancelled) onDone();
+        }, 250);
+      }, total * 55 + 320);
+    }, 1400);
   }
 
   // A small "flying card" travels from the table's center to each player's
@@ -725,6 +822,23 @@
     const saved = localStorage.getItem(NAME_STORAGE_KEY);
     if (saved) document.getElementById('input-name').value = saved;
   })();
+
+  // Opening a shared invite link (?room=CODE, see btn-share-room below)
+  // pre-fills the join-room field so whoever tapped the link only has to
+  // enter their name and hit Join -- one less thing to type/copy-paste.
+  // The param is stripped from the URL afterwards so it doesn't linger in
+  // the address bar or get shared again by accident (e.g. a browser
+  // "share this page" on the landing screen itself).
+  (function prefillRoomCodeFromLink() {
+    const params = new URLSearchParams(window.location.search);
+    const roomFromLink = (params.get('room') || '').trim().toUpperCase();
+    if (roomFromLink) {
+      document.getElementById('input-roomcode').value = roomFromLink;
+      const url = new URL(window.location.href);
+      url.searchParams.delete('room');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    }
+  })();
   function getPlayerName() {
     const name = document.getElementById('input-name').value.trim();
     if (name) localStorage.setItem(NAME_STORAGE_KEY, name);
@@ -770,6 +884,54 @@
     });
   };
 
+  // Copy just the code, or share a full join-link that pre-fills the room
+  // code on the other end (see prefillRoomCodeFromLink above). Both give a
+  // short on-screen "Copied!"/"Shared!" confirmation instead of relying on
+  // the browser's own (easy-to-miss) clipboard toast.
+  let roomcodeFeedbackTimer = null;
+  function showRoomcodeFeedback(text) {
+    const el = document.getElementById('roomcode-action-feedback');
+    el.textContent = text;
+    if (roomcodeFeedbackTimer) clearTimeout(roomcodeFeedbackTimer);
+    roomcodeFeedbackTimer = setTimeout(() => { el.textContent = ''; }, 2500);
+  }
+  function roomInviteLink() {
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.hash = '';
+    url.searchParams.set('room', myRoomCode || '');
+    return url.toString();
+  }
+  document.getElementById('btn-copy-roomcode').onclick = async () => {
+    if (!myRoomCode) return;
+    try {
+      await navigator.clipboard.writeText(myRoomCode);
+      showRoomcodeFeedback('Copied! (కాపీ అయ్యింది)');
+    } catch (e) {
+      showRoomcodeFeedback('Could not copy -- code is ' + myRoomCode);
+    }
+  };
+  document.getElementById('btn-share-room').onclick = async () => {
+    if (!myRoomCode) return;
+    const link = roomInviteLink();
+    const shareText = `Join my Least Count game! Room code: ${myRoomCode}\n${link}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'Least Count', text: `Join my Least Count game! Room code: ${myRoomCode}`, url: link });
+        return; // native share sheet handles its own confirmation
+      } catch (e) {
+        if (e && e.name === 'AbortError') return; // user cancelled the share sheet -- not an error
+        // fall through to clipboard fallback below
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(shareText);
+      showRoomcodeFeedback('Invite link copied! (లింక్ కాపీ అయ్యింది)');
+    } catch (e) {
+      showRoomcodeFeedback('Could not copy -- code is ' + myRoomCode);
+    }
+  };
+
   // Only set while genuinely waiting on a mid-game join request -- distinct
   // from myRoomCode/myPlayerId (which mean "I'm an actual member of this
   // room"), since a pending requester isn't in room.players at all yet.
@@ -785,11 +947,16 @@
     showScreen('screen-landing');
   };
 
-  socket.on('join_admitted', ({ roomCode, playerId }) => {
+  socket.on('join_admitted', ({ roomCode, playerId, chatHistory }) => {
     pendingJoinRoomCode = null;
     pendingJoinPlayerId = null;
     logAnalytics('room_joined_midgame');
     saveSession(roomCode, playerId);
+    // Every other join path (create_room/join_room/queue_matched) loads chat
+    // history and shows the chat FAB -- this path was missing both, which is
+    // why someone admitted mid-game never got a chat option at all.
+    loadChatHistory(chatHistory);
+    showChatFab();
     // The very next room_update/game_state (already on its way as a side
     // effect of the host's admit on the server) will render the real
     // lobby/game screen; showing the game screen now avoids a flash of the
@@ -1749,6 +1916,22 @@
     if (latestGame) showGameOver(latestGame);
   };
 
+  // Mute toggle, back on the game screen after being removed from the top
+  // bar in an earlier redesign -- the mute state/logic in Sound itself
+  // (isMuted/setMuted, localStorage-backed) was never actually removed, so
+  // this just restores the button that controls it.
+  const btnMute = document.getElementById('btn-mute');
+  function refreshMuteBtn() {
+    const isMuted = Sound.isMuted();
+    btnMute.textContent = isMuted ? '🔇' : '🔊';
+    btnMute.setAttribute('aria-label', isMuted ? 'Unmute sound' : 'Mute sound');
+  }
+  refreshMuteBtn();
+  btnMute.onclick = () => {
+    Sound.setMuted(!Sound.isMuted());
+    refreshMuteBtn();
+  };
+
   document.getElementById('btn-scores').onclick = () => {
     if (!latestGame) return;
     const body = document.getElementById('scores-body');
@@ -1760,9 +1943,61 @@
       row.innerHTML = `<span>${escapeHtml(p.name)}${elim}</span><span>${latestGame.scores[p.playerId] ?? 0} pts</span>`;
       body.appendChild(row);
     });
+    // Collapsed by default every time the overlay reopens, so it doesn't
+    // stay expanded from a previous visit.
+    document.getElementById('full-scorecard').classList.add('hidden');
+    document.getElementById('btn-toggle-full-scorecard').textContent = 'See full scorecard';
     document.getElementById('overlay-scores').classList.remove('hidden');
   };
   document.getElementById('btn-close-scores').onclick = () => document.getElementById('overlay-scores').classList.add('hidden');
+
+  // Full round-by-round scorecard -- players as rows (capped at 10, so this
+  // axis never needs scrolling), rounds as columns (a long game scrolls
+  // sideways instead, with the player-name column frozen via CSS so context
+  // never scrolls away). Built from game.roundHistory, one entry per
+  // completed round; the Total column reads straight from game.scores (the
+  // same authoritative cumulative total elimination is based on) rather than
+  // summing history client-side, so it can never drift out of sync.
+  function renderFullScorecard() {
+    if (!latestGame || !latestRoom) return;
+    const history = latestGame.roundHistory || [];
+    const table = document.getElementById('scorecard-table');
+    table.innerHTML = '';
+
+    const headRow = document.createElement('tr');
+    headRow.innerHTML = '<th>Player</th>' +
+      history.map((r) => `<th>R${r.round}</th>`).join('') +
+      '<th>Total</th>';
+    table.appendChild(headRow);
+
+    (latestRoom.players || []).forEach((p) => {
+      const row = document.createElement('tr');
+      const isOut = latestGame.eliminated.includes(p.playerId) || latestGame.quit.includes(p.playerId);
+      const outTag = isOut ? '<span class="scorecard-out">OUT</span>' : '';
+      let cells = `<td>${escapeHtml(p.name)}${outTag}</td>`;
+      history.forEach((r) => {
+        const has = Object.prototype.hasOwnProperty.call(r.roundScores, p.playerId);
+        cells += has ? `<td>${r.roundScores[p.playerId]}</td>` : '<td class="scorecard-dash">—</td>';
+      });
+      cells += `<td>${latestGame.scores[p.playerId] ?? 0}</td>`;
+      row.innerHTML = cells;
+      table.appendChild(row);
+    });
+
+    document.getElementById('scorecard-swipe-hint').classList.toggle('hidden', history.length <= 3);
+  }
+
+  document.getElementById('btn-toggle-full-scorecard').onclick = () => {
+    const el = document.getElementById('full-scorecard');
+    const btn = document.getElementById('btn-toggle-full-scorecard');
+    const showing = el.classList.toggle('hidden') === false; // toggle() returns true if now hidden
+    if (showing) {
+      renderFullScorecard();
+      btn.textContent = 'Hide full scorecard';
+    } else {
+      btn.textContent = 'See full scorecard';
+    }
+  };
 
   document.getElementById('btn-game-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
   document.getElementById('btn-close-rules').onclick = () => document.getElementById('overlay-rules').classList.add('hidden');
