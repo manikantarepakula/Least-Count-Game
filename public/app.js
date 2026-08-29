@@ -1919,6 +1919,12 @@
       ? `Eliminated: ${r.newlyEliminated.map(playerName).join(', ')}`
       : '';
 
+    // Collapsed by default every time this screen (re)opens, same as the
+    // Scores overlay's own toggle -- otherwise it'd stay expanded from
+    // whatever state the previous round left it in.
+    document.getElementById('full-scorecard-rr').classList.add('hidden');
+    document.getElementById('btn-toggle-full-scorecard-rr').textContent = 'See full scorecard';
+
     document.getElementById('overlay-round-result').classList.remove('hidden');
     updateRoundResultHostControls();
   }
@@ -1982,10 +1988,13 @@
   // completed round; the Total column reads straight from game.scores (the
   // same authoritative cumulative total elimination is based on) rather than
   // summing history client-side, so it can never drift out of sync.
-  function renderFullScorecard() {
+  // tableId/hintId let this same function drive either the in-game Scores
+  // overlay's scorecard or the identical one on the post-round result
+  // screen, so both stay pixel-for-pixel identical and never drift apart.
+  function renderFullScorecard(tableId, hintId) {
     if (!latestGame || !latestRoom) return;
     const history = latestGame.roundHistory || [];
-    const table = document.getElementById('scorecard-table');
+    const table = document.getElementById(tableId);
     table.innerHTML = '';
 
     const headRow = document.createElement('tr');
@@ -2008,20 +2017,22 @@
       table.appendChild(row);
     });
 
-    document.getElementById('scorecard-swipe-hint').classList.toggle('hidden', history.length <= 3);
+    document.getElementById(hintId).classList.toggle('hidden', history.length <= 3);
   }
 
-  document.getElementById('btn-toggle-full-scorecard').onclick = () => {
-    const el = document.getElementById('full-scorecard');
-    const btn = document.getElementById('btn-toggle-full-scorecard');
-    const showing = el.classList.toggle('hidden') === false; // toggle() returns true if now hidden
-    if (showing) {
-      renderFullScorecard();
-      btn.textContent = 'Hide full scorecard';
-    } else {
-      btn.textContent = 'See full scorecard';
-    }
-  };
+  function wireFullScorecardToggle(btnId, panelId, tableId, hintId) {
+    document.getElementById(btnId).onclick = () => {
+      const el = document.getElementById(panelId);
+      const btn = document.getElementById(btnId);
+      const showing = el.classList.toggle('hidden') === false; // toggle() returns true if now hidden
+      if (showing) {
+        renderFullScorecard(tableId, hintId);
+      }
+      btn.textContent = showing ? 'Hide full scorecard' : 'See full scorecard';
+    };
+  }
+  wireFullScorecardToggle('btn-toggle-full-scorecard', 'full-scorecard', 'scorecard-table', 'scorecard-swipe-hint');
+  wireFullScorecardToggle('btn-toggle-full-scorecard-rr', 'full-scorecard-rr', 'scorecard-table-rr', 'scorecard-swipe-hint-rr');
 
   document.getElementById('btn-game-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
   document.getElementById('btn-close-rules').onclick = () => document.getElementById('overlay-rules').classList.add('hidden');
