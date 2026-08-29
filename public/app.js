@@ -622,6 +622,13 @@
   function runDeckIntro(deckCount, introMs, onDone) {
     const oval = document.getElementById('oval-table');
     const container = document.getElementById('deck-intro');
+    // NOTE: this is a sibling function to runStartSequence, not nested
+    // inside it -- runStartSequence's own local `dealingLabel` const is out
+    // of scope here, so grab our own reference to the same element instead
+    // of relying on that outer variable (a bug that previously threw a
+    // ReferenceError the instant this function ran, silently skipping the
+    // whole deck/shuffle animation on every single deal).
+    const dealingLabel = document.getElementById('deal-phase-label');
     container.innerHTML = '';
     container.classList.remove('hidden');
     dealingLabel.textContent = deckCount === 1
