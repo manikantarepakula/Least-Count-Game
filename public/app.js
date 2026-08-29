@@ -267,6 +267,110 @@
     // <select>'s own .value AFTER every <option> is already attached. This
     // works consistently everywhere, unlike per-option .selected above.
     selectEl.value = String(currentValue);
+    syncDropdown(selectEl);
+  }
+
+  // ---------------- custom themed dropdown (replaces native <select> UI) ----------------
+  // The underlying <select> stays in the DOM and fully functional -- every
+  // existing call site above keeps reading/writing its .value and rebuilding
+  // its <option> children exactly as before. This only adds a themed
+  // button+list on top that mirrors it, so the browser's own native popup
+  // (white background, system font -- can't be restyled to match the app)
+  // never has to appear. Call syncDropdown(select) after anything changes
+  // the select's value/options from code, since a plain `.value = x`
+  // assignment fires no DOM event this could otherwise hook into.
+  const dropdownWraps = new Map(); // selectEl -> { syncLabel }
+
+  function initDropdown(selectId) {
+    const select = document.getElementById(selectId);
+    if (!select || dropdownWraps.has(select)) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'dd';
+    select.parentNode.insertBefore(wrap, select);
+    wrap.appendChild(select);
+    select.classList.add('dd-native-select');
+    select.tabIndex = -1;
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'dd-toggle';
+    toggle.setAttribute('aria-haspopup', 'listbox');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.innerHTML = '<span class="dd-value"></span><svg class="dd-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+    wrap.appendChild(toggle);
+
+    const list = document.createElement('ul');
+    list.className = 'dd-list hidden';
+    list.setAttribute('role', 'listbox');
+    wrap.appendChild(list);
+
+    const valueSpan = toggle.querySelector('.dd-value');
+    const isOpen = () => !list.classList.contains('hidden');
+    const closeList = () => { list.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false'); };
+    const syncLabel = () => {
+      const opt = select.options[select.selectedIndex];
+      valueSpan.textContent = opt ? opt.textContent : '';
+    };
+
+    function buildList() {
+      list.innerHTML = '';
+      Array.from(select.options).forEach((opt) => {
+        const li = document.createElement('li');
+        li.setAttribute('role', 'option');
+        li.tabIndex = -1;
+        li.dataset.value = opt.value;
+        li.textContent = opt.textContent;
+        if (opt.value === select.value) li.setAttribute('aria-selected', 'true');
+        li.addEventListener('click', () => {
+          select.value = opt.value;
+          select.dispatchEvent(new Event('change'));
+          syncLabel();
+          closeList();
+          toggle.focus();
+        });
+        list.appendChild(li);
+      });
+    }
+    function openList() {
+      buildList();
+      list.classList.remove('hidden');
+      toggle.setAttribute('aria-expanded', 'true');
+      const active = list.querySelector('[aria-selected="true"]') || list.firstElementChild;
+      if (active) active.focus();
+    }
+
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      isOpen() ? closeList() : openList();
+    });
+    toggle.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openList();
+      } else if (e.key === 'Escape') {
+        closeList();
+      }
+    });
+    list.addEventListener('keydown', (e) => {
+      const items = Array.from(list.children);
+      const idx = items.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown') { e.preventDefault(); (items[idx + 1] || items[0]).focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); (items[idx - 1] || items[items.length - 1]).focus(); }
+      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); document.activeElement.click(); }
+      else if (e.key === 'Escape') { closeList(); toggle.focus(); }
+    });
+    document.addEventListener('click', (e) => {
+      if (!wrap.contains(e.target)) closeList();
+    });
+
+    syncLabel();
+    dropdownWraps.set(select, { syncLabel });
+  }
+
+  function syncDropdown(selectEl) {
+    const entry = dropdownWraps.get(selectEl);
+    if (entry) entry.syncLabel();
   }
 
   // ---------------- your-turn visual pulse ----------------
@@ -706,7 +810,7 @@
           // Hand the label back to its default "Dealing cards..." text
           // (we borrowed it above for "Setting up N decks.../Shuffling...")
           // before the existing per-card deal animation takes over.
-          dealingLabel.textContent = 'Dealing cards... (కార్డులు ఇస్తున్నారు)';
+          dealingLabel.textContent = 'Dealing cards...';
           if (!cancelled) onDone();
         }, 250);
       }, total * 55 + 320);
@@ -871,7 +975,7 @@
 
   document.getElementById('btn-create').onclick = () => {
     const name = getPlayerName();
-    if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
+    if (!name) return setLandingError('Enter your name');
     socket.emit('create_room', { name, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('room_created');
@@ -885,8 +989,8 @@
   document.getElementById('btn-join').onclick = () => {
     const name = getPlayerName();
     const roomCode = document.getElementById('input-roomcode').value.trim().toUpperCase();
-    if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
-    if (!roomCode) return setLandingError('Enter room code (రూమ్ కోడ్ రాయండి)');
+    if (!name) return setLandingError('Enter your name');
+    if (!roomCode) return setLandingError('Enter room code');
     socket.emit('join_room', { roomCode, name, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       // room.phase was already 'playing' when the request landed -- the
@@ -930,7 +1034,7 @@
     if (!myRoomCode) return;
     try {
       await navigator.clipboard.writeText(myRoomCode);
-      showRoomcodeFeedback('Copied! (కాపీ అయ్యింది)');
+      showRoomcodeFeedback('Copied!');
     } catch (e) {
       showRoomcodeFeedback('Could not copy -- code is ' + myRoomCode);
     }
@@ -950,7 +1054,7 @@
     }
     try {
       await navigator.clipboard.writeText(shareText);
-      showRoomcodeFeedback('Invite link copied! (లింక్ కాపీ అయ్యింది)');
+      showRoomcodeFeedback('Invite link copied!');
     } catch (e) {
       showRoomcodeFeedback('Could not copy -- code is ' + myRoomCode);
     }
@@ -1117,11 +1221,19 @@
       if (i === 3) opt.selected = true;
       sel.appendChild(opt);
     }
+    syncDropdown(sel);
   })();
+
+  // One custom themed dropdown per native <select>, replacing the browser's
+  // own unstyleable popup everywhere in the app (see initDropdown above).
+  initDropdown('input-online-playercount');
+  initDropdown('input-bot-count');
+  initDropdown('input-maxscore');
+  initDropdown('round-maxscore-select');
 
   document.getElementById('btn-solo-start').onclick = () => {
     const name = getPlayerName();
-    if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
+    if (!name) return setLandingError('Enter your name');
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
     socket.emit('create_solo_room', { name, botCount, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
@@ -1156,7 +1268,7 @@
 
   document.getElementById('btn-play-online').onclick = () => {
     const name = getPlayerName();
-    if (!name) return setLandingError('Enter your name (పేరు రాయండి)');
+    if (!name) return setLandingError('Enter your name');
     const playerCount = Number(document.getElementById('input-online-playercount').value) || 3;
     socket.emit('queue_join', { playerCount, name, firebaseUid: currentFirebaseUid() }, (res) => {
       if (!res.ok) return setLandingError(res.error);
@@ -1252,8 +1364,8 @@
     btn.disabled = room.players.length < 2;
     document.getElementById('lobby-maxscore-row').classList.toggle('hidden', !isHost);
     document.getElementById('lobby-hint').textContent = isHost
-      ? (room.players.length < 2 ? 'Need at least 2 players (కనీసం 2 మంది కావాలి)' : `Ready with ${room.players.length} players`)
-      : 'Waiting for host to start (హోస్ట్ మొదలుపెట్టే వరకు వేచి ఉండండి)';
+      ? (room.players.length < 2 ? 'Need at least 2 players' : `Ready with ${room.players.length} players`)
+      : 'Waiting for host to start';
   }
 
   // ---------------- realistic card rendering ----------------
@@ -1379,7 +1491,12 @@
       chipEl.className = 'seat-chip';
       const nameEl = document.createElement('div');
       nameEl.className = 'seat-name';
-      nameEl.textContent = p.name + (p.playerId === myPlayerId ? ' (You)' : '');
+      // Own seat is marked with a neutral ring (see .seat.own-seat in
+      // style.css) instead of appending "(You)" text -- that text used to
+      // share the exact same 96px truncation-prone width as everyone else's
+      // name, so it clipped sooner than it should have for no good reason.
+      nameEl.textContent = p.name;
+      if (p.playerId === myPlayerId) seatEl.classList.add('own-seat');
       chipEl.appendChild(nameEl);
       const metaEl = document.createElement('div');
       metaEl.className = 'seat-meta';
@@ -1566,7 +1683,7 @@
     const showChain = duringChain && !game.roundOver;
     chainBanner.classList.toggle('hidden', !showChain);
     if (showChain) {
-      const respondingName = isMyTurn ? 'You (మీరు)' : currentName;
+      const respondingName = isMyTurn ? 'You' : currentName;
       document.getElementById('chain-banner-text').textContent =
         `🔥 +2 Chain! ${respondingName} must play a 2 or draw ${game.chainCount * 2} cards`;
       document.getElementById('penalty-count').textContent = game.chainCount * 2;
@@ -1945,9 +2062,12 @@
   // (isMuted/setMuted, localStorage-backed) was never actually removed, so
   // this just restores the button that controls it.
   const btnMute = document.getElementById('btn-mute');
+  const btnMuteIconOn = btnMute.querySelector('.icon-sound-on');
+  const btnMuteIconOff = btnMute.querySelector('.icon-sound-off');
   function refreshMuteBtn() {
     const isMuted = Sound.isMuted();
-    btnMute.textContent = isMuted ? '🔇' : '🔊';
+    btnMuteIconOn.classList.toggle('hidden', isMuted);
+    btnMuteIconOff.classList.toggle('hidden', !isMuted);
     btnMute.setAttribute('aria-label', isMuted ? 'Unmute sound' : 'Mute sound');
   }
   refreshMuteBtn();
@@ -2306,13 +2426,17 @@
     pop.appendChild(statsEl);
     loadStatsIntoPopover(playerId, statsEl);
 
+    const flagIcon = '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 2a1 1 0 0 1 1 1v18a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1Z"/><path d="M6 3.5c2-1 4-1 6 0s4 1 6 0v9c-2 1-4 1-6 0s-4-1-6 0v-9Z"/></svg>';
+    const soundOnIcon = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>';
+    const soundOffIcon = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg>';
+
     const reportBtn = document.createElement('button');
     reportBtn.type = 'button';
     reportBtn.className = 'player-action-btn report';
-    reportBtn.textContent = `🚩 Report ${name}`;
+    reportBtn.innerHTML = `${flagIcon}<span class="pa-label">Report ${escapeHtml(name)}</span>`;
     reportBtn.onclick = () => {
       reportBtn.disabled = true;
-      reportBtn.textContent = 'Reporting...';
+      reportBtn.querySelector('.pa-label').textContent = 'Reporting...';
       socket.emit('report_player', {
         roomCode: myRoomCode,
         reportedPlayerId: playerId,
@@ -2320,7 +2444,7 @@
         messageType: 'general',
         messageText: '',
       }, (res) => {
-        reportBtn.textContent = res && res.ok ? '✅ Reported' : '⚠️ Failed, try again';
+        reportBtn.querySelector('.pa-label').textContent = res && res.ok ? 'Reported' : 'Failed, try again';
         if (res && res.ok) logAnalytics('player_reported');
         setTimeout(closePlayerActionPopover, 900);
       });
@@ -2330,7 +2454,7 @@
     muteBtn.type = 'button';
     muteBtn.className = 'player-action-btn mute';
     const muted = isMuted(playerId);
-    muteBtn.textContent = muted ? `🔊 Unmute ${name}` : `🔇 Mute ${name}`;
+    muteBtn.innerHTML = `${muted ? soundOnIcon : soundOffIcon}<span class="pa-label">${muted ? 'Unmute' : 'Mute'} ${escapeHtml(name)}</span>`;
     muteBtn.onclick = () => {
       if (isMuted(playerId)) unmutePlayer(playerId); else mutePlayer(playerId, name);
       closePlayerActionPopover();
@@ -2374,10 +2498,21 @@
     container.innerHTML = '';
     const visible = (history || []).filter((m) => !isMuted(m.playerId));
     if (visible.length === 0) {
-      container.innerHTML = '<div class="chat-empty">No messages yet (ఇంకా మెసేజ్‌లు లేవు)</div>';
+      container.innerHTML = '<div class="chat-empty">No messages yet</div>';
       return;
     }
     visible.forEach((m) => appendChatMessage(m, { silent: true }));
+  }
+
+  // Used both by the manual close button and by the auto-minimize-on-your-
+  // turn hook in playSoundsForTransition() -- safe to call even if the
+  // panel is already closed (chat-fab just re-shows itself, a no-op if
+  // it's already visible).
+  function minimizeChatPanel() {
+    const panel = document.getElementById('chat-panel');
+    if (panel.classList.contains('hidden')) return;
+    panel.classList.add('hidden');
+    document.getElementById('chat-fab').classList.remove('hidden');
   }
 
   document.getElementById('chat-fab').onclick = () => {
@@ -2617,6 +2752,13 @@
     if (!prev) return;
     if (game.currentPlayer === myPlayerId && prev.currentPlayer !== myPlayerId && !game.roundOver) {
       Sound.yourTurn();
+      // Chat panel is a fixed bottom sheet that can cover the whole table
+      // and timer -- if it's open right as your turn starts, minimize it
+      // back to the floating bubble automatically so you can't miss your
+      // own turn. Chat is still one tap away via the bubble; this doesn't
+      // close it forever, just stops it from silently sitting over the
+      // timer during the moment that matters most.
+      minimizeChatPanel();
     }
     if (game.chainCount > 0 && prev.chainCount === 0) {
       Sound.chainAlert();
@@ -2647,8 +2789,8 @@
     const container = document.getElementById('draw-reveal-cards');
     const label = document.getElementById('draw-reveal-label');
     label.textContent = cards.length > 1
-      ? `You drew ${cards.length} cards (మీకు ${cards.length} కార్డులు వచ్చాయి)`
-      : 'You drew (మీకు వచ్చింది)';
+      ? `You drew ${cards.length} cards`
+      : 'You drew';
     container.innerHTML = '';
     cards.forEach((c) => container.appendChild(cardEl(c)));
     overlay.classList.remove('hidden');
