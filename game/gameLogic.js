@@ -99,6 +99,14 @@ class LeastCountGame {
     this.eliminationScore = eliminationScore || ELIMINATION_SCORE;
     this.eliminated = new Set(); // out due to reaching the score limit
     this.quit = new Set(); // voluntarily left between rounds
+    // Full round-by-round history, for the "See full scorecard" table --
+    // separate from lastRoundResult (which only ever holds the MOST RECENT
+    // round, overwritten every declare()). Each entry only lists players who
+    // were actually active that round, so a player eliminated/quit partway
+    // through, or one who joined mid-game, naturally has no entry for rounds
+    // outside when they were actually playing -- the client renders that gap
+    // as a dash rather than the engine needing to special-case it here.
+    this.roundHistory = [];
     this.roundNumber = 0;
     this.dealerIndex = -1;
     this.log = [];
@@ -540,6 +548,8 @@ class LeastCountGame {
       if (this.scores[id] >= this.eliminationScore) this.eliminated.add(id);
     }
 
+    this.roundHistory.push({ round: this.roundNumber, roundScores: { ...roundScores } });
+
     this.lastRoundResult = {
       declaredBy: playerId, correct, values, roundScores,
       cumulativeScores: { ...this.scores },
@@ -584,6 +594,7 @@ class LeastCountGame {
       gameOver: this.gameOver,
       winner: this.winner,
       lastRoundResult: this.lastRoundResult,
+      roundHistory: this.roundHistory,
       handCounts: this.hands
         ? Object.fromEntries(Object.entries(this.hands).map(([id, h]) => [id, h.length]))
         : {},
