@@ -6,9 +6,9 @@
 <title>Least Count</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<!-- Bold display face for the landing screen's wordmark only -- everything
+<!-- Regal display face for the landing screen's wordmark only -- everything
      else in the app keeps the existing Georgia serif stack untouched. -->
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -29,7 +29,7 @@
       <span id="signin-status" class="signin-status">Playing as Guest</span>
       <button id="btn-google-signin" class="secondary tiny" type="button">Sign in with Google</button>
     </div>
-    <label>Your name (మీ పేరు)</label>
+    <label>Your name</label>
     <input id="input-name" type="text" maxlength="20" placeholder="e.g. Manikanta" />
     <p id="landing-error" class="error"></p>
     <button id="btn-close-profile-menu" class="secondary">Close</button>
@@ -58,11 +58,11 @@
            of this file, not nested here anymore -- see the comment there
            for why. Same element IDs as before, so app.js didn't need to
            change, only where they physically live in the page. -->
-      <button id="btn-profile-menu" class="landing-avatar" type="button" aria-label="Profile">👤</button>
+      <button id="btn-profile-menu" class="landing-avatar" type="button" aria-label="Profile"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="7" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1Z"/></svg></button>
     </div>
     <h1 class="landing-wordmark landing-wordmark-sm">LEAST COUNT</h1>
     <div class="landing-topbar-right">
-      <button id="btn-remove-ads" class="icon-btn hidden" type="button" title="Remove Ads">💎</button>
+      <button id="btn-remove-ads" class="icon-btn hidden" type="button" title="Remove Ads"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 3 9l9 13 9-13-9-7Z"/></svg></button>
     </div>
   </div>
 
@@ -93,11 +93,11 @@
       <div class="mode-block">
         <h3>👥 Play with Friends</h3>
         <div class="row">
-          <button id="btn-create" class="secondary">Create Room (కొత్త రూమ్)</button>
+          <button id="btn-create" class="secondary">Create Room</button>
         </div>
         <div class="mode-block-join-row">
           <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
-          <button id="btn-join" class="secondary">Join (జాయిన్)</button>
+          <button id="btn-join" class="secondary">Join</button>
         </div>
       </div>
 
@@ -113,9 +113,9 @@
   </div>
 
   <div class="landing-footer-nav">
-    <button class="footer-nav-item active" type="button"><span>🏠</span>Home</button>
-    <button id="btn-my-stats" class="footer-nav-item" type="button"><span>📊</span>Stats</button>
-    <button id="btn-footer-rules" class="footer-nav-item" type="button"><span>📜</span>Rules</button>
+    <button class="footer-nav-item active" type="button"><span class="nav-icon"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.7 2 11h2v9a1 1 0 0 0 1 1h4v-6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6h4a1 1 0 0 0 1-1v-9h2L12 2.7Z"/></svg></span>Home</button>
+    <button id="btn-my-stats" class="footer-nav-item" type="button"><span class="nav-icon"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="3" y="12" width="5" height="9" rx="1"/><rect x="9.5" y="7" width="5" height="14" rx="1"/><rect x="16" y="3" width="5" height="18" rx="1"/></svg></span>Stats</button>
+    <button id="btn-footer-rules" class="footer-nav-item" type="button"><span class="nav-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6c-1.8-1.3-4.2-1.8-7-1.5v13c2.8-.3 5.2.2 7 1.5"/><path d="M12 6c1.8-1.3 4.2-1.8 7-1.5v13c-2.8-.3-5.2.2-7 1.5"/><path d="m6.5 9.5 1.2 1.2L10 8.5"/><path d="M14 9.5h4M14 12.5h4"/></svg></span>Rules</button>
   </div>
 </div>
 
@@ -146,7 +146,7 @@
   </div>
   <div class="landing-body">
     <div class="mode-block">
-      <div class="room-code-label">Room Code (రూమ్ కోడ్)</div>
+      <div class="room-code-label">Room Code</div>
       <!-- Copy just the 4-letter code (for saying it out loud / typing it
            elsewhere) and Share the full join-link (for pasting straight into
            WhatsApp etc. -- opening it pre-fills the room code automatically,
@@ -167,7 +167,7 @@
       </div>
       <p id="roomcode-action-feedback" class="hint roomcode-feedback"></p>
       <p class="hint">Send this code to your family/friends</p>
-      <button id="btn-game-rules" class="secondary rules-btn" type="button">ⓘ Game Rules (గేమ్ రూల్స్)</button>
+      <button id="btn-game-rules" class="secondary rules-btn" type="button">Game Rules</button>
     </div>
 
     <div class="mode-block">
@@ -177,11 +177,11 @@
 
     <div class="mode-block">
       <div id="lobby-maxscore-row" class="lobby-maxscore-row hidden">
-        <label for="input-maxscore">Max Score (గరిష్ట స్కోర్)</label>
+        <label for="input-maxscore">Max Score</label>
         <select id="input-maxscore"></select>
       </div>
 
-      <button id="btn-start" class="primary" disabled>Start Game (గేమ్ మొదలుపెట్టు)</button>
+      <button id="btn-start" class="primary" disabled>Start Game</button>
       <p id="lobby-hint" class="hint"></p>
       <button id="btn-leave-lobby" class="secondary leave-btn">Leave Room</button>
       <p id="lobby-error" class="error"></p>
@@ -212,7 +212,7 @@
 <div id="screen-game" class="screen">
   <div class="game-top">
     <div class="top-actions">
-      <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound">🔊</button>
+      <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
       <button id="btn-scores" class="tiny">Scores</button>
     </div>
   </div>
@@ -262,8 +262,8 @@
   </div>
 
   <div class="hand-header">
-    <span>Your cards (మీ కార్డులు) (Value: <b id="hand-value">0</b>)</span>
-    <button id="btn-show-hint" class="hint-btn hidden" type="button">💡 Show hint</button>
+    <span>Your cards (Value: <b id="hand-value">0</b>)</span>
+    <button id="btn-show-hint" class="hint-btn hidden" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 21h6v-1.5H9V21ZM12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2v.3h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg> Show hint</button>
   </div>
   <div id="hand" class="hand"></div>
 
@@ -281,7 +281,7 @@
      itself flies cards to the actual chair positions on that table. -->
 <div id="deal-phase-badge" class="deal-phase-badge hidden">
   <div id="start-seq-countdown" class="start-seq-countdown">3</div>
-  <div id="deal-phase-label" class="deal-phase-label hidden">Dealing cards... (కార్డులు ఇస్తున్నారు)</div>
+  <div id="deal-phase-label" class="deal-phase-label hidden">Dealing cards...</div>
 </div>
 
 <div id="overlay-start-sequence" class="start-sequence hidden">
@@ -321,7 +321,7 @@
     </div>
 
     <button id="btn-next-round" class="primary hidden">Next Round</button>
-    <button id="btn-see-final-result" class="primary hidden">See Final Result 🏆</button>
+    <button id="btn-see-final-result" class="primary hidden">See Final Result <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 3h10v2h3a1 1 0 0 1 1 1c0 3-2 5-4.5 5.3A5.5 5.5 0 0 1 13 15.9V18h3v2H8v-2h3v-2.1A5.5 5.5 0 0 1 7.5 11.3C5 11 3 9 3 6a1 1 0 0 1 1-1h3V3Zm0 4H5c.2 1.5 1.2 2.6 2 3V7Zm10 0v3c.8-.4 1.8-1.5 2-3h-2Z"/></svg></button>
     <button id="btn-leave-round-result" class="secondary leave-btn">Leave Game</button>
     <p id="round-result-hint" class="hint"></p>
   </div>
@@ -329,30 +329,30 @@
 
 <div id="overlay-rules" class="overlay hidden">
   <div class="card-panel rules-panel">
-    <h2>📜 Game Rules (గేమ్ రూల్స్)</h2>
+    <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6c-1.8-1.3-4.2-1.8-7-1.5v13c2.8-.3 5.2.2 7 1.5"/><path d="M12 6c1.8-1.3 4.2-1.8 7-1.5v13c-2.8-.3-5.2.2-7 1.5"/><path d="m6.5 9.5 1.2 1.2L10 8.5"/><path d="M14 9.5h4M14 12.5h4"/></svg> Game Rules</h2>
     <div class="rules-body">
       <div class="rules-item">
-        <div class="rules-heading">🎯 Goal (లక్ష్యం)</div>
+        <div class="rules-heading">🎯 Goal</div>
         <p>Score as few points as possible. When your total points reach the elimination score, you're out. The last player still standing wins.</p>
       </div>
       <div class="rules-item">
-        <div class="rules-heading">🃏 Card Values (కార్డుల విలువ)</div>
+        <div class="rules-heading">🃏 Card Values</div>
         <p>Ace = 1, number cards = face value, face cards (J/Q/K) = 10. Each round, one rank is picked as the Joker — Jokers and that rank are worth 0 points and can replace any card.</p>
       </div>
       <div class="rules-item">
-        <div class="rules-heading">🔄 Your Turn (మీ వంతు)</div>
-        <p>Draw a card from the stock pile or the open pile, then discard one card. Try to keep your hand's total value as low as possible.</p>
+        <div class="rules-heading">🔄 Your Turn</div>
+        <p>Discard one card (or a group of the same rank) from your hand. If it matches the open card's rank -- or the open card is this round's Joker -- that's it, turn over. Otherwise you'll automatically draw one card from the stock pile as a penalty for not matching. Try to keep your hand's total value as low as possible.</p>
       </div>
       <div class="rules-item">
         <div class="rules-heading">🔥 +2 Chain</div>
         <p>Discarding a 2 forces the next player to draw 2 penalty cards — unless they also discard a 2, which stacks the chain higher (+4, +6...). Whoever can't continue it draws the full penalty.</p>
       </div>
       <div class="rules-item">
-        <div class="rules-heading">📣 Declaring (డిక్లేర్)</div>
+        <div class="rules-heading">📣 Declaring</div>
         <p>Once your hand value is 5 or less, you can declare "Least Count!" If your total really is the lowest at the table, every other player scores their own hand value as penalty points. If you're wrong, you take the penalty instead.</p>
       </div>
       <div class="rules-item">
-        <div class="rules-heading">🏆 Elimination & Winning (ఎలిమినేషన్)</div>
+        <div class="rules-heading">🏆 Elimination & Winning</div>
         <p>Points carry over every round. Cross the elimination score (chosen before the game, e.g. 100/200) and you're eliminated. Play continues until only one player remains — they win!</p>
       </div>
     </div>
@@ -392,7 +392,7 @@
 
 <div id="overlay-my-stats" class="overlay hidden">
   <div class="card-panel">
-    <h2>📊 My Stats</h2>
+    <h2><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="3" y="12" width="5" height="9" rx="1"/><rect x="9.5" y="7" width="5" height="14" rx="1"/><rect x="16" y="3" width="5" height="18" rx="1"/></svg> My Stats</h2>
     <div id="my-stats-body"></div>
     <button id="btn-close-my-stats" class="secondary">Close</button>
   </div>
@@ -410,25 +410,25 @@
 
 <div id="draw-reveal" class="draw-reveal hidden">
   <div class="draw-reveal-box">
-    <div class="draw-reveal-label" id="draw-reveal-label">You drew... (మీకు వచ్చింది...)</div>
+    <div class="draw-reveal-label" id="draw-reveal-label">You drew...</div>
     <div id="draw-reveal-cards" class="draw-reveal-cards"></div>
   </div>
 </div>
 
 <div id="chat-fab" class="chat-fab hidden">
-  💬<span id="chat-badge" class="badge hidden">0</span>
+  <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg><span id="chat-badge" class="badge hidden">0</span>
 </div>
 
 <div id="chat-panel" class="chat-panel hidden">
   <div class="chat-header">
-    <span>💬 Chat</span>
-    <button id="btn-chat-close" class="tiny">✕</button>
+    <span><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg> Chat</span>
+    <button id="btn-chat-close" class="tiny"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
   </div>
   <div id="chat-messages" class="chat-messages"></div>
   <div id="gif-picker" class="gif-picker hidden">
     <div class="gif-picker-header">
       <input id="gif-search-input" type="text" placeholder="Search GIFs..." />
-      <button id="btn-gif-close" class="tiny">✕</button>
+      <button id="btn-gif-close" class="tiny"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
     </div>
     <div id="gif-suggestions" class="gif-suggestions"></div>
     <div id="gif-results" class="gif-results"></div>
@@ -436,7 +436,7 @@
   <div class="chat-input-row">
     <input id="chat-input" type="text" maxlength="300" placeholder="Message..." />
     <button id="btn-gif-open" class="tiny" title="Send a GIF">GIF</button>
-    <button id="btn-chat-send" class="tiny primary">➤</button>
+    <button id="btn-chat-send" class="tiny primary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg></button>
   </div>
 </div>
 
