@@ -713,13 +713,23 @@
     }, 1400);
   }
 
-  // A small "flying card" travels from the table's center to each player's
-  // ACTUAL seat in turn, looping around the real oval table for a full 13
-  // passes (matching the real hand size dealt underneath -- not a shortened
-  // stand-in), mirroring how a real dealer hands out one card at a time,
-  // round and round. Each seat's card-count ticks up as cards land on it.
-  // totalMs is computed server-side to scale with player count, so
-  // per-flight speed stays consistent (~90ms) regardless of table size.
+  // A small "flying card" travels directly from seat to seat around the real
+  // oval table, looping for a full 13 passes (matching the real hand size
+  // dealt underneath -- not a shortened stand-in), mirroring how a real
+  // dealer hands out one card at a time, round and round. Each seat's card
+  // count ticks up as cards land on it. totalMs is computed server-side to
+  // scale with player count, so per-flight speed stays consistent (~90ms)
+  // regardless of table size.
+  //
+  // Only the very first card starts from the table's center (nothing has
+  // been dealt yet); every card after that flies straight from wherever the
+  // PREVIOUS card just landed to the next seat -- it no longer snaps back
+  // through the middle between every single card. That center-round-trip
+  // was the original/production behavior, but once testers could actually
+  // see it clearly (after fixing the deck-intro bug that had been silently
+  // skipping this whole animation), the feedback was that it read as
+  // distracting rather than dealer-like, so this switches to a direct
+  // seat-to-seat path instead.
   function animateDealing(players, totalMs, passes) {
     const oval = document.getElementById('oval-table');
     const flyer = document.getElementById('deal-flyer');
@@ -746,25 +756,27 @@
     let cancelled = false;
     dealAnimationCancel = () => { cancelled = true; flyer.classList.add('hidden'); };
 
+    // Snap the flyer to the table's center once, up front -- this is the
+    // ONLY time it starts from center. Every flight after this continues
+    // from wherever the flyer's transition just left it (the previous
+    // seat), so there's no repeated reset-to-center in the loop below.
+    const start = tableCenter();
+    flyer.style.transition = 'none';
+    flyer.style.left = start.x + 'px';
+    flyer.style.top = start.y + 'px';
+    flyer.style.opacity = '1';
+
     function flyNext() {
       if (cancelled) return;
       if (flight >= totalFlights) { flyer.style.opacity = '0'; return; }
       const p = players[flight % players.length];
       const seatEl = seatFor(p.playerId);
       if (!seatEl) { flight += 1; flyNext(); return; }
-      const from = tableCenter();
       const to = centerOf(seatEl);
-      flyer.style.transition = 'none';
-      flyer.style.left = from.x + 'px';
-      flyer.style.top = from.y + 'px';
-      flyer.style.opacity = '1';
       const travelMs = flightMs * 0.7;
-      requestAnimationFrame(() => {
-        if (cancelled) return;
-        flyer.style.transition = `left ${travelMs}ms ease, top ${travelMs}ms ease`;
-        flyer.style.left = to.x + 'px';
-        flyer.style.top = to.y + 'px';
-      });
+      flyer.style.transition = `left ${travelMs}ms ease, top ${travelMs}ms ease`;
+      flyer.style.left = to.x + 'px';
+      flyer.style.top = to.y + 'px';
       setTimeout(() => {
         if (cancelled) return;
         const metaEl = seatEl.querySelector('.seat-meta');
@@ -778,7 +790,12 @@
         setTimeout(flyNext, flightMs * 0.3);
       }, travelMs);
     }
-    flyNext();
+    // One rAF so the browser actually paints the center starting position
+    // before the first seat-bound transition kicks in (without this, the
+    // very first flight would jump straight to its target with no visible
+    // travel, since the "instant" center placement and the first animated
+    // move would otherwise be batched into the same paint).
+    requestAnimationFrame(() => { if (!cancelled) flyNext(); });
   }
 
   // Called once the first post-deal game_state arrives (pendingStartReveal
