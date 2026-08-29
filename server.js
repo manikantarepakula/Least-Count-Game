@@ -5,7 +5,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
-const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, cardValue, DECLARE_MAX_VALUE } = require('./game/gameLogic');
+const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, cardValue, DECLARE_MAX_VALUE, deckCountForPlayers } = require('./game/gameLogic');
 
 const app = express();
 const server = http.createServer(app);
@@ -188,6 +188,11 @@ const COUNTDOWN_MS = 3000; // 3-2-1
 // and thinner as more players join.
 const DEAL_PASSES = 13;
 const DEAL_FLIGHT_MS = 90; // time per individual card flight (travel + brief pause)
+// New intro phase, before the existing per-card deal animation: shows the
+// actual number of decks in play (so players can reason about card-count
+// probability), then a riffle-merge shuffle. Fixed duration regardless of
+// table size -- only the deck COUNT shown changes, not how long this takes.
+const DECK_INTRO_MS = 3400;
 const REVEAL_MS = 2500; // joker/open-card reveal, held on screen
 const REVEAL_TO_TIMER_MS = 1200; // turn timer quietly starts this far into the reveal
 // Minimum penalty-cards-in-one-go and discard-group-size that count as
@@ -261,6 +266,31 @@ function publicRoomInfo(room) {
       isBot: !!room.players.get(pid).isBot,
     })),
   };
+}
+
+// Picks who should become the new host when the current one leaves/disconnects
+// (excludePlayerId). Prefers someone actually still in the fight (connected,
+// human, not eliminated/quit) over an eliminated player who's just sitting in
+// the room post-elimination -- an eliminated host closing their tab shouldn't
+// hand hosting to some other eliminated spectator instead of an active player.
+// Falls back progressively (any connected human, then anyone at all) so a
+// host handoff never simply fails.
+function pickNextHost(room, excludePlayerId) {
+  const eliminated = room.game ? room.game.eliminated : null;
+  const quit = room.game ? room.game.quit : null;
+  const isActive = (id) => {
+    const pl = room.players.get(id);
+    if (!pl || pl.isBot || !pl.connected) return false;
+    if (eliminated && eliminated.has(id)) return false;
+    if (quit && quit.has(id)) return false;
+    return true;
+  };
+  const isConnectedHuman = (id) => {
+    const pl = room.players.get(id);
+    return !!(pl && pl.connected && !pl.isBot);
+  };
+  const candidates = room.order.filter((id) => id !== excludePlayerId);
+  return candidates.find(isActive) || candidates.find(isConnectedHuman) || candidates[0] || null;
 }
 
 function broadcastRoom(room) {
@@ -474,10 +504,13 @@ function beginStartSequence(room, roomCode) {
     ? room.game.turnOrder
     : room.order;
   const dealMs = DEAL_PASSES * dealOrder.length * DEAL_FLIGHT_MS;
+  const deckCount = deckCountForPlayers(dealOrder.length);
   room.currentDealMs = dealMs; // remembered so a mid-sequence rejoin replays with the same timing
   broadcastRoom(room);
   io.to(roomCode).emit('game_starting', {
     countdownMs: COUNTDOWN_MS,
+    introMs: DECK_INTRO_MS,
+    deckCount,
     dealMs,
     dealPasses: DEAL_PASSES,
     revealMs: REVEAL_MS,
@@ -499,7 +532,7 @@ function beginStartSequence(room, roomCode) {
       scheduleTurnTimer(room); // real turn timer quietly starts here, mid-reveal
       broadcastGameState(room);
     }, REVEAL_TO_TIMER_MS);
-  }, COUNTDOWN_MS + dealMs);
+  }, COUNTDOWN_MS + DECK_INTRO_MS + dealMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -802,7 +835,11 @@ io.on('connection', (socket) => {
       // rounds); deferring it to a single place keeps "joins next round, at
       // the current max score" true no matter when the host actually taps
       // Admit.
-      io.to(req.socketId).emit('join_admitted', { roomCode, playerId });
+      // Include chatHistory here too -- every other join path (create_room,
+      // join_room, queue_matched) sends it so the client can render existing
+      // messages and show the chat FAB; this path was missing it, which is
+      // why someone admitted mid-game never got a chat option at all.
+      io.to(req.socketId).emit('join_admitted', { roomCode, playerId, chatHistory: room.chatHistory });
       broadcastRoom(room);
       ack && ack({ ok: true });
     } catch (e) {
@@ -874,6 +911,8 @@ io.on('connection', (socket) => {
         const dealOrder = (room.game.turnOrder && room.game.turnOrder.length) ? room.game.turnOrder : room.order;
         io.to(socket.id).emit('game_starting', {
           countdownMs: COUNTDOWN_MS,
+          introMs: DECK_INTRO_MS,
+          deckCount: deckCountForPlayers(dealOrder.length),
           dealMs: room.currentDealMs || DEAL_PASSES * dealOrder.length * DEAL_FLIGHT_MS,
           dealPasses: DEAL_PASSES,
           revealMs: REVEAL_MS,
@@ -1107,7 +1146,10 @@ io.on('connection', (socket) => {
         return;
       }
 
-      if (room.hostPlayerId === playerId) room.hostPlayerId = room.order[0];
+      if (room.hostPlayerId === playerId) {
+        const nextHost = pickNextHost(room, playerId);
+        if (nextHost) room.hostPlayerId = nextHost;
+      }
 
       broadcastRoom(room);
       if (room.game) broadcastGameState(room);
@@ -1275,6 +1317,17 @@ io.on('connection', (socket) => {
     if (p) {
       p.connected = false;
       p.socketId = null;
+      // If the disconnected player was the host, hand hosting off to an
+      // actually-active player (see pickNextHost) -- otherwise a host who
+      // closes the app/tab (rather than tapping Leave Room, e.g. right after
+      // being eliminated) permanently strands the room. Every host-only
+      // action (Next Round, changing max score, kicking) checks
+      // hostPlayerId, and that id could otherwise never match a real
+      // connected player again.
+      if (room.hostPlayerId === entry.playerId) {
+        const nextHost = pickNextHost(room, entry.playerId);
+        if (nextHost) room.hostPlayerId = nextHost;
+      }
       broadcastRoom(room);
     }
   });
