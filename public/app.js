@@ -1919,12 +1919,6 @@
       ? `Eliminated: ${r.newlyEliminated.map(playerName).join(', ')}`
       : '';
 
-    // Collapsed by default every time this screen (re)opens, same as the
-    // Scores overlay's own toggle -- otherwise it'd stay expanded from
-    // whatever state the previous round left it in.
-    document.getElementById('full-scorecard-rr').classList.add('hidden');
-    document.getElementById('btn-toggle-full-scorecard-rr').textContent = 'See full scorecard';
-
     document.getElementById('overlay-round-result').classList.remove('hidden');
     updateRoundResultHostControls();
   }
@@ -1973,10 +1967,6 @@
       row.innerHTML = `<span>${escapeHtml(p.name)}${elim}</span><span>${latestGame.scores[p.playerId] ?? 0} pts</span>`;
       body.appendChild(row);
     });
-    // Collapsed by default every time the overlay reopens, so it doesn't
-    // stay expanded from a previous visit.
-    document.getElementById('full-scorecard').classList.add('hidden');
-    document.getElementById('btn-toggle-full-scorecard').textContent = 'See full scorecard';
     document.getElementById('overlay-scores').classList.remove('hidden');
   };
   document.getElementById('btn-close-scores').onclick = () => document.getElementById('overlay-scores').classList.add('hidden');
@@ -1988,13 +1978,18 @@
   // completed round; the Total column reads straight from game.scores (the
   // same authoritative cumulative total elimination is based on) rather than
   // summing history client-side, so it can never drift out of sync.
-  // tableId/hintId let this same function drive either the in-game Scores
-  // overlay's scorecard or the identical one on the post-round result
-  // screen, so both stay pixel-for-pixel identical and never drift apart.
-  function renderFullScorecard(tableId, hintId) {
+  //
+  // This lives on its own dedicated overlay (#overlay-full-scorecard),
+  // opened from either the in-game Scores overlay or the round-result
+  // screen's own link -- previously this expanded INLINE underneath
+  // whichever screen opened it, which made an already-tall round-result
+  // panel (podium + full hand reveal) even taller/more cluttered once
+  // expanded. A separate screen keeps both entry points short, with only
+  // one scorecard table to ever keep in sync.
+  function renderFullScorecard() {
     if (!latestGame || !latestRoom) return;
     const history = latestGame.roundHistory || [];
-    const table = document.getElementById(tableId);
+    const table = document.getElementById('scorecard-table');
     table.innerHTML = '';
 
     const headRow = document.createElement('tr');
@@ -2017,22 +2012,17 @@
       table.appendChild(row);
     });
 
-    document.getElementById(hintId).classList.toggle('hidden', history.length <= 3);
+    document.getElementById('scorecard-swipe-hint').classList.toggle('hidden', history.length <= 3);
   }
 
-  function wireFullScorecardToggle(btnId, panelId, tableId, hintId) {
-    document.getElementById(btnId).onclick = () => {
-      const el = document.getElementById(panelId);
-      const btn = document.getElementById(btnId);
-      const showing = el.classList.toggle('hidden') === false; // toggle() returns true if now hidden
-      if (showing) {
-        renderFullScorecard(tableId, hintId);
-      }
-      btn.textContent = showing ? 'Hide full scorecard' : 'See full scorecard';
-    };
+  function openFullScorecard() {
+    renderFullScorecard();
+    document.getElementById('overlay-full-scorecard').classList.remove('hidden');
   }
-  wireFullScorecardToggle('btn-toggle-full-scorecard', 'full-scorecard', 'scorecard-table', 'scorecard-swipe-hint');
-  wireFullScorecardToggle('btn-toggle-full-scorecard-rr', 'full-scorecard-rr', 'scorecard-table-rr', 'scorecard-swipe-hint-rr');
+  document.getElementById('btn-open-full-scorecard').onclick = openFullScorecard;
+  document.getElementById('btn-open-full-scorecard-rr').onclick = openFullScorecard;
+  document.getElementById('btn-close-full-scorecard').onclick = () =>
+    document.getElementById('overlay-full-scorecard').classList.add('hidden');
 
   document.getElementById('btn-game-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
   document.getElementById('btn-close-rules').onclick = () => document.getElementById('overlay-rules').classList.add('hidden');
