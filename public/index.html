@@ -309,6 +309,19 @@
     <div id="round-result-note" class="round-result-note"></div>
     <div id="round-result-hands" class="reveal-rows"></div>
 
+    <!-- Same "See full scorecard" toggle as the in-game Scores overlay,
+         also available right here on the round-result screen so players
+         don't have to close this, then separately open Scores, to see the
+         round-by-round history -- rendered via the same renderFullScorecard()
+         function (now parameterized by element id) so both stay in sync. -->
+    <button id="btn-toggle-full-scorecard-rr" class="link-btn" type="button">See full scorecard</button>
+    <div id="full-scorecard-rr" class="full-scorecard hidden">
+      <p class="scorecard-hint hidden" id="scorecard-swipe-hint-rr">swipe for more rounds →</p>
+      <div class="scorecard-scroll">
+        <table id="scorecard-table-rr"></table>
+      </div>
+    </div>
+
     <div id="round-maxscore-row" class="round-maxscore-row hidden">
       <label for="round-maxscore-select">Change Max Score</label>
       <select id="round-maxscore-select"></select>
