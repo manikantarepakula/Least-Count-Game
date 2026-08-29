@@ -147,7 +147,25 @@
   <div class="landing-body">
     <div class="mode-block">
       <div class="room-code-label">Room Code (రూమ్ కోడ్)</div>
-      <div class="room-code-display" id="lobby-roomcode">----</div>
+      <!-- Copy just the 4-letter code (for saying it out loud / typing it
+           elsewhere) and Share the full join-link (for pasting straight into
+           WhatsApp etc. -- opening it pre-fills the room code automatically,
+           see the ?room= handling in app.js) -- as small icon buttons sitting
+           right beside the code itself, not full-width buttons below it.
+           Both write a short "Copied!"/"Shared!" confirmation into
+           #roomcode-action-feedback so there's always visible feedback, even
+           on desktop where no native share sheet appears and it silently
+           falls back to clipboard-copy. -->
+      <div class="room-code-row">
+        <div class="room-code-display" id="lobby-roomcode">----</div>
+        <button id="btn-copy-roomcode" class="icon-btn" type="button" aria-label="Copy room code" title="Copy code">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="13" height="14" rx="2"/><path d="M8 7V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-3"/></svg>
+        </button>
+        <button id="btn-share-room" class="icon-btn" type="button" aria-label="Share invite link" title="Share invite">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg>
+        </button>
+      </div>
+      <p id="roomcode-action-feedback" class="hint roomcode-feedback"></p>
       <p class="hint">Send this code to your family/friends</p>
       <button id="btn-game-rules" class="secondary rules-btn" type="button">ⓘ Game Rules (గేమ్ రూల్స్)</button>
     </div>
@@ -194,6 +212,7 @@
 <div id="screen-game" class="screen">
   <div class="game-top">
     <div class="top-actions">
+      <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound">🔊</button>
       <button id="btn-scores" class="tiny">Scores</button>
     </div>
   </div>
@@ -215,6 +234,10 @@
     </div>
     <!-- .seat elements injected by app.js -->
     <div id="deal-flyer" class="deal-flyer hidden"></div>
+    <!-- Pre-deal intro: shows the actual number of decks in play, then a
+         riffle-merge shuffle, before the existing per-card deal animation
+         below starts. Populated dynamically by runDeckIntro() in app.js. -->
+    <div id="deck-intro" class="deck-intro hidden"></div>
   </div>
 
   <div id="chain-banner" class="chain-banner hidden">
@@ -335,6 +358,17 @@
   <div class="card-panel">
     <h2>Scores</h2>
     <div id="scores-body"></div>
+    <button id="btn-toggle-full-scorecard" class="link-btn" type="button">See full scorecard</button>
+    <!-- Round-by-round table: players as rows (capped at 10, so this never
+         needs to scroll), rounds as columns (can grow with a long game, so
+         this side scrolls instead) with the player-name column frozen via
+         CSS position:sticky so it stays visible while scrolling sideways. -->
+    <div id="full-scorecard" class="full-scorecard hidden">
+      <p class="scorecard-hint hidden" id="scorecard-swipe-hint">swipe for more rounds →</p>
+      <div class="scorecard-scroll">
+        <table id="scorecard-table"></table>
+      </div>
+    </div>
     <button id="btn-close-scores" class="secondary">Close</button>
   </div>
 </div>
