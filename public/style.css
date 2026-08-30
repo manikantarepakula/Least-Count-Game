@@ -1372,7 +1372,14 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
   padding: 10px 14px; border-bottom: 1px solid var(--jade-border); font-weight: 700;
 }
 .chat-header button.tiny .icon, .chat-header span .icon { margin: 0; }
-.chat-messages { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 13px; }
+/* min-height: 0 is required here, not optional -- a flex item defaults to
+   min-height:auto, which refuses to shrink below its own content's natural
+   height. Without this override, once enough messages pile up to overflow
+   the panel, the browser just silently clips them instead of ever engaging
+   overflow-y's scrollbar/touch-scroll -- the item never registers as
+   "smaller than its content," so there's nothing to scroll. This is why
+   chat looked stuck/unscrollable once a conversation got long enough. */
+.chat-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px; font-size: 13px; }
 .chat-msg { margin-bottom: 8px; }
 /* Gold for other players' names (matches the score/highlight role used
    everywhere else), red for your own -- same "you" accent as the primary
@@ -1414,7 +1421,10 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .gif-suggestion-chip:active { background: rgba(255,255,255,0.1); }
 .gif-results {
-  flex: 1; overflow-y: auto; padding: 8px; display: grid;
+  /* min-height: 0 -- same flex-item trap as .chat-messages above: without it
+     this grid refuses to shrink below its own content height once enough
+     GIF results load, so overflow-y:auto never actually engages. */
+  flex: 1; min-height: 0; overflow-y: auto; padding: 8px; display: grid;
   grid-template-columns: repeat(3, 1fr); gap: 6px; align-content: start;
 }
 .gif-results img { width: 100%; height: 72px; object-fit: cover; border-radius: 6px; cursor: pointer; }
