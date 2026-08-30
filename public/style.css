@@ -1349,11 +1349,22 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 .badge.hidden { display: none; }
 
 .chat-panel {
-  position: fixed; bottom: 0; right: 0; left: 0; margin: 0 auto; width: 100%; max-width: 380px;
+  position: fixed;
+  /* With the keyboard now set to overlay content (see index.html's viewport
+     meta tag) instead of resizing the page, the page itself never moves --
+     so this panel has to lift ITSELF above the keyboard instead of relying
+     on the old (page-shrinking) behavior to reveal it. env(keyboard-inset-
+     height) is exactly the keyboard's current height, 0 when it's closed,
+     so this is a no-op until the input is actually focused. Falls back to
+     plain 0 on browsers that don't support the env() (nothing lost there --
+     same as the old fixed bottom:0 they'd have had anyway). */
+  bottom: env(keyboard-inset-height, 0px);
+  right: 0; left: 0; margin: 0 auto; width: 100%; max-width: 380px;
   height: 60vh; max-height: 480px;
   background: var(--jade-panel); color: var(--text-light); border: 1px solid var(--jade-border); border-bottom: none;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0; z-index: 25;
   display: flex; flex-direction: column; box-shadow: var(--shadow-lg);
+  transition: bottom 0.15s ease-out;
 }
 .chat-panel.hidden { display: none; }
 .chat-header {
