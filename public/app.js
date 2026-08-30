@@ -62,6 +62,25 @@
     return user ? user.uid : null;
   }
 
+  // Short-lived Firebase ID token, sent instead of the raw uid on every
+  // create/join/stats call. The server independently verifies this itself
+  // (admin.auth().verifyIdToken()) instead of trusting whatever uid a client
+  // claims -- sending the uid string alone would let anyone who opens dev
+  // tools type in someone else's real uid and have stats/results attributed
+  // to that stranger's account. Resolves to null before sign-in has
+  // finished, same as currentFirebaseUid() above -- the server treats that
+  // the same as any other guest whose account isn't linked yet.
+  async function currentFirebaseIdToken() {
+    const user = window.LCAuth && window.LCAuth.getUser();
+    if (!user) return null;
+    try {
+      return await user.getIdToken();
+    } catch (e) {
+      console.warn('[Firebase] Failed to get ID token:', e.message);
+      return null;
+    }
+  }
+
   // Thin, always-safe wrapper around window.LCAnalytics.log -- so every call
   // site below doesn't need its own existence check. A handful of funnel
   // events only (room created/joined, solo game started, game completed,
@@ -116,7 +135,7 @@
   // only Google-linked accounts.
   const myStatsBtn = document.getElementById('btn-my-stats');
   if (myStatsBtn) {
-    myStatsBtn.onclick = () => {
+    myStatsBtn.onclick = async () => {
       const body = document.getElementById('my-stats-body');
       body.innerHTML = '<p class="hint">Loading...</p>';
       document.getElementById('overlay-my-stats').classList.remove('hidden');
@@ -125,7 +144,8 @@
         body.innerHTML = '<p class="hint">Still signing you in -- try again in a second.</p>';
         return;
       }
-      socket.emit('get_my_stats', { firebaseUid: uid }, (res) => {
+      const firebaseIdToken = await currentFirebaseIdToken();
+      socket.emit('get_my_stats', { firebaseIdToken }, (res) => {
         if (!res || !res.ok) {
           body.innerHTML = `<p class="error">${escapeHtml((res && res.error) || 'Could not load stats.')}</p>`;
           return;
@@ -973,10 +993,11 @@
     return name;
   }
 
-  document.getElementById('btn-create').onclick = () => {
+  document.getElementById('btn-create').onclick = async () => {
     const name = getPlayerName();
     if (!name) return setLandingError('Enter your name');
-    socket.emit('create_room', { name, firebaseUid: currentFirebaseUid() }, (res) => {
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('create_room', { name, firebaseIdToken }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('room_created');
       saveSession(res.roomCode, res.playerId);
@@ -986,12 +1007,13 @@
     });
   };
 
-  document.getElementById('btn-join').onclick = () => {
+  document.getElementById('btn-join').onclick = async () => {
     const name = getPlayerName();
     const roomCode = document.getElementById('input-roomcode').value.trim().toUpperCase();
     if (!name) return setLandingError('Enter your name');
     if (!roomCode) return setLandingError('Enter room code');
-    socket.emit('join_room', { roomCode, name, firebaseUid: currentFirebaseUid() }, (res) => {
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('join_room', { roomCode, name, firebaseIdToken }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       // room.phase was already 'playing' when the request landed -- the
       // server held it as a pending request instead of joining outright
@@ -1231,11 +1253,12 @@
   initDropdown('input-maxscore');
   initDropdown('round-maxscore-select');
 
-  document.getElementById('btn-solo-start').onclick = () => {
+  document.getElementById('btn-solo-start').onclick = async () => {
     const name = getPlayerName();
     if (!name) return setLandingError('Enter your name');
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
-    socket.emit('create_solo_room', { name, botCount, firebaseUid: currentFirebaseUid() }, (res) => {
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('create_solo_room', { name, botCount, firebaseIdToken }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('solo_game_started', { bot_count: botCount });
       saveSession(res.roomCode, res.playerId);
@@ -1266,11 +1289,12 @@
     if (queueTimeoutTimer) { clearTimeout(queueTimeoutTimer); queueTimeoutTimer = null; }
   }
 
-  document.getElementById('btn-play-online').onclick = () => {
+  document.getElementById('btn-play-online').onclick = async () => {
     const name = getPlayerName();
     if (!name) return setLandingError('Enter your name');
     const playerCount = Number(document.getElementById('input-online-playercount').value) || 3;
-    socket.emit('queue_join', { playerCount, name, firebaseUid: currentFirebaseUid() }, (res) => {
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('queue_join', { playerCount, name, firebaseIdToken }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       queuedPlayerCount = playerCount;
       document.getElementById('queue-waiting-count').textContent = String(playerCount);
@@ -1858,14 +1882,19 @@
 
     order.forEach(({ p, place }) => {
       const slot = document.createElement('div');
-      slot.className = `podium-slot podium-place-${place}`;
+      // Own slot gets a neutral ring (own-podium, styled in style.css) instead
+      // of appending " (You)" as literal text -- that text used to share the
+      // exact same tight, already-truncation-prone width as everyone else's
+      // name here, so it clipped sooner than it should have for no good
+      // reason. Same fix already applied to the oval table's own-seat name.
+      slot.className = `podium-slot podium-place-${place}${p.playerId === myPlayerId ? ' own-podium' : ''}`;
       const medal = place === 1 ? '🥇' : place === 2 ? '🥈' : '🥉';
       const elim = game.eliminated && game.eliminated.includes(p.playerId) ? ' (out)' : '';
       const delta = r && r.roundScores ? r.roundScores[p.playerId] : undefined;
       const deltaHtml = delta !== undefined ? `<div class="podium-delta">+${delta} this round</div>` : '';
       slot.innerHTML =
         `<div class="podium-medal">${medal}</div>` +
-        `<div class="podium-name">${escapeHtml(p.name)}${p.playerId === myPlayerId ? ' (You)' : ''}${elim}</div>` +
+        `<div class="podium-name">${escapeHtml(p.name)}${elim}</div>` +
         deltaHtml +
         `<div class="podium-score">${p.total} pts</div>`;
       podium.appendChild(slot);
@@ -2162,7 +2191,10 @@
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    const colors = ['#d4a017', '#ffcb6b', '#1e5631', '#9fd8b8', '#ffffff', '#c0392b'];
+    // Matches the current jade/gold/red design tokens (style.css :root) --
+    // this used to still be the pre-redesign gold/green/purple palette,
+    // clashing with the theme for the ~3 seconds it's on screen.
+    const colors = ['#d4a017', '#f2c14e', '#e5252c', '#a8151a', '#ffffff'];
     const pieces = Array.from({ length: 140 }, () => ({
       x: Math.random() * canvas.width,
       y: -20 - Math.random() * canvas.height * 0.5,
@@ -2807,6 +2839,11 @@
     socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId }, (res) => {
       if (!res.ok) {
         localStorage.removeItem('leastcount_session');
+        // Same cleanup leaveRoom() already does -- without it, a failed
+        // rejoin sent you back to the landing screen but left the red chat
+        // FAB (and, if it was open, the whole chat panel) floating on top,
+        // covering the footer nav underneath.
+        hideChatUI();
         showScreen('screen-landing');
       } else {
         loadChatHistory(res.chatHistory);
