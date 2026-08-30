@@ -1,1375 +1,1499 @@
-* { box-sizing: border-box; }
-
-/* ---- Design tokens: single source of truth for the crimson accent and
-   reusable elevation shadows, instead of each component inventing its own
-   near-miss red / shadow value. Same visual colors as before (this just
-   points every use at one canonical value), so this pass carries no risky
-   layout changes -- only Play Online/Bots/Friends button + wordmark tweaks
-   noted where the value actually shifts. ---- */
-:root {
-  --red: #e5252c;
-  --red-dark: #a8151a;
-  --red-rgb: 229, 37, 44;
-  /* One jade canvas for the entire app (replaces the old near-black
-     landing/lobby, bright-green felt body background, plain white modals,
-     and light-cream round-result/scorecard -- four different systems that
-     used to make each screen look like a different app). Deep, slightly
-     blue-leaning green rather than a generic bright "poker felt" green, so
-     it still reads as a card table to anyone who plays this genre without
-     being a copy of every other rummy/teen-patti app's default green. */
-  --jade-bg: #123d30;
-  --jade-bg-dark: #081f19;
-  --jade-panel: #0d2a22;
-  --jade-panel-alt: #0a231c;
-  --jade-border: rgba(255,255,255,0.14);
-  --text-light: #e8e6ec;
-  --text-muted: #9fc4b5;
-  /* Two-tier gold: bright for headings/highlights/score moments, a richer
-     deep gold reserved for the declare button -- never the same value
-     reused for both roles. */
-  --gold: #d4a017;
-  --gold-bright: #f2c14e;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
-  --shadow-md: 0 8px 20px rgba(0,0,0,0.4);
-  --shadow-lg: 0 16px 32px rgba(0,0,0,0.5);
-}
-body {
-  margin: 0;
-  /* Georgia leads the stack for that classic-serif look on English text --
-     Telugu support is no longer needed since all Telugu text was removed. */
-  font-family: Georgia, 'Times New Roman', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: radial-gradient(circle at top, var(--jade-bg), var(--jade-bg-dark));
-  color: var(--text-light);
-  min-height: 100vh;
-}
-.icon {
-  width: 18px; height: 18px; display: inline-block; vertical-align: -4px;
-  flex-shrink: 0;
-}
-button .icon { margin-right: 6px; }
-button .icon:only-child { margin-right: 0; }
-
-/* On mobile, 100vh can mean the LARGER viewport (as if the address bar were
-   hidden), taller than what's actually visible. That leftover min-height
-   was clamping the game screen upward and forcing a page-level scrollbar
-   even after switching it to 100dvh. Locking body itself to the current
-   dynamic viewport while the game screen is active removes that scroll. */
-body.game-active {
-  min-height: 0;
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;
-}
-
-.screen { display: none; min-height: 100vh; padding: 16px; }
-.screen.active { display: block; }
-
-/* Game screen fits one viewport height, no page scroll, on any device.
-   justify-content:center matters on screens taller than the oval table's own
-   max-height cap below (a big desktop monitor, or a modern tall-aspect-ratio
-   phone like a Pixel) -- on a SHORT screen the oval's flex-grow already
-   consumes all available room before centering ever gets a say, so this
-   changes nothing there. It only kicks in once the oval hits its cap and
-   stops growing, and instead of the leftover room piling up as dead space
-   below the action buttons, it gets split evenly as breathing room above
-   and below the whole table+hand+buttons group. */
-#screen-game.screen.active {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-height: 0;
-  height: 100vh;
-  height: 100dvh;
-  padding: 6px 8px;
-  overflow: hidden;
-}
-
-.card-panel {
-  background: var(--jade-panel);
-  color: var(--text-light);
-  border: 1px solid var(--jade-border);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  max-width: 420px;
-  margin: 24px auto;
-  box-shadow: var(--shadow-lg);
-}
-
-/* ---- Landing / lobby "tabletop hero" screens ---- */
-/* Cards fanned out on a felt circle at the top, fading straight into the
-   page's own dark green background, with the form sitting directly on it
-   (no white card-panel here -- these two screens use their own dark theme). */
-#screen-landing.screen.active, #screen-lobby.screen.active { padding: 0; }
-
-.hero-landing { position: relative; height: 210px; overflow: hidden; }
-.hero-landing-sm { height: 150px; }
-.hero-felt {
-  position: absolute; top: -150px; left: 50%; transform: translateX(-50%);
-  width: 420px; height: 420px; border-radius: 50%;
-  background: radial-gradient(circle, var(--jade-bg), var(--jade-bg-dark) 70%);
-}
-.hero-card {
-  position: absolute; top: 46px; left: 50%;
-  width: 52px; height: 74px; border-radius: 6px; background: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 19px;
-  box-shadow: 0 6px 14px rgba(0,0,0,0.4);
-}
-.hero-card span { margin-left: 3px; }
-.hero-card-1 { transform: translate(-84%, 0) rotate(-10deg); color: #c0392b; }
-.hero-card-2 { transform: translate(-16%, 6px) rotate(7deg); color: #1a1a1a; }
-.hero-card-3 { transform: translate(46%, 2px) rotate(-23deg); color: #c0392b; }
-.hero-fade {
-  position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(8,31,25,0) 0%, rgba(8,31,25,0.92) 55%, var(--jade-bg-dark) 78%);
-}
-.hero-content {
-  position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; padding: 0 16px;
-}
-.hero-content h1 { color: #fff; font-size: 27px; font-weight: 700; margin: 0; }
-.hero-subtitle { color: #9fd8b8; font-size: 12px; margin: 4px 0 0; }
-
-/* ---- Landing screen only: cinematic dark hero, redesigned separately from
-   the green "tabletop hero" the lobby screen still uses above (.hero-landing
-   etc.) -- scoped under #screen-landing throughout so nothing here leaks
-   into the lobby. Netflix-style bold dark backdrop + a chess.com-style
-   glossy floating card visual as the hero, instead of a green felt circle. ---- */
-#screen-landing.screen.active { background: var(--jade-bg-dark); }
-
-.landing-hero {
-  position: relative; height: 360px; overflow: hidden;
-  display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
-  background: var(--jade-bg-dark);
-}
-/* Soft crimson glow radiating from behind the card fan -- the one spot of
-   color in an otherwise near-black hero, so the cards and wordmark read as
-   the deliberate focal point instead of everything competing for attention. */
-.landing-hero-glow {
-  position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
-  width: 380px; height: 380px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(var(--red-rgb),0.35), rgba(var(--red-rgb),0) 68%);
-  filter: blur(2px);
-}
-.landing-hero-cards {
-  position: relative; width: 100%; height: 132px; margin-top: 26px;
-  perspective: 900px;
-}
-.landing-card {
-  position: absolute; top: 0; left: 50%;
-  width: 68px; height: 96px; border-radius: 8px;
-  background: linear-gradient(155deg, #ffffff 0%, #f2f2f4 55%, #e2e2e6 100%);
-  display: flex; align-items: center; justify-content: center;
-  font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 23px;
-  box-shadow: 0 18px 30px rgba(0,0,0,0.55), 0 2px 0 rgba(255,255,255,0.06) inset;
-  transform-style: preserve-3d;
-}
-.landing-card span { margin-left: 3px; }
-/* Continuous, slow floating/tilting motion -- like a product turntable shot
-   or chess.com's animated hero piece -- rather than a static tilt, since a
-   still image alone didn't read as "3D" no matter how the shadows/angles
-   were set. Each card runs its own keyframe (translate stays fixed at its
-   fanned-out position; only rotation and a small vertical bob animate) with
-   a staggered delay so the three don't move in obvious lockstep. */
-.landing-card-1 { color: #c0392b; z-index: 1; animation: landingCardFloat1 6s ease-in-out infinite; }
-.landing-card-2 { color: #1a1a1a; z-index: 3; box-shadow: 0 22px 36px rgba(0,0,0,0.6), 0 2px 0 rgba(255,255,255,0.08) inset; animation: landingCardFloat2 6s ease-in-out infinite; animation-delay: -1.3s; }
-.landing-card-3 { color: #c0392b; z-index: 2; animation: landingCardFloat3 6s ease-in-out infinite; animation-delay: -2.6s; }
-@keyframes landingCardFloat1 {
-  0%, 100% { transform: translate(-118%, 10px) rotate(-14deg) rotateY(14deg); }
-  50%      { transform: translate(-118%, 0px) rotate(-18deg) rotateY(28deg); }
-}
-@keyframes landingCardFloat2 {
-  0%, 100% { transform: translate(-50%, -6px) rotate(0deg) rotateY(0deg); }
-  50%      { transform: translate(-50%, -16px) rotate(3deg) rotateY(8deg); }
-}
-@keyframes landingCardFloat3 {
-  0%, 100% { transform: translate(18%, 10px) rotate(14deg) rotateY(-14deg); }
-  50%      { transform: translate(18%, 0px) rotate(18deg) rotateY(-28deg); }
-}
-.landing-hero-fade {
-  position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(8,31,25,0) 0%, rgba(8,31,25,0.85) 60%, var(--jade-bg-dark) 88%);
-}
-.landing-hero-content {
-  position: relative; text-align: center; padding: 0 16px 14px; z-index: 4;
-}
-.landing-wordmark {
-  /* Cinzel -- Roman-inscription capitals, a regal/imperial display face --
-     reserved exclusively for this one wordmark, never used for body text or
-     headings elsewhere, so it stays a distinctive brand moment rather than
-     getting diluted. Cinzel wants open tracking (unlike Bebas Neue, which
-     wanted it tight), so letter-spacing goes positive here. */
-  font-family: 'Cinzel', Georgia, 'Times New Roman', serif;
-  font-size: 40px; letter-spacing: 1.5px; font-weight: 800; margin: 0;
-  line-height: 1.1;
-  background: linear-gradient(180deg, #ffffff 0%, #f2d9d9 55%, var(--red) 100%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  text-shadow: 0 6px 24px rgba(var(--red-rgb),0.25);
-}
-.landing-tagline { color: #b9b9c0; font-size: 12px; margin: 6px 0 0; letter-spacing: 0.3px; text-align: center; }
-
-/* ---- Landing screen rebuild: card-suit pattern woven into the background
-   across the WHOLE screen (not a separate hero block), a chess.com-style
-   top bar (avatar/streak left, wordmark center, premium/stats right), and
-   three separate cards -- one per way to start a game -- instead of one
-   long mixed form. Responsive from small phones up through desktop: full
-   bleed under 1024px, capped to a centered phone-width column above that
-   so it doesn't stretch edge-to-edge on a wide monitor. ---- */
-#screen-landing.screen.active,
-#screen-lobby.screen.active {
-  background: var(--jade-bg-dark); position: relative; overflow: hidden;
-  display: flex; flex-direction: column; min-height: 100vh;
-}
-#screen-landing.screen.active::before,
-#screen-lobby.screen.active::before {
-  content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
-  background:
-    radial-gradient(circle at 50% 8%, rgba(var(--red-rgb),0.22), transparent 55%),
-    repeating-linear-gradient(135deg, rgba(255,255,255,0.02) 0 2px, transparent 2px 34px);
-}
-#screen-landing .landing-topbar,
-#screen-landing .landing-body,
-#screen-landing .landing-footer-nav,
-#screen-lobby .landing-topbar,
-#screen-lobby .landing-body { position: relative; z-index: 1; }
-
-#screen-landing .landing-topbar,
-#screen-lobby .landing-topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.08);
-}
-/* Lobby's topbar only ever has the wordmark in it (no avatar/icons -- those
-   are landing-only) -- centered rather than space-between, which would
-   otherwise shove a single child over to one side. */
-#screen-lobby .landing-topbar { justify-content: center; }
-.landing-topbar-left, .landing-topbar-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.landing-topbar-left { position: relative; }
-.landing-avatar {
-  width: 30px; height: 30px; border-radius: 50%; background: rgba(255,255,255,0.1);
-  display: flex; align-items: center; justify-content: center; font-size: 14px;
-  border: none; padding: 0; cursor: pointer;
-}
-.landing-avatar:hover { background: rgba(255,255,255,0.16); }
-.landing-wordmark-sm { font-size: 18px; letter-spacing: 1.5px; }
-
-/* Profile panel -- reuses the app's existing .overlay (full-screen dim +
-   centered flex) and .card-panel (white rounded card) pattern, the same
-   one Rules/Scores/My Stats already use reliably. .profile-modal-panel
-   only overrides the colors to match the dark/crimson theme instead of
-   card-panel's default white -- no custom positioning of its own, so it
-   can't drift, get clipped, or let page content bleed through the way the
-   previous anchored-dropdown version repeatedly did. */
-.profile-modal-panel { max-width: 320px; width: 100%; }
-.profile-modal-panel h2 { color: #fff; font-size: 18px; text-align: center; }
-.profile-modal-panel label { color: #9a9aa2; }
-.profile-modal-panel input[type=text] {
-  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
-}
-.profile-modal-panel .signin-status { color: #9a9aa2; }
-.profile-modal-panel .secondary {
-  background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: #e8e8ec;
-}
-
-/* Nudges attention to the avatar itself right after a blocked action (e.g.
-   trying to create/join/start without a name yet) -- pairs with the toast
-   banner below so there are two independent, hard-to-miss signals instead
-   of relying on the dropdown alone (which is easy to not notice opening in
-   a top corner while looking at the button just tapped). */
-@keyframes avatarAttnPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--red-rgb),0.7); }
-  50% { box-shadow: 0 0 0 9px rgba(var(--red-rgb),0); }
-}
-.landing-avatar.attn-pulse { animation: avatarAttnPulse 0.7s ease-out 2; }
-
-/* Inline error banner in the main page flow (not tucked inside the
-   dropdown) -- see #landing-toast-error in index.html. This is what makes
-   "enter your name" etc. actually visible regardless of whether the
-   profile dropdown happens to be open. */
-.landing-toast-error {
-  background: rgba(var(--red-rgb),0.14); border: 1px solid var(--red); color: #ff9d99;
-  border-radius: 10px; padding: 10px 14px; font-size: 12.5px; text-align: center;
-  margin: 0; cursor: pointer; animation: toastIn 0.35s ease-out;
-}
-.landing-toast-error.hidden { display: none; }
-@keyframes toastIn {
-  0% { transform: translateX(0); opacity: 0; }
-  20% { transform: translateX(-6px); opacity: 1; }
-  40% { transform: translateX(6px); }
-  60% { transform: translateX(-4px); }
-  80% { transform: translateX(4px); }
-  100% { transform: translateX(0); }
-}
-
-#screen-landing .landing-body,
-#screen-lobby .landing-body {
-  flex: 1; display: flex; flex-direction: column; gap: 14px;
-  padding: 14px 16px 10px; max-width: 480px; width: 100%; margin: 0 auto; box-sizing: border-box;
-}
-
-.mode-block {
-  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 14px; padding: 14px 16px;
-  box-shadow: var(--shadow-sm);
-}
-
-.mode-blocks { display: flex; flex-direction: column; gap: 12px; }
-.mode-block h3 { margin: 0 0 4px; font-size: 15px; color: var(--red); }
-.mode-block-sub { margin: 0 0 8px; font-size: 11px; color: #9a9aa2; }
-.mode-block .row { margin-top: 10px; }
-.mode-block-join-row { display: flex; gap: 8px; margin-top: 8px; }
-.mode-block-join-row input { flex: 1; margin: 0; }
-.mode-block-join-row button { width: auto; margin: 0; padding: 0 16px; white-space: nowrap; }
-
-/* Same dark-crimson palette applied to buttons/selects/labels sitting
-   directly inside a .mode-block -- both the landing screen's Play
-   Online/Friends/Bots cards AND the lobby's room-code/players/start cards
-   below use this same wrapper, so one set of rules covers both screens.
-   .mode-block itself only sets the CARD's own background/border, not its
-   children's colors, so without this the buttons/select/labels inside would
-   otherwise still show the app's original light-mode/green defaults. */
-#screen-landing .mode-block button.primary,
-#screen-lobby .mode-block button.primary {
-  background: linear-gradient(135deg, var(--red), var(--red-dark)); color: #fff;
-  box-shadow: var(--shadow-md);
-}
-#screen-landing .mode-block button.secondary,
-#screen-lobby .mode-block button.secondary {
-  background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: #e8e8ec;
-}
-#screen-landing .mode-block select,
-#screen-lobby .mode-block select {
-  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.14); color: #fff;
-}
-#screen-landing .mode-block label,
-#screen-lobby .mode-block label,
-#screen-lobby .mode-block .hint { color: #9a9aa2; }
-#screen-lobby .mode-block .error { color: #ff8a80; }
-
-/* Lobby-specific content that isn't shared with the landing screen's
-   mode-blocks -- room code, player list. */
-#screen-lobby .room-code-label {
-  color: #9a9aa2; font-size: 11px; text-align: center; text-transform: uppercase; letter-spacing: 1px;
-}
-#screen-lobby .room-code-display {
-  background: transparent; color: var(--red); font-size: 38px; letter-spacing: 8px; text-align: center;
-  box-shadow: none; text-shadow: 0 2px 10px rgba(var(--red-rgb),0.3); padding: 4px 0;
-}
-#screen-lobby .player-list li { border-bottom: 1px solid rgba(255,255,255,0.12); color: #e8e8ec; }
-#screen-lobby .player-list .host-tag { color: var(--red); }
-#screen-lobby .player-list .status { color: #9fd8b8; }
-
-#screen-landing .landing-footer-nav {
-  display: flex; align-items: center; justify-content: space-around;
-  padding: 8px 4px; border-top: 1px solid rgba(255,255,255,0.08);
-  max-width: 480px; width: 100%; margin: 0 auto;
-}
-.footer-nav-item {
-  background: none; border: none; color: #9a9aa2; font-size: 10px;
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 4px 10px; width: auto;
-}
-.footer-nav-item .nav-icon { width: 20px; height: 20px; display: flex; }
-.footer-nav-item .icon { width: 20px; height: 20px; margin: 0; }
-.footer-nav-item.active { color: var(--red); }
-
-.queue-waiting-choice { margin-top: 18px; }
-.queue-waiting-choice button { margin-top: 8px; }
-
-/* ---- tablets (768-1023px): a bit more breathing room, everything else
-   scales naturally since it's already flex-based rather than fixed px. ---- */
-@media (min-width: 768px) {
-  #screen-landing .landing-body,
-  #screen-lobby .landing-body { max-width: 560px; padding: 20px 24px 14px; gap: 18px; }
-  #screen-landing .landing-footer-nav { max-width: 560px; }
-  .mode-block { padding: 18px 20px; }
-}
-
-/* ---- laptop/desktop (1024px+): the phone-style full-bleed layout would
-   look broken stretched across a wide browser window, so the content column
-   gets capped and centered -- the background pattern still fills the full
-   viewport width behind it, so it doesn't look like a narrow box floating
-   on blank space. ---- */
-@media (min-width: 1024px) {
-  #screen-landing .landing-topbar,
-  #screen-lobby .landing-topbar { max-width: 480px; margin: 0 auto; width: 100%; }
-  #screen-landing .landing-body,
-  #screen-lobby .landing-body { max-width: 480px; padding: 24px 16px 14px; }
-  #screen-landing .landing-footer-nav { max-width: 480px; }
-}
-
-/* ---- 3-second intro splash (matches the reference chess.com launch clip
-   the user sent: solid near-black screen, one simple mark centered and held,
-   then a quick cut/fade straight into the real app underneath -- no busy
-   motion, no separate loading text). Same jade-bg-dark backdrop as the landing
-   hero so the fade-out is seamless with zero color flash. Pure CSS, timed
-   entirely with animation-delay so it can never get stuck open even if JS
-   is slow to attach anything. ---- */
-#screen-intro {
-  position: fixed; inset: 0; z-index: 999;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  background: var(--jade-bg-dark); overflow: hidden;
-  animation: introFadeOut 0.6s ease forwards;
-  animation-delay: 2.2s;
-}
-.intro-glow {
-  position: absolute; width: 420px; height: 420px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(var(--red-rgb),0.4), rgba(var(--red-rgb),0) 68%);
-  filter: blur(2px);
-  animation: introGlowPulse 2.6s ease-in-out infinite;
-}
-.intro-cards {
-  position: relative; width: 100%; height: 132px; perspective: 900px;
-  margin-bottom: 22px;
-  opacity: 0;
-  animation: introCardsIn 0.7s cubic-bezier(.22,.9,.3,1.2) forwards;
-  animation-delay: 0.15s;
-}
-.intro-wordmark {
-  position: relative; font-size: 40px;
-  opacity: 0;
-  animation: introWordmarkIn 0.6s ease forwards;
-  animation-delay: 0.55s;
-}
-@keyframes introCardsIn {
-  0%   { opacity: 0; transform: scale(0.7) translateY(20px); }
-  100% { opacity: 1; transform: scale(1) translateY(0); }
-}
-@keyframes introWordmarkIn {
-  0%   { opacity: 0; transform: translateY(10px); }
-  100% { opacity: 1; transform: translateY(0); }
-}
-@keyframes introGlowPulse {
-  0%, 100% { transform: scale(1); opacity: 0.7; }
-  50%      { transform: scale(1.15); opacity: 1; }
-}
-/* Holds fully visible, then fades the WHOLE overlay away and drops it out of
-   the layout/click-path entirely (visibility+pointer-events) -- the landing
-   screen underneath has already been sitting there fully loaded/interactive
-   the entire time, so this is a pure visual reveal, nothing to wait on. */
-@keyframes introFadeOut {
-  0%   { opacity: 1; visibility: visible; }
-  99%  { opacity: 0; visibility: visible; }
-  100% { opacity: 0; visibility: hidden; pointer-events: none; }
-}
-
-/* Sign-in row + form on the landing screen only -- overrides the shared
-   green-tinted .landing-form defaults below with the crimson/neutral palette,
-   scoped with #screen-landing so the lobby screen's own use of .landing-form
-   is completely unaffected. */
-#screen-landing .landing-form label,
-#screen-waiting-host .landing-form label,
-#screen-queue-waiting .landing-form label,
-#screen-landing .landing-form .hint,
-#screen-waiting-host .landing-form .hint,
-#screen-queue-waiting .landing-form .hint,
-#screen-landing .landing-form .divider,
-#screen-landing .signin-status { color: #9a9aa2; }
-#screen-landing .landing-form input[type=text] {
-  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.14); color: #fff;
-}
-#screen-landing .landing-form input[type=text]:focus { border-color: var(--red); }
-#screen-landing .landing-form button.primary {
-  background: linear-gradient(135deg, var(--red), var(--red-dark)); color: #fff;
-  box-shadow: var(--shadow-md);
-}
-#screen-landing .landing-form button.secondary,
-#screen-waiting-host .landing-form button.secondary,
-#screen-queue-waiting .landing-form button.secondary {
-  background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: #e8e8ec;
-}
-#screen-landing .icon-btn { background: rgba(255,255,255,0.08); color: #fff; }
-#screen-landing .signin-row { border-bottom: 1px solid rgba(255,255,255,0.1); }
-
-/* The two flow screens that branch off the landing screen (mid-game join
-   "waiting for host", and Play Online's "finding players") share its dark
-   backdrop and heading color so the whole flow reads as one continuous
-   experience instead of snapping back to the lobby's green theme mid-flow. */
-#screen-waiting-host.screen.active,
-#screen-queue-waiting.screen.active { background: var(--jade-bg-dark); }
-#screen-waiting-host .landing-form h2,
-#screen-queue-waiting .landing-form h2 { color: #fff; }
-
-.landing-form { max-width: 420px; margin: 10px auto 24px; padding: 0 24px 24px; }
-.landing-form label { color: #9fd8b8; }
-.landing-form input[type=text] {
-  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
-}
-.landing-form input[type=text]::placeholder { color: rgba(255,255,255,0.4); }
-.landing-form input[type=text]:focus { border-color: var(--gold); }
-.landing-form button.primary { background: var(--gold); color: #1a1a1a; }
-.landing-form button.secondary {
-  background: transparent; border: 1.5px solid var(--gold); color: var(--gold);
-}
-.landing-form .divider { color: #6ba889; }
-.landing-form .hint { color: #9fd8b8; }
-.landing-form .error { color: #ff8a80; }
-.landing-form h3 {
-  color: var(--gold); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
-  margin: 20px 0 8px;
-}
-.landing-form .room-code-label {
-  color: #d4e8da; font-size: 11px; text-align: center; text-transform: uppercase; letter-spacing: 1px;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.6); margin-top: 4px;
-}
-.landing-form .room-code-display {
-  background: transparent; color: var(--gold-bright); font-size: 38px; letter-spacing: 8px;
-  box-shadow: none; text-shadow: 0 2px 10px rgba(0,0,0,0.4); padding: 4px 0;
-}
-.landing-form .player-list li { border-bottom: 1px solid rgba(255,255,255,0.12); }
-.landing-form .player-list .host-tag { color: var(--gold-bright); }
-.landing-form .player-list .status { color: #6ba889; }
-.landing-form .leave-btn { border-color: #c0392b; color: #e0736a; }
-
-/* The native <select> stays in the DOM for its value/behavior (see
-   initDropdown() in app.js) but is visually replaced by the .dd themed
-   button+list below it, so its own appearance barely matters -- kept
-   reasonably sane here only as a fallback if JS hasn't run yet. */
-select {
-  width: 100%; padding: 12px; font-size: 16px; border-radius: var(--radius-sm);
-  border: 1px solid var(--jade-border); background: var(--jade-panel-alt); color: var(--text-light); outline: none;
-}
-select:focus { border-color: var(--gold); }
-.landing-form select {
-  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25); color: #fff;
-}
-.landing-form select option { color: #1a1a1a; }
-.lobby-maxscore-row { margin: 14px 0; }
-.lobby-maxscore-row.hidden { display: none; }
-.lobby-maxscore-row label { color: #9fd8b8; }
-
-.solo-panel { margin: 12px 0; }
-.solo-panel.hidden { display: none; }
-.solo-panel label { color: #9fd8b8; }
-
-/* ---- Custom themed dropdown (replaces the native <select> UI everywhere --
-   see initDropdown()/syncDropdown() in app.js). The <select> itself is
-   pushed off-screen rather than display:none, so it stays focusable/
-   readable to a screen reader and keeps working as the source of truth for
-   .value that the rest of app.js already reads/writes. ---- */
-.dd { position: relative; }
-.dd-native-select {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
-}
-.dd-toggle {
-  width: 100%; display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 14px; font-size: 15px; border-radius: var(--radius-sm);
-  border: 1px solid var(--jade-border); background: var(--jade-panel-alt); color: var(--text-light);
-  cursor: pointer; font-family: inherit; font-weight: 600;
-}
-.dd-toggle[aria-expanded="true"] { border-color: var(--gold); }
-.dd-chevron { width: 16px; height: 16px; flex-shrink: 0; transition: transform 0.15s; }
-.dd-toggle[aria-expanded="true"] .dd-chevron { transform: rotate(180deg); }
-.dd-list {
-  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30;
-  background: var(--jade-panel); border: 1px solid var(--jade-border);
-  border-radius: var(--radius-sm); box-shadow: var(--shadow-md);
-  list-style: none; margin: 0; padding: 4px; max-height: 240px; overflow-y: auto;
-}
-.dd-list.hidden { display: none; }
-.dd-list li {
-  padding: 9px 12px; border-radius: 6px; font-size: 14px; color: var(--text-light);
-  cursor: pointer;
-}
-.dd-list li:hover, .dd-list li:focus { background: rgba(255,255,255,0.08); outline: none; }
-.dd-list li[aria-selected="true"] { background: rgba(212,160,23,0.18); color: var(--gold-bright); font-weight: 700; }
-
-.rules-btn { margin-top: 14px; font-size: 13px; padding: 9px; }
-
-/* Small, non-blocking sign-in row at the top of the landing form -- lets a
-   guest optionally upgrade to a real Google account (keeping their existing
-   stats via the linkWithPopup path in firebase-init.js) without forcing a
-   choice before they can just start playing. */
-.signin-row {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; margin-bottom: 16px; padding-bottom: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.12);
-}
-.signin-status { color: #9fd8b8; font-size: 12px; flex: 1; }
-.signin-row button.tiny { margin: 0; white-space: nowrap; }
-.icon-btn {
-  width: auto; flex: 0 0 auto; padding: 6px 9px; font-size: 15px; line-height: 1;
-  background: rgba(255,255,255,0.12); color: #fff; border-radius: 8px;
-}
-
-.rules-panel { max-width: 480px; width: 92vw; text-align: left; }
-.rules-panel h2 { text-align: center; display: flex; align-items: center; justify-content: center; gap: 8px; }
-.rules-body { max-height: 60vh; overflow-y: auto; padding-right: 4px; margin-bottom: 14px; }
-.rules-item { margin-bottom: 14px; }
-.rules-item:last-child { margin-bottom: 0; }
-/* Gold marks a heading/highlight moment throughout the app -- a rules
-   section title counts, same role as a score or achievement callout. */
-.rules-heading { font-weight: 700; color: var(--gold-bright); font-size: 14px; margin-bottom: 3px; }
-.rules-item p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--text-light); }
-
-h1 { text-align: center; margin: 0 0 4px; font-size: 28px; }
-h2 { margin-top: 0; }
-.subtitle { text-align: center; color: var(--text-muted); margin-top: 0; }
-
-label { display: block; font-size: 13px; margin: 14px 0 4px; color: var(--text-muted); }
-input[type=text] {
-  width: 100%; padding: 12px; font-size: 18px; border-radius: var(--radius-sm);
-  border: 1px solid var(--jade-border); background: var(--jade-panel-alt); color: var(--text-light); outline: none;
-}
-input[type=text]:focus { border-color: var(--gold); }
-input[type=text]::placeholder { color: var(--text-muted); }
-
-.row { margin-top: 16px; }
-button {
-  width: 100%; padding: 14px; font-size: 16px; border-radius: var(--radius-sm);
-  border: none; cursor: pointer; font-weight: 600;
-  display: flex; align-items: center; justify-content: center;
-}
-/* Primary = the main call-to-action on a screen -- always red (action /
-   urgency), never a screen-specific color. Declare = a scoring moment, so
-   it keeps the deep-gold token. Secondary = a plain ghost button everywhere
-   now that every screen shares the same dark canvas, instead of the old
-   light-gray fill that only made sense back when some screens were white. */
-button.primary { background: linear-gradient(135deg, var(--red), var(--red-dark)); color: #fff; box-shadow: var(--shadow-md); }
-button.secondary { background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: var(--text-light); }
-button.danger { background: var(--red-dark); color: white; margin-top: 8px; }
-button.declare { background: var(--gold); color: #1a1a1a; }
-button:disabled { opacity: 0.4; cursor: not-allowed; }
-button.tiny { width: auto; padding: 8px 14px; font-size: 13px; }
-button.leave-btn { background: transparent; color: var(--red); border: 1px solid var(--red); margin-top: 10px; }
-
-.divider { text-align: center; margin: 20px 0; color: var(--text-muted); font-size: 12px; }
-.error { color: #ff8a80; font-size: 13px; min-height: 16px; }
-.hint { color: var(--text-muted); font-size: 12px; text-align: center; }
-
-.room-code-row {
-  display: flex; align-items: stretch; gap: 8px; margin: 8px 0;
-}
-.room-code-display {
-  flex: 1; min-width: 0;
-  font-size: 40px; letter-spacing: 8px; text-align: center; font-weight: 800;
-  background: var(--jade-panel-alt); color: var(--text-light); border-radius: var(--radius-md); padding: 12px 4px; margin: 0;
-  overflow: hidden;
-}
-/* Small square icon buttons, same look as the other icon-btns (mute, remove
-   ads) elsewhere in the app, sized to match the room-code box's height
-   rather than the usual inline text-button padding. */
-.room-code-row .icon-btn {
-  flex: 0 0 auto; width: 44px; height: auto;
-  border-radius: 12px; background: rgba(255,255,255,0.14);
-  display: flex; align-items: center; justify-content: center;
-}
-.room-code-row .icon-btn svg { width: 20px; height: 20px; }
-.roomcode-feedback {
-  min-height: 15px; color: #9fd8b8; font-weight: 600; margin: 2px 0 0; text-align: center;
-}
-
-.player-list { list-style: none; padding: 0; }
-.player-list li {
-  padding: 10px; border-bottom: 1px solid var(--jade-border); display: flex; justify-content: space-between;
-  position: relative; /* anchors the report/mute popover for tappable rows */
-}
-.player-list li.tappable { cursor: pointer; }
-.player-list .status { font-size: 11px; color: var(--text-muted); }
-.player-list .host-tag { color: var(--gold-bright); font-weight: 700; font-size: 11px; }
-
-/* ---------------- Game screen ---------------- */
-.game-top {
-  display: flex; justify-content: flex-end; align-items: center;
-  font-size: 13px; padding: 3px 4px; flex-shrink: 0;
-}
-.top-actions { display: flex; gap: 6px; align-items: center; }
-.mute-btn { padding: 6px 9px !important; font-size: 13px !important; line-height: 1; }
-.mute-btn .icon { width: 16px; height: 16px; margin: 0; }
-
-/* Floating, not in the normal document flow -- and crucially, a z-index
-   above .chat-panel's (25), so the countdown stays visible even if chat is
-   reopened mid-turn instead of getting buried under it (see issue #5: the
-   chat panel used to be able to cover this entirely, and the auto-minimize
-   in app.js only handles the moment your turn STARTS, not every subsequent
-   tap of the chat bubble during that turn). */
-.turn-timer {
-  position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 30;
-  text-align: center; font-size: 12px; font-weight: 700;
-  background: rgba(0,0,0,0.55); border: 1px solid var(--jade-border);
-  border-radius: 20px; padding: 4px 12px;
-  width: fit-content; transition: color 0.2s;
-  box-shadow: var(--shadow-sm);
-}
-.turn-timer.low { color: #ff6b6b; }
-.turn-timer.hidden { display: none; }
-
-/* ---- Oval table ---- */
-/* Height-driven (not width-driven) so it shrinks to fit short phone
-   screens automatically; aspect-ratio derives the matching width.
-   This is now the flex-grow element in the game screen's column layout --
-   it absorbs whatever vertical space the hand row (below) isn't using,
-   instead of that space sitting empty. Still capped by max-height/max-width
-   so it can't grow unreasonably large on tall/wide screens -- raised from
-   the original 400px (tuned for a fairly short phone) to 560px so a big
-   monitor or a modern tall-screened phone (Pixel-class, 900px+ of usable
-   height) gets a visibly bigger table instead of just more empty margin;
-   any space left over past this cap is now centered by #screen-game's
-   justify-content instead of dumped below the action buttons. */
-.oval-table {
-  position: relative;
-  width: auto;
-  max-height: min(56vh, 560px);
-  /* Capped at 94vw minus a fixed side inset (not just a smaller vw
-     percentage) so the table itself never spans truly edge-to-edge on a
-     narrow phone. Every seat is positioned as a plain percentage of this
-     box's own width/height (see renderOvalTable() in app.js), so tightening
-     the container here pulls every seat in with it automatically -- the
-     side seats no longer land flush against the screen bezel with zero
-     breathing room, without needing to touch the seat-angle math at all. */
-  max-width: min(94vw, calc(100vw - 40px));
-  aspect-ratio: 1 / 1.05;
-  margin: 2px auto 6px;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.table-felt {
-  position: absolute; inset: 12%;
-  background: radial-gradient(circle, var(--jade-bg), var(--jade-bg-dark) 75%);
-  border-radius: 50%;
-  border: 6px solid #061712;
-  box-shadow: inset 0 0 30px rgba(0,0,0,0.45);
-}
-.stock-badge {
-  /* Hidden from players by request -- stock count is still tracked and
-     broadcast by the server as normal, just not shown in the UI. */
-  display: none;
-}
-.table-center {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  display: flex; gap: 18px; align-items: center; z-index: 2;
-}
-.table-center .pile-label { font-size: 11px; }
-.table-center .card { width: 58px; height: 82px; }
-.table-center .card .card-corner { display: none; }
-.table-center .card .center-rank { font-size: 20px; }
-.table-center .card .center-suit { font-size: 26px; }
-#joker-indicator { display: flex; }
-
-.seat {
-  position: absolute; transform: translate(-50%, -50%);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 3px; z-index: 3; width: 96px; text-align: center;
-}
-.seat-chip {
-  background: rgba(255,255,255,0.14); border-radius: var(--radius-sm); padding: 5px 9px;
-  font-size: 11.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 100%; width: 100%;
-}
-.seat.active .seat-chip { background: var(--gold); color: #1a1a1a; font-weight: 700; }
-/* "This is my seat" gets a plain neutral ring, deliberately NOT gold --
-   gold is reserved for "whose turn is it" (the fill above, plus the pulse
-   animation further down), both of which can already be active on this
-   exact element at the same time as this ring. A third gold treatment
-   stacked on top would just look muddy instead of adding information. */
-.seat.own-seat .seat-chip { box-shadow: 0 0 0 2px rgba(255,255,255,0.55); }
-.seat.eliminated { opacity: 0.4; }
-.seat.quit { opacity: 0.35; }
-.seat.tappable { cursor: pointer; }
-
-/* ---------------- player action popover (report / mute) ----------------
-   Replaces the old 🚩/🔇 icons that used to sit on every chat message.
-   Tap a player's seat (in-game) or their row in the lobby list (pre-game)
-   and this appears anchored to that element -- both .seat and .player-list
-   li are already a positioning context, so it's just appended as a child
-   and placed with plain CSS. Tap anywhere else on screen to dismiss it. */
-.player-action-popover {
-  position: absolute; z-index: 25;
-  background: var(--jade-panel-alt); border: 1px solid var(--jade-border); border-radius: var(--radius-sm); padding: 6px;
-  display: flex; flex-direction: column; gap: 4px;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.4);
-  animation: popoverFadeIn 0.12s ease-out both;
-}
-@keyframes popoverFadeIn { from { opacity: 0; } to { opacity: 1; } }
-.seat .player-action-popover {
-  bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 8px;
-}
-.seat .player-action-popover.align-left { left: 0; transform: none; }
-.seat .player-action-popover.align-right { left: auto; right: 0; transform: none; }
-.player-list li .player-action-popover {
-  top: 100%; right: 0; margin-top: 2px;
-}
-.player-action-btn {
-  background: var(--jade-panel); color: var(--text-light); border: none; border-radius: var(--radius-sm);
-  padding: 8px 12px; font-size: 12.5px; white-space: nowrap;
-  justify-content: flex-start; gap: 6px; cursor: pointer;
-}
-.player-action-btn:hover { background: var(--jade-bg); }
-.player-action-btn:disabled { opacity: 0.6; cursor: default; }
-.player-action-btn.report { color: #ff8a80; }
-.player-action-btn.mute { color: var(--gold-bright); }
-.player-action-stats {
-  color: var(--text-muted); font-size: 11.5px; padding: 4px 8px 6px; white-space: nowrap;
-  border-bottom: 1px solid rgba(255,255,255,0.12); margin-bottom: 2px;
-}
-
-/* Your-turn visual pulse: only ever applied to your OWN seat, and only once
-   you've gone quiet for 5+ seconds on your own turn (see app.js) -- a purely
-   local, self-only nudge, no vibration, no broadcast to anyone else. */
-@keyframes turnPulseRing {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(212,160,23,0.65); }
-  50% { box-shadow: 0 0 0 12px rgba(212,160,23,0); }
-}
-.seat.my-turn-pulse .seat-chip { animation: turnPulseRing 1.1s ease-in-out infinite; }
-
-/* Chat speech-bubble at the sender's seat -- shown alongside (not instead
-   of) the separate chat panel, for 5-10s scaled by message length.
-   A comic-style bubble with a tail pointing straight at the seat, sitting
-   tight against it so it visually reads as "this came from their chair".
-   Width is a fixed value (not shrink-to-fit) -- an auto/max-width-only box
-   combined with word-break:break-word was computing down to a near-zero
-   width on some phones, wrapping text to 2-3 letters per line. A fixed
-   width sidesteps that shrink-to-fit ambiguity entirely. */
-.seat-chat-bubble {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  width: min(150px, 56vw); box-sizing: border-box;
-  background: #fff; color: #1a1a1a; font-size: 12px; line-height: 1.35;
-  padding: 7px 10px; border-radius: 14px; box-shadow: 0 3px 10px rgba(0,0,0,0.4);
-  z-index: 6; word-break: break-word; animation: chatBubbleIn 0.18s ease-out both;
-}
-.seat-chat-bubble.below { top: calc(100% + 4px); }
-.seat-chat-bubble.above { bottom: calc(100% + 4px); }
-.seat-chat-bubble::after {
-  content: ''; position: absolute; left: 50%; transform: translateX(-50%);
-  width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent;
-}
-.seat-chat-bubble.below::after { top: -7px; border-bottom: 8px solid #fff; }
-.seat-chat-bubble.above::after { bottom: -7px; border-top: 8px solid #fff; }
-.seat-chat-gif { display: block; width: 100%; border-radius: 8px; }
-
-/* Text bubbles near a table edge could in principle also run wide, but at
-   150px max they've been fine in practice -- these align classes exist
-   specifically for the GIF thumbnail below, reusing the same left/right/
-   center pattern as the per-seat discard history and old final-hand reveal. */
-.seat-chat-bubble.align-left { left: 0; transform: none; }
-.seat-chat-bubble.align-right { left: auto; right: 0; transform: none; }
-.seat-chat-bubble.align-left::after { left: 14px; transform: none; }
-.seat-chat-bubble.align-right::after { left: auto; right: 14px; transform: none; }
-
-/* GIF thumbnail on the table -- much smaller than a full chat bubble (which
-   was tall enough to cover the joker/open card in the middle of the table).
-   Just enough to notice someone sent a GIF; the chat panel shows it full size. */
-.seat-chat-bubble.gif-thumb {
-  width: 62px; padding: 0; border-radius: 8px; overflow: hidden;
-  box-shadow: 0 3px 8px rgba(0,0,0,0.4); line-height: 0;
-}
-.seat-chat-bubble.gif-thumb .seat-chat-gif { width: 62px; height: 62px; object-fit: cover; border-radius: 0; }
-.seat-chat-gif-tag {
-  position: absolute; bottom: 2px; right: 2px; background: rgba(0,0,0,0.6); color: #fff;
-  font-size: 7px; font-weight: 700; padding: 1px 3px; border-radius: 3px; line-height: 1.2;
-}
-
-/* Small card tile, reused anywhere a full-size 44x62 card would be too big:
-   the round-result reveal rows, the per-seat discard history. */
-.card.mini { width: 19px; height: 26px; }
-.card.mini .card-corner { display: none; }
-.card.mini .center-rank { font-size: 7.5px; }
-.card.mini .center-suit { font-size: 7.5px; }
-.card.mini .card-count-badge { width: 13px; height: 13px; font-size: 7px; top: -5px; right: -5px; }
-@keyframes chatBubbleIn {
-  from { transform: translateX(-50%) scale(0.7); opacity: 0; }
-  to { transform: translateX(-50%) scale(1); opacity: 1; }
-}
-.seat-emoji-bubble {
-  /* Centered squarely on the seat chip itself (covering the name, as
-     intended) rather than floating above it -- staying within the seat's
-     own footprint avoids any risk of the popup being clipped by the
-     screen's overflow:hidden on cramped mobile layouts, especially for
-     seats near the top of the table. */
-  position: absolute; top: 50%; left: 50%; width: 44px; height: 44px; border-radius: 50%;
-  background: #1a4a2c; border: 2px solid var(--gold); display: flex; align-items: center; justify-content: center;
-  font-size: 28px; z-index: 5; animation: seatReactionPop 3.4s ease both;
-}
-@keyframes seatReactionPop {
-  0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
-  10% { transform: translate(-50%, -50%) scale(1.3); opacity: 1; }
-  18% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-  85% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-  100% { transform: translate(-50%, -50%) scale(0.85); opacity: 0; }
-}
-.seat-name {
-  font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.seat-meta { font-size: 10px; opacity: 0.85; display: block; }
-
-/* Per-seat recent-discards line -- lives inside the chip itself so it never
-   needs its own edge-aware positioning (see renderOvalTable()). */
-.seat-discard-history {
-  display: flex; align-items: center; justify-content: center; gap: 2px;
-  white-space: normal; margin-top: 3px;
-}
-.seat-discard-label { font-size: 8px; color: var(--gold-bright); font-weight: 700; margin-right: 1px; }
-.mini-card-back {
-  width: 26px; height: 36px; border-radius: 4px;
-  background: repeating-linear-gradient(45deg, #234, #234 4px, #1a2f42 4px, #1a2f42 8px);
-  border: 1px solid #0b1a26; margin-bottom: 2px;
-}
-
-.pile-group { text-align: center; }
-.pile-label { font-size: 11px; color: #cde; margin-bottom: 4px; }
-
-/* ---- Realistic playing cards ---- */
-.card {
-  width: 44px; height: 62px; border-radius: 6px; background: white;
-  position: relative; user-select: none; flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: 2px solid transparent;
-  display: inline-block;
-}
-.card.red .corner-rank, .card.red .corner-suit, .card.red .center-suit, .card.red .center-rank { color: #c0392b; }
-.card.black .corner-rank, .card.black .corner-suit, .card.black .center-suit, .card.black .center-rank { color: #1a1a1a; }
-
-.card-corner {
-  position: absolute; display: flex; flex-direction: column; align-items: center;
-  line-height: 1; font-weight: 700;
-}
-.corner-tl { top: 3px; left: 3px; }
-.corner-br { bottom: 3px; right: 3px; transform: rotate(180deg); }
-.corner-rank { font-size: 10px; }
-.corner-suit { font-size: 8px; margin-top: 1px; }
-
-.card-center {
-  position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-}
-.card-center .center-rank { font-size: 14px; font-weight: 800; line-height: 1; }
-.card-center .center-suit { font-size: 18px; line-height: 1; margin-top: 2px; }
-
-.card-count-badge {
-  position: absolute; top: -6px; right: -6px; background: #c0392b; color: #fff;
-  border-radius: 50%; font-size: 9px; font-weight: 700; width: 17px; height: 17px;
-  display: flex; align-items: center; justify-content: center; z-index: 2;
-}
-
-.card.joker { color: #8b1a1a; }
-.joker-letters {
-  font-size: 7px; font-weight: 700; line-height: 1.15; color: #8b1a1a;
-  letter-spacing: -0.5px;
-}
-.joker-cap {
-  width: 22px; height: 22px; position: relative;
-}
-.joker-cap::before {
-  content: ''; position: absolute; inset: 0;
-  background: #8b1a1a;
-  clip-path: polygon(50% 0%, 20% 45%, 35% 40%, 50% 70%, 65% 40%, 80% 45%);
-}
-.draw-reveal-cards .card.joker .joker-cap, .table-center .card.joker .joker-cap { width: 30px; height: 30px; }
-
-.card.back {
-  background: repeating-linear-gradient(45deg, #234, #234 6px, #1a2f42 6px, #1a2f42 12px);
-  border: 2px solid #0b1a26;
-}
-.card.selected { border-color: var(--gold); transform: translateY(-8px); }
-.card.selectable { cursor: pointer; }
-
-.chain-banner {
-  background: #c0392b22; border: 1px solid #c0392b; border-radius: 10px;
-  padding: 6px 10px; text-align: center; font-size: 12px; margin-bottom: 4px;
-  flex-shrink: 0;
-}
-.chain-banner.hidden { display: none; }
-.chain-banner button.hidden { display: none; }
-
-/* Brief flash announcing a 2 was just played/escalated/resolved -- visible
-   to every player at the table, not just whoever's turn it is. */
-.chain-flash {
-  flex-shrink: 0; text-align: center; font-size: 13px; font-weight: 700;
-  background: linear-gradient(90deg, #c0392b, #e67e22); color: #fff;
-  border-radius: 20px; padding: 6px 14px; margin: 0 auto 4px; width: fit-content;
-  max-width: 92%; animation: chainPop 0.25s ease-out;
-}
-.chain-flash.hidden { display: none; }
-@keyframes chainPop {
-  from { transform: scale(0.85); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
-}
-
-/* Everything below the table shares one centered max-width column with it
-   on wide screens (a phone is already narrower than this cap, so nothing
-   changes there) -- otherwise on a desktop/laptop the hand of cards and the
-   action buttons stretch edge-to-edge while the table stays centered above
-   them, leaving the cards looking left-aligned and disconnected from the
-   table instead of sitting under it. */
-.hand-jokers, .hand-header, .hand, .action-bar, .hint-banner {
-  max-width: 640px; width: 100%; margin-left: auto; margin-right: auto;
-}
-
-.hand-jokers { flex-shrink: 0; margin-top: 2px; }
-.hand-jokers.hidden { display: none; }
-.hand-jokers-label { font-size: 10px; color: var(--gold); margin-bottom: 3px; }
-.hand-jokers-cards { display: flex; flex-wrap: wrap; gap: 5px; }
-.card.wild-zero { border-color: var(--gold); }
-
-.hand-header {
-  font-size: 12px; margin-top: 2px; margin-bottom: 2px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-}
-
-/* ---- Bots-only "Help me play" assist: one button, tap any turn to reveal
-   a suggestion (never auto-plays for you). ---- */
-.hint-btn {
-  width: auto; background: rgba(212,160,23,0.18); border: 1px solid var(--gold);
-  color: var(--gold-bright); font-size: 11px; padding: 4px 10px; border-radius: 14px;
-}
-@keyframes hintBtnPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(212,160,23,0.6); }
-  50% { box-shadow: 0 0 0 8px rgba(212,160,23,0); }
-}
-.hint-btn.attn-pulse { animation: hintBtnPulse 1.6s ease-in-out infinite; }
-.hint-banner {
-  background: rgba(212,160,23,0.14); border: 1px solid var(--gold); color: var(--gold-bright);
-  border-radius: 10px; padding: 8px 12px; margin-top: 0; margin-bottom: 6px;
-  font-size: 12.5px; line-height: 1.4; flex-shrink: 0;
-}
-.card.hint-suggested {
-  box-shadow: 0 0 0 3px var(--gold), var(--shadow-sm); transform: translateY(-4px);
-}
-#btn-declare.hint-suggested {
-  box-shadow: 0 0 0 3px var(--gold);
-}
-.hand {
-  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 4px;
-  /* Sized to actual content (about 2 rows of cards) instead of stretching to
-     fill all leftover screen space -- previously this grew to fill whatever
-     was left over even with just 1-2 rows of cards, leaving a big empty gap
-     below the cards. Rare huge hands (after several stacked +2 penalties)
-     scroll within this cap instead of pushing the action buttons off-screen. */
-  flex: 0 1 auto; max-height: 148px; min-height: 0; overflow-y: auto;
-}
-
-.action-bar { display: flex; gap: 8px; padding: 4px; flex-shrink: 0; }
-.action-bar button { padding: 10px; font-size: 14px; }
-
-.overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-  display: flex; align-items: center; justify-content: center; z-index: 10;
-  padding: 16px;
-}
-.overlay.hidden { display: none; }
-
-.hidden { display: none !important; }
-
-/* ---- mid-game join approval: requester's waiting screen + host's banner ---- */
-.waiting-host-panel { text-align: center; padding-top: 60px; }
-.waiting-host-panel > .leave-btn { margin-top: 20px; }
-.waiting-host-spinner {
-  width: 44px; height: 44px; margin: 0 auto 20px; border-radius: 50%;
-  border: 3px solid rgba(212,160,23,0.25); border-top-color: var(--gold);
-  animation: waitingHostSpin 0.9s linear infinite;
-}
-@keyframes waitingHostSpin { to { transform: rotate(360deg); } }
-
-/* Floating, host-only strip -- sits above whatever screen (lobby or the
-   live game) the host happens to be on, since a join request can arrive at
-   any time. Stacks vertically if more than one person is waiting at once. */
-.join-requests-banner {
-  position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
-  width: min(92vw, 420px); z-index: 60;
-  display: flex; flex-direction: column; gap: 8px;
-}
-.join-requests-banner.hidden { display: none; }
-.join-request-row {
-  background: var(--jade-panel-alt); border: 1px solid rgba(212,160,23,0.4); border-radius: var(--radius-sm);
-  padding: 10px 12px; display: flex; align-items: center; gap: 10px;
-  box-shadow: 0 8px 20px rgba(0,0,0,0.5);
-}
-.join-request-row .jr-text { flex: 1; font-size: 13px; color: var(--text-light); }
-.join-request-row .jr-text b { color: var(--gold-bright); }
-.join-request-row button {
-  width: auto; padding: 7px 12px; margin: 0; font-size: 12px; border-radius: var(--radius-sm);
-}
-.join-request-row .jr-admit { background: #1e7a4a; color: #fff; }
-.join-request-row .jr-ignore { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: var(--text-muted); }
-
-.round-result-emoji { text-align: center; font-size: 48px; line-height: 1; margin-bottom: 4px; }
-@keyframes scoreCardEmojiPop {
-  0% { transform: scale(0); opacity: 0; }
-  12% { transform: scale(1.25); opacity: 1; }
-  22% { transform: scale(1); opacity: 1; }
-  85% { transform: scale(1); opacity: 1; }
-  100% { transform: scale(0.85); opacity: 0; }
-}
-.result-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--jade-border); font-size: 14px; color: var(--text-light); }
-.result-row.winner-row { font-weight: 700; color: var(--gold-bright); }
-
-/* ---- Full scorecard (players in rows, rounds in columns + Total) ---- */
-.link-btn {
-  background: none; border: none; color: var(--red); font-size: 12.5px;
-  padding: 6px 0; width: 100%; text-decoration: underline;
-}
-.full-scorecard { margin: 4px 0 8px; }
-.scorecard-hint { text-align: center; color: var(--text-muted); font-size: 11px; margin: 0 0 8px; }
-.scorecard-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-/* One shared #scorecard-table living on its own dedicated overlay
-   (#overlay-full-scorecard), opened from either the in-game Scores overlay
-   or the round-result screen's own link -- so there's only ever one table
-   to style (and keep in sync). */
-#scorecard-table {
-  border-collapse: collapse; font-size: 12.5px; white-space: nowrap; width: 100%;
-  color: var(--text-light);
-}
-#scorecard-table th, #scorecard-table td { padding: 6px 8px; text-align: center; }
-#scorecard-table th { color: var(--text-muted); font-weight: 600; border-bottom: 2px solid var(--jade-border); font-size: 11px; }
-#scorecard-table th:first-child, #scorecard-table td:first-child {
-  position: sticky; left: 0; background: var(--jade-panel-alt); text-align: left;
-  color: var(--text-light); font-weight: 600; box-shadow: 2px 0 4px rgba(0,0,0,0.3);
-}
-#scorecard-table th:last-child, #scorecard-table td:last-child {
-  font-weight: 700; border-left: 2px solid var(--jade-border);
-}
-#scorecard-table tr:not(:last-child) td { border-bottom: 1px solid var(--jade-border); }
-.scorecard-out { color: #ff8a80; font-size: 9px; font-weight: 700; margin-left: 3px; }
-.scorecard-dash { color: var(--text-muted); }
-
-/* ---- Podium-style score card (shown every round) ---- */
-.podium-panel {
-  max-width: 480px; width: 92vw;
-  margin: 8px auto; padding: 14px 16px;
-  /* Safety net only -- the podium shrink above is what makes this fit on a
-     normal phone screen without scrolling; this just prevents the panel
-     from ever being clipped outright on an unusually short viewport. */
-  max-height: 96dvh; overflow-y: auto;
-}
-.round-result-maxscore {
-  text-align: center; font-size: 12px; color: var(--gold-bright); font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;
-}
-.round-result-note { text-align: center; font-size: 12.5px; color: #ff8a80; margin-bottom: 8px; }
-.podium {
-  display: flex; align-items: flex-end; justify-content: center; gap: 7px;
-  margin: 4px 0 8px;
-}
-/* Shrunk down (not the reveal rows below) so the whole round-result screen
-   fits on one mobile viewport without needing to scroll. */
-.podium-slot {
-  background: var(--jade-panel-alt); border: 1.5px solid var(--gold); border-radius: var(--radius-sm);
-  padding: 5px 7px; text-align: center; flex: 1; min-width: 0;
-}
-.podium-medal { font-size: 17px; line-height: 1; }
-.podium-name {
-  font-weight: 700; font-size: 10.5px; margin-top: 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.podium-score { font-size: 10px; color: var(--gold-bright); margin-top: 1px; font-weight: 700; }
-.podium-delta { font-size: 9px; color: var(--gold-bright); margin-top: 1px; font-weight: 700; }
-/* 1st place sits centered (order: 2, flanked by 2nd/3rd) and visibly higher
-   than the other two -- via extra padding/scale + the other two carrying
-   their own bottom margin, not a bar-chart height. */
-.podium-place-1 {
-  order: 2; padding-top: 8px; padding-bottom: 8px;
-  background: rgba(212,160,23,0.16); border-width: 2px; transform: scale(1.03);
-  box-shadow: 0 3px 10px rgba(212,160,23,0.35);
-}
-.podium-place-1 .podium-medal { font-size: 21px; }
-.podium-place-2 { order: 1; margin-bottom: 4px; }
-.podium-place-3 { order: 3; margin-bottom: 6px; }
-
-/* ---- Round-result reveal rows: replaces the old plain scoreboard table AND
-   the old separate at-the-seat card reveal -- everyone's actual final hand
-   for the round (priciest cards first, capped tiles + "+N"), its value, and
-   the round-score math, all in one merged screen. See renderHandRevealRows(). ---- */
-.reveal-rows { border-top: 1.5px solid var(--jade-border); padding-top: 6px; max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
-.reveal-row { background: var(--jade-panel-alt); border-radius: var(--radius-sm); padding: 7px 9px; }
-.reveal-row.declared { background: rgba(212,160,23,0.14); border: 1px solid var(--gold); }
-.reveal-row.eliminated { opacity: 0.55; }
-.reveal-name { font-size: 11.5px; font-weight: 700; color: var(--text-light); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reveal-main { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.reveal-cards { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; min-width: 0; }
-.reveal-more { font-size: 10px; color: var(--gold-bright); font-weight: 700; margin-left: 1px; }
-.reveal-value { font-size: 10.5px; color: var(--gold-bright); font-weight: 700; margin-left: 3px; white-space: nowrap; }
-.reveal-math { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
-.reveal-math b { color: var(--gold-bright); font-size: 12px; }
-
-.round-maxscore-row { margin: 14px 0; }
-.round-maxscore-row.hidden { display: none; }
-.round-maxscore-row label { color: var(--text-muted); font-size: 12px; }
-.final-round-delta { font-weight: 700; color: var(--gold-bright); background: rgba(212,160,23,0.14); padding: 1px 6px; border-radius: 6px; }
-.final-round-banner {
-  background: rgba(212,160,23,0.14); border: 1.5px solid var(--gold); border-radius: var(--radius-sm);
-  padding: 10px 14px; margin-bottom: 14px; text-align: center; font-size: 14px; color: var(--text-light);
-}
-.final-round-banner-label {
-  text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; font-weight: 700;
-  color: var(--gold-bright); margin-bottom: 4px;
-}
-.final-round-banner b { color: var(--gold-bright); }
-
-/* ---- Drawn card reveal ---- */
-.draw-reveal {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
-  display: flex; align-items: center; justify-content: center; z-index: 30;
-  animation: fadeIn 0.15s ease-out;
-}
-.draw-reveal.hidden { display: none; }
-.draw-reveal-box {
-  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.25);
-  border-radius: 20px; padding: 24px 28px; text-align: center;
-  animation: popIn 0.25s ease-out; max-width: 92vw; box-sizing: border-box;
-}
-.draw-reveal-label { color: #fff; font-size: 14px; margin-bottom: 14px; font-weight: 600; }
-/* A +4/+6 penalty draw needs more than one row -- wrapping (plus a width
-   cap on the box above) keeps a big draw from overflowing the screen edge
-   or getting crushed unreadably small trying to fit in one line. */
-.draw-reveal-cards { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 78vw; }
-.draw-reveal-cards .card { width: 76px; height: 108px; }
-.draw-reveal-cards .card-center .center-rank { font-size: 26px; }
-.draw-reveal-cards .card-center .center-suit { font-size: 32px; }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes popIn { from { transform: scale(0.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-
-/* ---- Game-start sequence: countdown -> live deal -> joker/open reveal ---- */
-.confetti-canvas {
-  position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 50; pointer-events: none;
-}
-.confetti-canvas.hidden { display: none; }
-
-/* Countdown + "dealing" label -- a small floating, non-blocking badge (NOT
-   a full-screen takeover) so the real oval table underneath stays visible
-   while cards fly to the actual chair positions during dealing. */
-.deal-phase-badge {
-  position: fixed; top: 12%; left: 50%; transform: translateX(-50%);
-  z-index: 45; text-align: center; pointer-events: none;
-}
-.deal-phase-badge.hidden { display: none; }
-.deal-phase-badge .start-seq-countdown { font-size: 64px; }
-.start-seq-countdown {
-  font-weight: 700; color: var(--gold);
-  text-shadow: 0 2px 12px rgba(0,0,0,0.6);
-  animation: popIn 0.3s ease-out;
-}
-.start-seq-countdown.hidden { display: none; }
-.deal-phase-label {
-  color: #fff; font-size: 14px; font-weight: 600;
-  background: rgba(9,38,22,0.6); border-radius: 20px; padding: 6px 16px;
-  text-shadow: 0 2px 6px rgba(0,0,0,0.5); animation: fadeIn 0.2s ease-out;
-}
-.deal-phase-label.hidden { display: none; }
-
-/* The flying "card" itself lives inside the real #oval-table and travels
-   from the table's center to each actual seat in turn -- a real chair-to-
-   chair deal, not an abstract side-panel animation. */
-.deal-flyer {
-  position: absolute; top: 50%; left: 50%; width: 24px; height: 34px; border-radius: 4px;
-  background: repeating-linear-gradient(45deg, #234, #234 5px, #1a2f42 5px, #1a2f42 10px);
-  border: 1px solid #0b1a26; box-shadow: 0 3px 8px rgba(0,0,0,0.45);
-  transform: translate(-50%, -50%); opacity: 0; z-index: 6;
-}
-.deal-flyer.hidden { display: none; }
-
-/* Pre-deal intro: N deck stacks appear (matching the real deck count for
-   this table size) then riffle-merge into a shuffle, all before the
-   existing per-card deal animation above starts. Same card-back look as
-   .deal-flyer so it reads as the same physical deck throughout. */
-.deck-intro {
-  position: absolute; inset: 0; z-index: 6; pointer-events: none;
-}
-.deck-intro.hidden { display: none; }
-.deck-stack {
-  position: absolute; width: 40px; height: 56px; border-radius: 4px;
-  background: repeating-linear-gradient(45deg, #234, #234 5px, #1a2f42 5px, #1a2f42 10px);
-  border: 1px solid #0b1a26; box-shadow: 0 3px 8px rgba(0,0,0,0.45);
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 9px; color: var(--gold); letter-spacing: 0.5px;
-  opacity: 0; transform: translateY(-30px) scale(0.7);
-  transition: opacity 0.4s ease, transform 0.4s ease, left 0.3s ease, top 0.3s ease;
-}
-.shuffle-card {
-  position: absolute; width: 22px; height: 31px; border-radius: 3px;
-  background: repeating-linear-gradient(45deg, #234, #234 5px, #1a2f42 5px, #1a2f42 10px);
-  border: 1px solid #0b1a26; box-shadow: 0 3px 8px rgba(0,0,0,0.45);
-}
-/* Brief highlight the instant a card "lands" at a seat. */
-.seat.dealt-flash .seat-chip { background: var(--gold); color: #1a1a1a; transition: background 0.1s; }
-
-.start-sequence {
-  position: fixed; inset: 0; background: rgba(9, 38, 22, 0.92);
-  display: flex; align-items: center; justify-content: center; z-index: 40;
-  animation: fadeIn 0.2s ease-out;
-}
-.start-sequence.hidden { display: none; }
-.start-seq-box { text-align: center; }
-.start-seq-reveal { display: flex; flex-direction: column; gap: 18px; animation: popIn 0.3s ease-out; }
-.start-seq-reveal.hidden { display: none; }
-.start-seq-reveal-row { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.start-seq-reveal-label { color: var(--gold); font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
-.start-seq-reveal-row .card { width: 76px; height: 108px; }
-.start-seq-reveal-row .card-center .center-rank { font-size: 26px; }
-.start-seq-reveal-row .card-center .center-suit { font-size: 32px; }
-
-/* ---- Chat ---- */
-.chat-fab {
-  position: fixed; bottom: 16px; right: 16px; width: 52px; height: 52px; border-radius: 50%;
-  background: linear-gradient(135deg, var(--red), var(--red-dark)); color: white; display: flex; align-items: center; justify-content: center;
-  box-shadow: var(--shadow-md); cursor: pointer; z-index: 20;
-}
-.chat-fab .icon { width: 24px; height: 24px; margin: 0; }
-.chat-fab.hidden { display: none; }
-.badge {
-  position: absolute; top: -4px; right: -4px; background: var(--red); color: white;
-  border-radius: 50%; font-size: 10px; min-width: 16px; height: 16px; padding: 0 3px;
-  display: flex; align-items: center; justify-content: center; font-weight: 700;
-}
-.badge.hidden { display: none; }
-
-.chat-panel {
-  position: fixed; bottom: 0; right: 0; left: 0; margin: 0 auto; width: 100%; max-width: 380px;
-  height: 60vh; max-height: 480px;
-  background: var(--jade-panel); color: var(--text-light); border: 1px solid var(--jade-border); border-bottom: none;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0; z-index: 25;
-  display: flex; flex-direction: column; box-shadow: var(--shadow-lg);
-}
-.chat-panel.hidden { display: none; }
-.chat-header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 10px 14px; border-bottom: 1px solid var(--jade-border); font-weight: 700;
-}
-.chat-header button.tiny .icon, .chat-header span .icon { margin: 0; }
-.chat-messages { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 13px; }
-.chat-msg { margin-bottom: 8px; }
-/* Gold for other players' names (matches the score/highlight role used
-   everywhere else), red for your own -- same "you" accent as the primary
-   button and the timer, instead of the old one-off green/purple pair that
-   didn't relate to any other color in the app. */
-.chat-msg .chat-name { font-weight: 700; color: var(--gold-bright); }
-.chat-msg.me .chat-name { color: var(--red); }
-.chat-msg .chat-text { word-break: break-word; }
-.chat-msg .chat-gif { display: block; max-width: 160px; border-radius: 8px; margin-top: 4px; }
-.chat-empty { color: var(--text-muted); font-size: 12px; text-align: center; margin-top: 20px; }
-.chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--jade-border); }
-.chat-input-row input {
-  flex: 1; padding: 10px; border-radius: 20px; border: 1px solid var(--jade-border);
-  background: var(--jade-panel-alt); color: var(--text-light); font-size: 14px;
-}
-.chat-input-row button.tiny { width: auto; padding: 8px 16px; border-radius: 20px; }
-.chat-input-row button.tiny .icon { width: 16px; height: 16px; margin: 0; }
-#btn-gif-open { font-weight: 700; font-size: 11px; background: rgba(255,255,255,0.1); color: var(--text-light); }
-
-/* ---- GIF picker (Giphy search) ---- */
-.gif-picker {
-  position: absolute; left: 0; right: 0; bottom: 56px; height: 260px;
-  background: var(--jade-panel); border-top: 1px solid var(--jade-border); z-index: 26;
-  display: flex; flex-direction: column;
-}
-.gif-picker.hidden { display: none; }
-.gif-picker-header { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--jade-border); }
-.gif-picker-header input {
-  flex: 1; padding: 8px 12px; border-radius: 16px; border: 1px solid var(--jade-border);
-  background: var(--jade-panel-alt); color: var(--text-light); font-size: 13px;
-}
-.gif-picker-header button.tiny .icon { width: 16px; height: 16px; margin: 0; }
-.gif-suggestions {
-  display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 0; flex-shrink: 0;
-}
-.gif-suggestion-chip {
-  flex-shrink: 0; background: var(--jade-panel-alt); border: 1px solid var(--jade-border); border-radius: 14px;
-  padding: 5px 12px; font-size: 12px; color: var(--text-light); white-space: nowrap; cursor: pointer;
-}
-.gif-suggestion-chip:active { background: rgba(255,255,255,0.1); }
-.gif-results {
-  flex: 1; overflow-y: auto; padding: 8px; display: grid;
-  grid-template-columns: repeat(3, 1fr); gap: 6px; align-content: start;
-}
-.gif-results img { width: 100%; height: 72px; object-fit: cover; border-radius: 6px; cursor: pointer; }
-.gif-results-hint { grid-column: 1 / -1; text-align: center; color: var(--text-muted); font-size: 12px; padding: 24px 0; }
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const admin = require('firebase-admin');
+const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, cardValue, DECLARE_MAX_VALUE, deckCountForPlayers } = require('./game/gameLogic');
+
+const app = express();
+const server = http.createServer(app);
+
+// --------------------------------------------------------------------------
+// Lock Socket.IO down to the real deployed clients instead of accepting a
+// connection (and therefore create_room/chat_message/etc calls) from ANY
+// origin, which is the default when no cors option is set at all. Includes
+// the Android/iOS app's WebView origins (Capacitor apps don't share the
+// website's origin) alongside the live site, so this doesn't break the
+// mobile app while closing the door on some other page embedding a socket
+// straight to this server. A request with no Origin header at all (some
+// native WebView configurations omit it) is let through rather than
+// rejected -- blocking it would risk breaking the mobile app for everyone,
+// not just an attacker. Configurable via CLIENT_ORIGINS (comma-separated)
+// in case the deployed origin ever changes without a code deploy.
+// --------------------------------------------------------------------------
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://least-count-game.onrender.com',
+  'capacitor://localhost',
+  'https://localhost',
+  'http://localhost',
+];
+const ALLOWED_ORIGINS = process.env.CLIENT_ORIGINS
+  ? process.env.CLIENT_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
+  : DEFAULT_ALLOWED_ORIGINS;
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+      callback(new Error('Origin not allowed'));
+    },
+  },
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+// --------------------------------------------------------------------------
+// Firebase Admin (server-side). This is the ONLY trusted place stats,
+// purchases, etc. should ever get written -- the server already knows who
+// really won a game, so writing from here (instead of the browser) means a
+// player can't just open dev tools and edit their own stats. Credentials
+// come from a Render "Secret File" (see the Environment tab), never from
+// anything committed to GitHub. Render makes secret files available both at
+// /etc/secrets/<filename> and in the app's own root directory, so this
+// checks both locations -- keeps things working the same in local dev too,
+// if the same file is ever placed in the project root there.
+// --------------------------------------------------------------------------
+const FIREBASE_SERVICE_ACCOUNT_FILENAME = 'least-count-ad558-firebase-adminsdk-fbsvc-8ab25ff468';
+const firebaseServiceAccountPath = [
+  path.join('/etc/secrets', FIREBASE_SERVICE_ACCOUNT_FILENAME),
+  path.join(__dirname, FIREBASE_SERVICE_ACCOUNT_FILENAME),
+].find((p) => {
+  try { return fs.existsSync(p); } catch { return false; }
+});
+
+let db = null;
+if (firebaseServiceAccountPath) {
+  try {
+    const serviceAccount = JSON.parse(fs.readFileSync(firebaseServiceAccountPath, 'utf8'));
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    db = admin.firestore();
+    console.log('[Firebase] Admin SDK initialized -- Firestore is connected.');
+  } catch (e) {
+    console.error('[Firebase] Failed to initialize Admin SDK:', e.message);
+  }
+} else {
+  console.warn('[Firebase] Service account file not found -- Firestore writes are disabled for now.');
+}
+
+// Temporary manual check only -- visit /api/firebase-test in a browser to
+// confirm the server can actually write to and read from Firestore. Safe to
+// remove once this is confirmed working and real stat-writing replaces it.
+app.get('/api/firebase-test', async (req, res) => {
+  if (!db) return res.status(500).json({ ok: false, error: 'Firestore is not initialized on the server -- check the secret file setup.' });
+  try {
+    const ref = db.collection('_diagnostics').doc('server-test');
+    await ref.set({ lastCheckedAt: new Date().toISOString(), ok: true });
+    const snap = await ref.get();
+    res.json({ ok: true, savedData: snap.data() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------------------------------------------------------------
+// Real stat-tracking. Called from every place a game can actually end (a
+// correct declare, someone leaving down to 1 player, etc). Deliberately
+// server-driven, not client-driven -- the server is the only thing that
+// truly knows who won, so this is the one trustworthy place to record it.
+// Guarded by room.statsRecorded so a game's result is only ever written
+// once, no matter which of several code paths ends it. Bots and guests who
+// never actually got a Firebase account linked (firebaseUid missing) are
+// silently skipped -- there's nowhere to save their stats yet.
+// --------------------------------------------------------------------------
+async function recordGameResult(room) {
+  if (!db || !room.game || !room.game.gameOver || room.statsRecorded) return;
+  room.statsRecorded = true;
+  const winnerId = room.game.winner;
+  const writes = [];
+  for (const pid of room.game.playerIds) {
+    const player = room.players.get(pid);
+    if (!player || player.isBot || !player.firebaseUid) continue;
+    const ref = db.collection('users').doc(player.firebaseUid);
+    const isWinner = pid === winnerId;
+    writes.push(ref.set({
+      displayName: player.name,
+      gamesPlayed: admin.firestore.FieldValue.increment(1),
+      wins: admin.firestore.FieldValue.increment(isWinner ? 1 : 0),
+      lastPlayedAt: new Date().toISOString(),
+    }, { merge: true }));
+  }
+  try {
+    await Promise.all(writes);
+    console.log(`[Firebase] Recorded game result for room ${room.code} (${writes.length} player(s) with linked accounts).`);
+  } catch (e) {
+    console.error(`[Firebase] Failed to record game result for room ${room.code}:`, e.message);
+  }
+}
+
+// --------------------------------------------------------------------------
+// Verifies a Firebase ID token the client sent and returns the uid it
+// actually, provably belongs to -- or null if there's no token, it fails
+// verification, or Firebase Admin isn't configured. Every place that used to
+// take a raw `firebaseUid` string straight out of the client's payload (and
+// trust it completely) now sends the short-lived ID token instead and uses
+// ONLY what this returns -- so a player can no longer open dev tools, type
+// in a stranger's uid (or a made-up one), and have game results/stats
+// attributed to that account. Deliberately fails soft (null, not a thrown
+// error) so a token hiccup degrades to "this game just won't count toward
+// your stats" instead of blocking someone from playing at all.
+// --------------------------------------------------------------------------
+async function verifyFirebaseToken(idToken) {
+  if (!idToken || !db) return null;
+  try {
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    return decoded.uid;
+  } catch (e) {
+    console.warn('[Firebase] ID token verification failed:', e.message);
+    return null;
+  }
+}
+
+// --------------------------------------------------------------------------
+// Basic chat content filtering. Deliberately simple -- a fixed word list,
+// whole-word matching (so it doesn't flag substrings inside innocent words),
+// and censoring (turning the word into asterisks) rather than blocking the
+// message outright, so one filtered word doesn't stop the rest of a message
+// from sending. This is a first layer for a family game, not a complete
+// moderation system -- paired with the report/mute tools on the client for
+// anything it misses.
+// --------------------------------------------------------------------------
+const PROFANITY_LIST = [
+  'fuck', 'shit', 'bitch', 'asshole', 'bastard', 'cunt', 'dick', 'pussy',
+  'whore', 'slut', 'nigger', 'nigga', 'faggot', 'retard', 'rape', 'molest',
+];
+const PROFANITY_REGEX = new RegExp(`\\b(${PROFANITY_LIST.join('|')})\\b`, 'gi');
+function censorText(text) {
+  return text.replace(PROFANITY_REGEX, (match) => '*'.repeat(match.length));
+}
+
+// --------------------------------------------------------------------------
+// GIF search (chat). Proxies to Giphy so the API key stays server-side only
+// -- never shipped to the browser, where anyone could read it out of the
+// page source and drain the quota. Set GIPHY_API_KEY as an environment
+// variable (Render.com: Environment tab) to enable this; without it, the
+// endpoint just tells the client GIF search isn't configured yet.
+// --------------------------------------------------------------------------
+const GIPHY_API_KEY = process.env.GIPHY_API_KEY || '';
+
+app.get('/api/gif-search', async (req, res) => {
+  if (!GIPHY_API_KEY) {
+    return res.status(501).json({ ok: false, error: 'GIF search is not set up yet.' });
+  }
+  const q = (req.query.q || '').toString().trim().slice(0, 60);
+  try {
+    const endpoint = q
+      ? `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(GIPHY_API_KEY)}&q=${encodeURIComponent(q)}&limit=18&rating=pg-13`
+      : `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(GIPHY_API_KEY)}&limit=18&rating=pg-13`;
+    const giphyRes = await fetch(endpoint);
+    const data = await giphyRes.json();
+    const gifs = (data.data || []).map((g) => ({
+      id: g.id,
+      preview: (g.images && (g.images.fixed_width_small || g.images.fixed_width) || {}).url,
+      full: (g.images && (g.images.fixed_width || g.images.original) || {}).url,
+    })).filter((g) => g.preview && g.full);
+    res.json({ ok: true, gifs });
+  } catch (e) {
+    res.status(502).json({ ok: false, error: 'GIF search failed. Try again.' });
+  }
+});
+
+// --------------------------------------------------------------------------
+// In-memory room store. Fine for a small private game among family/friends;
+// state simply resets if the server restarts.
+// --------------------------------------------------------------------------
+const rooms = new Map(); // roomCode -> Room
+const socketIndex = new Map(); // socket.id -> { roomCode, playerId }
+
+// "Play Online" matchmaking -- queue by desired table size (3-6), matched
+// with strangers the instant enough people are waiting for the same size.
+// Deliberately separate from `rooms`/`socketIndex`: a queued player isn't in
+// any room yet, so there's nothing there for them until they're matched.
+const QUEUE_SIZES = [3, 4, 5, 6];
+const matchQueues = new Map(QUEUE_SIZES.map((n) => [n, []])); // playerCount -> array of queued entries
+const queueIndex = new Map(); // socket.id -> playerCount (which bucket they're in, for cleanup)
+
+// Reduced from 30s -> 20s: with the sound-only "your turn" cue proving easy
+// to miss, a snappier timer keeps a distracted player from stalling the
+// table for too long even before the new visual pulse (client-side) kicks in.
+const TURN_SECONDS = 20;
+const CHAT_HISTORY_LIMIT = 100;
+const DEFAULT_ELIMINATION_SCORE = 200;
+// Solo play (item: "Play Solo" on the landing screen) -- bots act fast, well
+// under the human turn timer, using the exact same auto-play logic already
+// used when a human times out (see runBotTurn/scheduleTurnTimer below).
+const BOT_MOVE_MS = 3000;
+const MAX_BOTS = 7;
+
+// ---------------------------------------------------------------------------
+// Game-start sequence timing. When the host clicks "Start Game" the cards
+// aren't just instantly dealt -- everyone sees a 3-2-1 countdown, then a
+// live-dealing animation, then the round's joker rank + open card are
+// revealed and held on screen for a few seconds. The real per-turn timer
+// (and therefore "the start of the game") only begins partway into that
+// reveal, not the instant hands are dealt.
+// ---------------------------------------------------------------------------
+const COUNTDOWN_MS = 3000; // 3-2-1
+// The deal animation does one visual "flight" per card per player -- 13
+// passes each, matching the real hand size, not a shortened stand-in.
+// Total deal time scales with player count (a bigger table really does
+// take longer to deal) rather than being a fixed duration split thinner
+// and thinner as more players join.
+const DEAL_PASSES = 13;
+const DEAL_FLIGHT_MS = 90; // time per individual card flight (travel + brief pause)
+// New intro phase, before the existing per-card deal animation: shows the
+// actual number of decks in play (so players can reason about card-count
+// probability), then a riffle-merge shuffle. Fixed duration regardless of
+// table size -- only the deck COUNT shown changes, not how long this takes.
+const DECK_INTRO_MS = 3400;
+const REVEAL_MS = 2500; // joker/open-card reveal, held on screen
+const REVEAL_TO_TIMER_MS = 1200; // turn timer quietly starts this far into the reveal
+// Minimum penalty-cards-in-one-go and discard-group-size that count as
+// "big" enough to trigger a seat reaction (items 9/10). The client decides
+// which emoji(s) each reaction type maps to and whether it's shown at the
+// affected player's own seat, everyone else's seats, or both.
+const PENALTY_REACTION_THRESHOLD = 6;
+const BIG_DISCARD_THRESHOLD = 4;
+const LOW_CARDS_THRESHOLD = 4;
+
+// ---------------------------------------------------------------------------
+// Per-socket rate limiting. Each connected socket gets its own small bucket
+// per action type; going over the limit just gets rejected (same as any
+// other invalid action, via the existing ack({ok:false}) error path) instead
+// of processed. This is a brake pedal, not a ban -- once the window passes,
+// that socket can act again normally. Limits are set generously above what
+// a real human could ever hit through normal play/chat, so this should never
+// trip for a legitimate player; it's here for scripted spam and stuck-key
+// button-mashing, not to slow anyone down.
+// ---------------------------------------------------------------------------
+const RATE_LIMITS = {
+  chat_message: { max: 5, windowMs: 10000 },       // 5 chat/GIF messages per 10s
+  play_turn: { max: 10, windowMs: 5000 },           // 10 moves per 5s
+  declare: { max: 5, windowMs: 5000 },
+  request_hint: { max: 10, windowMs: 10000 },
+  create_room: { max: 5, windowMs: 60000 },
+  create_solo_room: { max: 5, windowMs: 60000 },
+  join_room: { max: 10, windowMs: 60000 },
+  report_player: { max: 5, windowMs: 60000 },
+  get_my_stats: { max: 10, windowMs: 30000 },
+  get_player_stats: { max: 20, windowMs: 30000 },
+};
+const rateBuckets = new Map(); // socket.id -> { [eventName]: number[] recent timestamps }
+
+function isRateLimited(socket, eventName) {
+  const limit = RATE_LIMITS[eventName];
+  if (!limit) return false;
+  const now = Date.now();
+  let bucket = rateBuckets.get(socket.id);
+  if (!bucket) { bucket = {}; rateBuckets.set(socket.id, bucket); }
+  let hits = bucket[eventName];
+  if (!hits) { hits = []; bucket[eventName] = hits; }
+  while (hits.length && now - hits[0] > limit.windowMs) hits.shift(); // drop expired hits
+  if (hits.length >= limit.max) return true;
+  hits.push(now);
+  return false;
+}
+
+// --------------------------------------------------------------------------
+// Per-IP rate limiting, on top of (not instead of) the per-socket limits
+// above. Per-socket limits reset the instant a socket reconnects, so they're
+// closer to "friction" than "protection" against anything scripted -- this
+// adds a second, IP-keyed check on just the three endpoints that actually
+// matter for abuse (spinning up rooms, and filing reports), which survives
+// a reconnect. Deliberately generous (25/min) so a household or office on
+// one shared/NAT'd public IP never gets penalized for normal play -- this
+// is aimed at a script hammering the server, not a family playing together.
+// --------------------------------------------------------------------------
+const IP_RATE_LIMITS = {
+  create_room: { max: 25, windowMs: 60000 },
+  create_solo_room: { max: 25, windowMs: 60000 },
+  report_player: { max: 25, windowMs: 60000 },
+};
+const ipRateBuckets = new Map(); // ip -> { [eventName]: number[] recent timestamps }
+
+function getClientIp(socket) {
+  // Render (and most hosts) put the app behind a proxy, so the raw socket
+  // address is the proxy's own IP, not the visitor's -- prefer the
+  // forwarded-for header (first hop is the original client) when present.
+  const xff = socket.handshake.headers['x-forwarded-for'];
+  if (xff) return xff.split(',')[0].trim();
+  return socket.handshake.address;
+}
+
+function isIpRateLimited(socket, eventName) {
+  const limit = IP_RATE_LIMITS[eventName];
+  if (!limit) return false;
+  const ip = getClientIp(socket);
+  const now = Date.now();
+  let bucket = ipRateBuckets.get(ip);
+  if (!bucket) { bucket = {}; ipRateBuckets.set(ip, bucket); }
+  let hits = bucket[eventName];
+  if (!hits) { hits = []; bucket[eventName] = hits; }
+  while (hits.length && now - hits[0] > limit.windowMs) hits.shift();
+  if (hits.length >= limit.max) return true;
+  hits.push(now);
+  return false;
+}
+
+function makeRoomCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I confusion
+  let code;
+  do {
+    code = Array.from({ length: 4 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
+  } while (rooms.has(code));
+  return code;
+}
+
+function makePlayerId() {
+  return crypto.randomUUID();
+}
+
+function publicRoomInfo(room) {
+  return {
+    roomCode: room.code,
+    hostPlayerId: room.hostPlayerId,
+    phase: room.phase,
+    players: room.order.map((pid) => ({
+      playerId: pid,
+      name: room.players.get(pid).name,
+      connected: room.players.get(pid).connected,
+      isBot: !!room.players.get(pid).isBot,
+    })),
+  };
+}
+
+// Picks who should become the new host when the current one leaves/disconnects
+// (excludePlayerId). Prefers someone actually still in the fight (connected,
+// human, not eliminated/quit) over an eliminated player who's just sitting in
+// the room post-elimination -- an eliminated host closing their tab shouldn't
+// hand hosting to some other eliminated spectator instead of an active player.
+// Falls back progressively (any connected human, then anyone at all) so a
+// host handoff never simply fails.
+function pickNextHost(room, excludePlayerId) {
+  const eliminated = room.game ? room.game.eliminated : null;
+  const quit = room.game ? room.game.quit : null;
+  const isActive = (id) => {
+    const pl = room.players.get(id);
+    if (!pl || pl.isBot || !pl.connected) return false;
+    if (eliminated && eliminated.has(id)) return false;
+    if (quit && quit.has(id)) return false;
+    return true;
+  };
+  const isConnectedHuman = (id) => {
+    const pl = room.players.get(id);
+    return !!(pl && pl.connected && !pl.isBot);
+  };
+  // Last-resort fallback must still never be a bot -- if every human has
+  // disconnected (e.g. the sole human in a solo-bots room), host is left
+  // pointing at whichever human it already was (via the null return below,
+  // which both call sites treat as "leave hostPlayerId unchanged") so it's
+  // instantly valid again the moment that human reconnects, instead of
+  // getting stuck assigned to a bot that never takes an action to hand it
+  // off again.
+  const isHuman = (id) => {
+    const pl = room.players.get(id);
+    return !!(pl && !pl.isBot);
+  };
+  const candidates = room.order.filter((id) => id !== excludePlayerId);
+  return candidates.find(isActive) || candidates.find(isConnectedHuman) || candidates.find(isHuman) || null;
+}
+
+function broadcastRoom(room) {
+  for (const pid of room.order) {
+    const p = room.players.get(pid);
+    if (p.connected && p.socketId) {
+      io.to(p.socketId).emit('room_update', publicRoomInfo(room));
+    }
+  }
+}
+
+// Pushes the CURRENT full list of pending mid-game join requests to the
+// host only -- sent as a complete list (not a diff) every time it changes,
+// so a host who's mid-round and only glances at the banner occasionally
+// always sees an accurate, current picture rather than needing to track a
+// stream of individual add/remove events.
+function notifyHostOfJoinRequest(room) {
+  const host = room.players.get(room.hostPlayerId);
+  if (!host || !host.connected || !host.socketId || !room.pendingJoins) return;
+  const pending = Array.from(room.pendingJoins.entries()).map(([playerId, r]) => ({ playerId, name: r.name }));
+  io.to(host.socketId).emit('join_requests', { pending });
+}
+
+// Shared by both the hard 2-minute timeout and an explicit host Ignore --
+// in both cases the requester is told the same thing and sent back to the
+// landing screen, and the pending record + its timer are cleaned up.
+function denyJoinRequest(room, playerId, reason) {
+  if (!room.pendingJoins || !room.pendingJoins.has(playerId)) return;
+  const entry = room.pendingJoins.get(playerId);
+  clearTimeout(entry.timer);
+  room.pendingJoins.delete(playerId);
+  socketIndex.delete(entry.socketId);
+  io.to(entry.socketId).emit('join_denied', { reason });
+  notifyHostOfJoinRequest(room);
+}
+
+function broadcastGameState(room) {
+  if (!room.game) return;
+  for (const pid of room.order) {
+    const p = room.players.get(pid);
+    if (p.connected && p.socketId) {
+      const state = room.game.getPublicState(pid);
+      state.turnDeadline = room.turnDeadline || null;
+      io.to(p.socketId).emit('game_state', state);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// "Play Online" matchmaking. Pulls exactly `playerCount` entries off the
+// front of that size's queue (assumes the caller already confirmed there are
+// enough), builds a fresh room for them -- same shape as create_room, just
+// with every seat already filled by real strangers instead of one player
+// waiting in a lobby -- and starts the game immediately (no lobby step at
+// all, matching how create_solo_room skips it too).
+function startMatchedRoom(entries) {
+  const code = makeRoomCode();
+  const hostPlayerId = entries[0].playerId; // arbitrary but consistent -- first to queue "hosts" (next-round max-score changes etc.)
+  const room = {
+    code,
+    hostPlayerId,
+    players: new Map(),
+    order: [],
+    phase: 'lobby',
+    game: null,
+    turnTimer: null,
+    turnDeadline: null,
+    dealTimer: null,
+    revealTimer: null,
+    chatHistory: [],
+    statsRecorded: false,
+    pendingJoins: new Map(),
+  };
+  for (const e of entries) {
+    room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null });
+    room.order.push(e.playerId);
+    socketIndex.set(e.socketId, { roomCode: code, playerId: e.playerId });
+    const s = io.sockets.sockets.get(e.socketId);
+    if (s) s.join(code);
+  }
+  rooms.set(code, room);
+  room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
+  room.game.startRound();
+  for (const e of entries) {
+    io.to(e.socketId).emit('queue_matched', { roomCode: code, playerId: e.playerId, chatHistory: room.chatHistory });
+  }
+  beginStartSequence(room, code);
+}
+
+// Checks whether the given queue size now has enough people waiting to fill
+// a table, and if so, matches the first `playerCount` of them immediately.
+// Called after every queue_join AND after queue_fill_bots removes people
+// from a bucket (in case that bucket was already independently ready --
+// shouldn't normally happen since this runs on every join too, but cheap
+// and safe to double-check).
+function tryMatchQueue(playerCount) {
+  const bucket = matchQueues.get(playerCount);
+  if (!bucket || bucket.length < playerCount) return;
+  const entries = bucket.splice(0, playerCount);
+  for (const e of entries) queueIndex.delete(e.socketId);
+  startMatchedRoom(entries);
+}
+
+// ---------------------------------------------------------------------------
+// Per-turn countdown. If a player doesn't act within TURN_SECONDS, a sensible
+// default action is played on their behalf so the game never stalls.
+// ---------------------------------------------------------------------------
+function clearTurnTimer(room) {
+  if (room.turnTimer) {
+    clearTimeout(room.turnTimer);
+    room.turnTimer = null;
+  }
+  room.turnDeadline = null;
+}
+
+function scheduleTurnTimer(room) {
+  clearTurnTimer(room);
+  if (!room.game || room.game.roundOver || room.game.gameOver) return;
+  // Solo play: if it's a bot's turn, they act quickly on their own timer
+  // instead of waiting out the full human turn countdown -- no deadline
+  // shown to the human either, since there's nothing for them to react to.
+  const currentPlayerRecord = room.players.get(room.game.currentPlayer());
+  if (currentPlayerRecord && currentPlayerRecord.isBot) {
+    room.turnTimer = setTimeout(() => runBotTurn(room), BOT_MOVE_MS);
+    return;
+  }
+  room.turnDeadline = Date.now() + TURN_SECONDS * 1000;
+  room.turnTimer = setTimeout(() => handleTurnTimeout(room), TURN_SECONDS * 1000);
+}
+
+// A bot's turn: declare as soon as it legally can (hand value low enough,
+// and no +2 challenge actively pending against it -- same rule a human has
+// to follow), otherwise fall back to the exact same sensible auto-discard
+// used when a human times out. Re-schedules afterward, which naturally
+// chains through consecutive bot seats until it reaches a human.
+function runBotTurn(room) {
+  const game = room.game;
+  if (!game || game.roundOver || game.gameOver) return;
+  const pid = game.currentPlayer();
+  const player = room.players.get(pid);
+  if (!player || !player.isBot) return; // safety: turn moved on some other way already
+
+  try {
+    const myValue = handValue(game.hands[pid] || [], game.roundJokerRank);
+    if (game.chainCount === 0 && myValue <= DECLARE_MAX_VALUE) {
+      game.declare(pid);
+      const newlyEliminated = (game.lastRoundResult && game.lastRoundResult.newlyEliminated) || [];
+      for (const id of newlyEliminated) emitSeatReaction(room.code, 'eliminated', id);
+    } else {
+      const cardIds = game.autoPickDiscard(pid);
+      game.playTurn(pid, cardIds);
+      revealDrawIfAny(room);
+      emitLogBasedReactions(room, room.code);
+      checkLowCardReaction(room, room.code, pid);
+    }
+  } catch (e) {
+    console.error(`Bot turn failed for room ${room.code}:`, e.message);
+  }
+
+  if (game.roundOver || game.gameOver) {
+    clearTurnTimer(room);
+    if (game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
+  } else {
+    scheduleTurnTimer(room);
+  }
+  broadcastRoom(room);
+  broadcastGameState(room);
+}
+
+// Clears the one-shot timers that drive the countdown -> deal -> reveal
+// game-start sequence (as distinct from the recurring per-turn timer above).
+function clearStartSequenceTimers(room) {
+  if (room.dealTimer) {
+    clearTimeout(room.dealTimer);
+    room.dealTimer = null;
+  }
+  if (room.revealTimer) {
+    clearTimeout(room.revealTimer);
+    room.revealTimer = null;
+  }
+}
+
+// If the player who just acted drew penalty card(s), privately reveal exactly
+// what they drew so they can react to it (before it just merges into their hand).
+function revealDrawIfAny(room) {
+  const draw = room.game && room.game.lastDraw;
+  if (!draw || !draw.cards || draw.cards.length === 0) return;
+  const p = room.players.get(draw.playerId);
+  if (p && p.connected && p.socketId) {
+    io.to(p.socketId).emit('cards_drawn', { cards: draw.cards });
+  }
+}
+
+// Kicks off the countdown -> live-deal -> joker/open-card reveal sequence
+// for the round that was just dealt (startRound() must already have been
+// called). Shared by both start_game (first round) and next_round (every
+// round after), so the same playful sequence plays every time, not just once.
+function beginStartSequence(room, roomCode) {
+  room.lowCardNotified = new Set(); // reset item-10 "look out" tracking for the new round
+  room.phase = 'starting';
+  // The dealing animation's player list must reflect who is ACTUALLY being
+  // dealt into this round -- room.game.turnOrder (set by startRound(), which
+  // already excludes anyone eliminated or who quit, and is in the real,
+  // dealer-rotated play order) -- not room.order, which is plain join order
+  // and still includes players who are out but haven't left the room. Using
+  // turnOrder here fixes two things at once: eliminated players no longer
+  // appear to receive cards in the dealing animation, and the seats the
+  // animation deals to (and the seating the client then keeps) match actual
+  // turn order instead of join order.
+  const dealOrder = (room.game && room.game.turnOrder && room.game.turnOrder.length)
+    ? room.game.turnOrder
+    : room.order;
+  const dealMs = DEAL_PASSES * dealOrder.length * DEAL_FLIGHT_MS;
+  const deckCount = deckCountForPlayers(dealOrder.length);
+  room.currentDealMs = dealMs; // remembered so a mid-sequence rejoin replays with the same timing
+  broadcastRoom(room);
+  io.to(roomCode).emit('game_starting', {
+    countdownMs: COUNTDOWN_MS,
+    introMs: DECK_INTRO_MS,
+    deckCount,
+    dealMs,
+    dealPasses: DEAL_PASSES,
+    revealMs: REVEAL_MS,
+    players: dealOrder.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
+  });
+
+  clearStartSequenceTimers(room);
+  room.dealTimer = setTimeout(() => {
+    room.dealTimer = null;
+    // Guard against the room having been torn down or reset mid-sequence
+    // (e.g. everyone left, or the host started a new game already).
+    if (!room.game || room.phase !== 'starting') return;
+    room.phase = 'playing';
+    broadcastRoom(room);
+    broadcastGameState(room); // hands, joker rank, open card now visible; turnDeadline still null
+    room.revealTimer = setTimeout(() => {
+      room.revealTimer = null;
+      if (!room.game || room.game.roundOver || room.game.gameOver) return;
+      scheduleTurnTimer(room); // real turn timer quietly starts here, mid-reveal
+      broadcastGameState(room);
+    }, REVEAL_TO_TIMER_MS);
+  }, COUNTDOWN_MS + DECK_INTRO_MS + dealMs);
+}
+
+// ---------------------------------------------------------------------------
+// Seat-reaction emojis (items 9 & 10) -- little playful, non-mechanical
+// reactions that pop up at a player's seat on the client. The server only
+// decides WHEN something reaction-worthy happened; the client decides which
+// emoji(s) to show and at whose seat(s) (self, others, or both).
+// ---------------------------------------------------------------------------
+function emitSeatReaction(roomCode, type, affectedPlayerId) {
+  io.to(roomCode).emit('seat_reaction', { type, affectedPlayerId });
+}
+
+// Inspects the log entry a playTurn() call just pushed and fires the
+// matching reaction, if any. Covers normal discards, +2 chain extends, and
+// +2 chain penalty draws uniformly (all three go through playTurn()).
+function emitLogBasedReactions(room, roomCode) {
+  if (!room.game || !room.game.log.length) return;
+  const entry = room.game.log[room.game.log.length - 1];
+  if (entry.type === 'discard' && entry.count >= BIG_DISCARD_THRESHOLD) {
+    emitSeatReaction(roomCode, 'bigdiscard', entry.playerId);
+  } else if (entry.type === '2-chain-extend') {
+    emitSeatReaction(roomCode, 'chainextend', entry.playerId);
+  } else if (entry.type === '2-chain-penalty' && entry.penalty > PENALTY_REACTION_THRESHOLD) {
+    emitSeatReaction(roomCode, 'penalty6', entry.playerId);
+  }
+}
+
+// Fires the "look out" reaction the first time (per round) a player's hand
+// drops below the threshold -- tracked per-round so it doesn't re-fire on
+// every subsequent turn while they stay low.
+function checkLowCardReaction(room, roomCode, playerId) {
+  if (!room.game || !room.game.hands || !room.game.hands[playerId]) return;
+  if (!room.lowCardNotified) room.lowCardNotified = new Set();
+  const len = room.game.hands[playerId].length;
+  if (len > 0 && len < LOW_CARDS_THRESHOLD && !room.lowCardNotified.has(playerId)) {
+    room.lowCardNotified.add(playerId);
+    emitSeatReaction(roomCode, 'lowcards', playerId);
+  }
+}
+
+function handleTurnTimeout(room) {
+  const game = room.game;
+  if (!game || game.roundOver || game.gameOver) return;
+
+  const pid = game.currentPlayer();
+  try {
+    const cardIds = game.autoPickDiscard(pid);
+    game.playTurn(pid, cardIds);
+    revealDrawIfAny(room);
+    emitLogBasedReactions(room, room.code);
+    checkLowCardReaction(room, room.code, pid);
+    emitSeatReaction(room.code, 'timeout', pid);
+  } catch (e) {
+    console.error(`Turn timeout auto-play failed for room ${room.code}:`, e.message);
+  }
+
+  if (game.roundOver || game.gameOver) {
+    clearTurnTimer(room);
+    if (game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
+  } else {
+    scheduleTurnTimer(room);
+  }
+
+  broadcastRoom(room);
+  broadcastGameState(room);
+}
+
+io.on('connection', (socket) => {
+  socket.on('create_room', async ({ name, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'create_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
+      if (isIpRateLimited(socket, 'create_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
+      const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      const code = makeRoomCode();
+      const playerId = makePlayerId();
+      const room = {
+        code,
+        hostPlayerId: playerId,
+        players: new Map(),
+        order: [],
+        phase: 'lobby', // lobby | starting | playing | game_over
+        game: null,
+        turnTimer: null,
+        turnDeadline: null,
+        dealTimer: null,
+        revealTimer: null,
+        chatHistory: [],
+        statsRecorded: false,
+        pendingJoins: new Map(), // mid-game join requests awaiting host approval -- see join_room below
+        allHumansDisconnectedAt: null, // set once every human is gone -- see the cleanup sweep below
+      };
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid });
+      room.order.push(playerId);
+      rooms.set(code, room);
+      socketIndex.set(socket.id, { roomCode: code, playerId });
+      socket.join(code);
+      ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+      broadcastRoom(room);
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Solo play: one human + a chosen number of bots, in a fresh room that
+  // skips the lobby entirely and jumps straight into the normal
+  // countdown -> deal -> reveal sequence, exactly like a real multiplayer
+  // game starting -- bots are just regular players to the game engine, the
+  // only special handling is how quickly they act (see scheduleTurnTimer).
+  socket.on('create_solo_room', async ({ name, botCount, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
+      if (isIpRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
+      const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      const n = Math.max(1, Math.min(MAX_BOTS, Math.round(Number(botCount)) || 3));
+      const code = makeRoomCode();
+      const playerId = makePlayerId();
+      const room = {
+        code,
+        hostPlayerId: playerId,
+        players: new Map(),
+        order: [],
+        phase: 'lobby',
+        game: null,
+        turnTimer: null,
+        turnDeadline: null,
+        dealTimer: null,
+        revealTimer: null,
+        chatHistory: [],
+        statsRecorded: false,
+        allHumansDisconnectedAt: null,
+      };
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid });
+      room.order.push(playerId);
+      for (let i = 1; i <= n; i++) {
+        const botId = makePlayerId();
+        room.players.set(botId, { name: `🤖 Bot ${i}`, socketId: null, connected: true, isBot: true });
+        room.order.push(botId);
+      }
+      rooms.set(code, room);
+      socketIndex.set(socket.id, { roomCode: code, playerId });
+      socket.join(code);
+
+      room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
+      room.game.startRound();
+      beginStartSequence(room, code);
+
+      ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // ---------------- "Play Online" matchmaking ----------------
+  // Joins the waiting queue for a specific table size. Matches immediately
+  // if enough strangers are already waiting for that same size; otherwise
+  // just confirms they're queued -- the client shows its own waiting screen
+  // and, after a while with no match, offers wait/fill-with-bots/cancel.
+  // Actual matching happens via queue_matched (pushed, not an ack reply),
+  // since a match can land seconds or minutes after this call returns.
+  socket.on('queue_join', async ({ playerCount, name, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
+      const n = Math.round(Number(playerCount));
+      if (!QUEUE_SIZES.includes(n)) throw new Error('Invalid player count for online matchmaking.');
+      if (queueIndex.has(socket.id)) throw new Error('Already in a matchmaking queue.');
+      const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      const playerId = makePlayerId();
+      matchQueues.get(n).push({ playerId, socketId: socket.id, name: cleanName, firebaseUid: verifiedUid });
+      queueIndex.set(socket.id, n);
+      ack && ack({ ok: true, queued: true, playerId });
+      tryMatchQueue(n);
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('queue_cancel', (_data, ack) => {
+    const n = queueIndex.get(socket.id);
+    if (n !== undefined) {
+      const bucket = matchQueues.get(n);
+      const idx = bucket.findIndex((e) => e.socketId === socket.id);
+      if (idx !== -1) bucket.splice(idx, 1);
+      queueIndex.delete(socket.id);
+    }
+    ack && ack({ ok: true });
+  });
+
+  // Host's choice after the client-side "still waiting" prompt times out:
+  // take everyone currently queued for this exact size (usually just this
+  // one player, occasionally a couple of others who were also waiting) and
+  // start right away, padding whatever's left up to the ORIGINAL target size
+  // with bots -- rather than leaving them stuck waiting indefinitely for
+  // strangers who may never come.
+  socket.on('queue_fill_bots', (_data, ack) => {
+    try {
+      const n = queueIndex.get(socket.id);
+      if (n === undefined) throw new Error('Not currently in a queue.');
+      const bucket = matchQueues.get(n);
+      const idx = bucket.findIndex((e) => e.socketId === socket.id);
+      if (idx === -1) throw new Error('Not currently in a queue.');
+      const entries = bucket.splice(0); // take EVERYONE currently waiting for this size, not just self
+      for (const e of entries) queueIndex.delete(e.socketId);
+
+      const code = makeRoomCode();
+      const hostPlayerId = entries[0].playerId;
+      const room = {
+        code, hostPlayerId, players: new Map(), order: [], phase: 'lobby', game: null,
+        turnTimer: null, turnDeadline: null, dealTimer: null, revealTimer: null,
+        chatHistory: [], statsRecorded: false, pendingJoins: new Map(),
+        allHumansDisconnectedAt: null,
+      };
+      for (const e of entries) {
+        room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null });
+        room.order.push(e.playerId);
+        socketIndex.set(e.socketId, { roomCode: code, playerId: e.playerId });
+        const s = io.sockets.sockets.get(e.socketId);
+        if (s) s.join(code);
+      }
+      let botNum = 1;
+      while (room.order.length < n) {
+        const botId = makePlayerId();
+        room.players.set(botId, { name: `🤖 Bot ${botNum}`, socketId: null, connected: true, isBot: true });
+        room.order.push(botId);
+        botNum += 1;
+      }
+      rooms.set(code, room);
+      room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
+      room.game.startRound();
+      for (const e of entries) {
+        io.to(e.socketId).emit('queue_matched', { roomCode: code, playerId: e.playerId, chatHistory: room.chatHistory });
+      }
+      beginStartSequence(room, code);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('join_room', async ({ roomCode, name, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
+      const code = (roomCode || '').trim().toUpperCase();
+      const room = rooms.get(code);
+      if (!room) throw new Error('Room not found. Check the code.');
+      if (room.order.length >= 10) throw new Error('Room is full (max 10 players).');
+      const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+
+      // Room hasn't started yet -- exactly the original behavior, join
+      // straight into the lobby, no approval needed.
+      if (room.phase === 'lobby') {
+        const playerId = makePlayerId();
+        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid });
+        room.order.push(playerId);
+        socketIndex.set(socket.id, { roomCode: code, playerId });
+        socket.join(code);
+        ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+        broadcastRoom(room);
+        return;
+      }
+
+      if (room.phase === 'starting') throw new Error('Game is starting -- try again in a few seconds.');
+      if (room.phase === 'game_over') throw new Error('This game has already ended.');
+
+      // Mid-game join request: the room is actively 'playing'. Rather than
+      // dropping straight in, this holds as a pending request the host has
+      // to explicitly approve (see admit_join_request/ignore_join_request
+      // below) -- privacy/consent for whoever's already at the table, same
+      // idea as a meeting "waiting room". Not added to room.players/order
+      // yet at all, so they don't show up anywhere in the UI until admitted.
+      if (!room.pendingJoins) room.pendingJoins = new Map();
+      if (room.pendingJoins.size + room.order.length >= 10) throw new Error('Room is full (max 10 players).');
+      const playerId = makePlayerId();
+      const JOIN_REQUEST_TIMEOUT_MS = 120000; // 2 minutes -- see the "Waiting for host" screen client-side
+      const timer = setTimeout(() => denyJoinRequest(room, playerId, 'timeout'), JOIN_REQUEST_TIMEOUT_MS);
+      room.pendingJoins.set(playerId, {
+        name: cleanName, firebaseUid: verifiedUid, socketId: socket.id, requestedAt: Date.now(), timer,
+      });
+      socketIndex.set(socket.id, { roomCode: code, playerId, pending: true });
+      socket.join(code);
+      ack && ack({ ok: true, pending: true, roomCode: code, playerId });
+      notifyHostOfJoinRequest(room);
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('admit_join_request', ({ roomCode, playerId }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const hostEntry = socketIndex.get(socket.id);
+      if (!hostEntry || hostEntry.playerId !== room.hostPlayerId) throw new Error('Only the host can admit players.');
+      if (!room.pendingJoins || !room.pendingJoins.has(playerId)) throw new Error('That request is no longer waiting.');
+      const req = room.pendingJoins.get(playerId);
+      clearTimeout(req.timer);
+      room.pendingJoins.delete(playerId);
+
+      room.players.set(playerId, { name: req.name, socketId: req.socketId, connected: true, isBot: false, firebaseUid: req.firebaseUid });
+      room.order.push(playerId);
+      const sockEntry = socketIndex.get(req.socketId);
+      if (sockEntry) sockEntry.pending = false;
+      // Actual game-engine entry (addPlayer) happens in next_round, right
+      // before startRound() -- never here. addPlayer() requires roundOver,
+      // and admitting can happen at any point in a round (or between
+      // rounds); deferring it to a single place keeps "joins next round, at
+      // the current max score" true no matter when the host actually taps
+      // Admit.
+      // Include chatHistory here too -- every other join path (create_room,
+      // join_room, queue_matched) sends it so the client can render existing
+      // messages and show the chat FAB; this path was missing it, which is
+      // why someone admitted mid-game never got a chat option at all.
+      io.to(req.socketId).emit('join_admitted', { roomCode, playerId, chatHistory: room.chatHistory });
+      broadcastRoom(room);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // The requester backing out of their own still-pending request (tapping
+  // Cancel on the "Waiting for host" screen) -- distinct from the host's
+  // ignore_join_request below, but shares the same cleanup path.
+  socket.on('cancel_join_request', ({ roomCode, playerId }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.playerId !== playerId) throw new Error('Not your request.');
+      denyJoinRequest(room, playerId, 'cancelled');
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('ignore_join_request', ({ roomCode, playerId }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const hostEntry = socketIndex.get(socket.id);
+      if (!hostEntry || hostEntry.playerId !== room.hostPlayerId) throw new Error('Only the host can respond to join requests.');
+      denyJoinRequest(room, playerId, 'declined');
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('rejoin', ({ roomCode, playerId }, ack) => {
+    try {
+      const code = (roomCode || '').trim().toUpperCase();
+      const room = rooms.get(code);
+      if (!room || !room.players.has(playerId)) throw new Error('Session expired, please join again.');
+      const p = room.players.get(playerId);
+      // The mobile watchdog on the client calls 'rejoin' every few seconds
+      // as a routine "are we still connected" ping, even while the socket
+      // never actually dropped. If we replayed the game_starting sequence
+      // on every one of those pings, a deal animation running longer than
+      // the ping interval would get interrupted and restarted mid-flight --
+      // exactly the "distributes 6-7 cards, then restarts and does 13"
+      // symptom. Only replay the sequence (or resend state) when this is a
+      // genuinely NEW connection for this player, not a same-socket ping.
+      const isFreshReconnect = p.socketId !== socket.id || !p.connected;
+      p.socketId = socket.id;
+      // If this reconnecting player is the host and someone's currently
+      // waiting to be let in, re-send the banner -- otherwise a host who
+      // refreshes mid-request would lose it until the next unrelated change.
+      if (playerId === room.hostPlayerId && room.pendingJoins && room.pendingJoins.size) {
+        notifyHostOfJoinRequest(room);
+      }
+      p.connected = true;
+      room.allHumansDisconnectedAt = null; // a human is back -- cancel any pending abandoned-room cleanup
+      socketIndex.set(socket.id, { roomCode: code, playerId });
+      socket.join(code);
+      ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+      broadcastRoom(room);
+      if (!isFreshReconnect) return; // just a keepalive ping -- client already has everything
+      // Don't leak hands/joker/open-card to a reconnecting client while the
+      // countdown/deal/reveal sequence is still in progress for everyone
+      // else -- re-play the sequence for them instead so they don't skip it.
+      if (room.game && room.phase === 'starting') {
+        const dealOrder = (room.game.turnOrder && room.game.turnOrder.length) ? room.game.turnOrder : room.order;
+        io.to(socket.id).emit('game_starting', {
+          countdownMs: COUNTDOWN_MS,
+          introMs: DECK_INTRO_MS,
+          deckCount: deckCountForPlayers(dealOrder.length),
+          dealMs: room.currentDealMs || DEAL_PASSES * dealOrder.length * DEAL_FLIGHT_MS,
+          dealPasses: DEAL_PASSES,
+          revealMs: REVEAL_MS,
+          players: dealOrder.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
+        });
+      } else if (room.game) {
+        const state = room.game.getPublicState(playerId);
+        state.turnDeadline = room.turnDeadline || null;
+        io.to(socket.id).emit('game_state', state);
+      }
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('start_game', ({ roomCode, eliminationScore }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can start the game.');
+      if (room.order.length < 2) throw new Error('Need at least 2 players.');
+      if (room.order.length > 10) throw new Error('Maximum 10 players.');
+
+      let maxScore = DEFAULT_ELIMINATION_SCORE;
+      if (eliminationScore !== undefined && eliminationScore !== null) {
+        if (!MAX_SCORE_OPTIONS.includes(Number(eliminationScore))) throw new Error('Invalid max score option.');
+        maxScore = Number(eliminationScore);
+      }
+
+      // Cards are dealt on the server right away (the engine has no notion of
+      // "not yet dealt"), but we deliberately withhold the full game_state
+      // broadcast -- which is what actually reveals hands/joker/open card to
+      // clients -- until the countdown + live-deal animation has played out.
+      room.game = new LeastCountGame(room.order.slice(), maxScore);
+      room.statsRecorded = false;
+      room.game.startRound();
+      beginStartSequence(room, roomCode);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('play_turn', ({ roomCode, cardIds }, ack) => {
+    try {
+      if (isRateLimited(socket, 'play_turn')) throw new Error('Too many actions too quickly. Please slow down.');
+      const room = rooms.get(roomCode);
+      if (!room || !room.game) throw new Error('Game not active.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      room.game.playTurn(entry.playerId, cardIds || []);
+      revealDrawIfAny(room);
+      emitLogBasedReactions(room, roomCode);
+      checkLowCardReaction(room, roomCode, entry.playerId);
+      if (room.game.roundOver || room.game.gameOver) clearTurnTimer(room);
+      else scheduleTurnTimer(room);
+      broadcastGameState(room);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // "Help me play" -- bots-mode-only assist. Reuses the exact same decision
+  // logic the bots themselves act on (autoPickDiscard/declare threshold), but
+  // returns it as a suggestion for the requesting human instead of playing it
+  // automatically. Gated to solo-vs-bots rooms only (no other real player at
+  // the table) so it can never give one human an edge over another in a real
+  // match, and to the requester's own turn only.
+  socket.on('request_hint', ({ roomCode }, ack) => {
+    try {
+      if (isRateLimited(socket, 'request_hint')) throw new Error('Too many actions too quickly. Please slow down.');
+      const room = rooms.get(roomCode);
+      if (!room || !room.game) throw new Error('Game not active.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      const pid = entry.playerId;
+      const game = room.game;
+      if (game.currentPlayer() !== pid) throw new Error('Hints are only available on your own turn.');
+
+      const realPlayers = room.order.filter((id) => !room.players.get(id).isBot);
+      if (realPlayers.length !== 1 || realPlayers[0] !== pid) {
+        throw new Error('Hints are only available in a solo game against bots.');
+      }
+
+      const hand = game.hands[pid] || [];
+      let hint;
+      if (game.chainCount > 0) {
+        const two = hand.find((c) => c.rank === '2');
+        hint = two
+          ? { type: 'discard', cardIds: [two.id], reason: 'Play your 2 to pass the +2 penalty on instead of taking it.' }
+          : { type: 'take_penalty', cardIds: [], reason: `You don't have a 2 -- take the ${game.chainCount * 2}-card penalty now.` };
+      } else {
+        const myValue = handValue(hand, game.roundJokerRank);
+        if (myValue <= DECLARE_MAX_VALUE) {
+          hint = { type: 'declare', cardIds: [], reason: `Your hand is worth ${myValue} -- low enough to declare "Least Count!" now.` };
+        } else {
+          const cardIds = game.autoPickDiscard(pid);
+          const chosen = hand.filter((c) => cardIds.includes(c.id));
+          const rank = chosen[0] && chosen[0].rank;
+          const plural = chosen.length > 1 ? 's' : '';
+          const openCard = game.discardPile[game.discardPile.length - 1];
+          const matchesOpen = openCard && rank === openCard.rank;
+          const groupValue = chosen.reduce((sum, c) => sum + cardValue(c, game.roundJokerRank), 0);
+          hint = matchesOpen
+            ? { type: 'discard', cardIds, reason: `Discard your ${rank}${plural} -- it matches the open card, so no penalty card.` }
+            : { type: 'discard', cardIds, reason: `No match for the open card. Release your ${rank}${plural} (worth ${groupValue} pts) -- your highest-value group, so it costs you the least.` };
+        }
+      }
+      ack && ack({ ok: true, hint });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('declare', ({ roomCode }, ack) => {
+    try {
+      if (isRateLimited(socket, 'declare')) throw new Error('Too many actions too quickly. Please slow down.');
+      const room = rooms.get(roomCode);
+      if (!room || !room.game) throw new Error('Game not active.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      room.game.declare(entry.playerId);
+      clearTurnTimer(room);
+      if (room.game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
+      const newlyEliminated = (room.game.lastRoundResult && room.game.lastRoundResult.newlyEliminated) || [];
+      for (const id of newlyEliminated) emitSeatReaction(roomCode, 'eliminated', id);
+      broadcastRoom(room);
+      broadcastGameState(room);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('next_round', ({ roomCode, eliminationScore }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room || !room.game) throw new Error('Game not active.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can start the next round.');
+      if (!room.game.roundOver) throw new Error('Round is still in progress.');
+      if (room.game.gameOver) throw new Error('Game is already over.');
+
+      // The host may optionally change the max score before starting the
+      // next round (to extend or shorten the game). Only touch it if a
+      // different value was actually picked -- setEliminationScore() itself
+      // enforces that it's still above the current highest score on the board.
+      if (eliminationScore !== undefined && eliminationScore !== null) {
+        const n = Number(eliminationScore);
+        if (n !== room.game.eliminationScore) {
+          if (!MAX_SCORE_OPTIONS.includes(n)) throw new Error('Invalid max score option.');
+          room.game.setEliminationScore(n);
+        }
+      }
+
+      // Anyone admitted mid-game (see admit_join_request above) sits in
+      // room.order/room.players already, but was deliberately never added to
+      // the GAME itself until now -- this is the one moment "joins starting
+      // next round" actually happens, right before the deal, at whatever the
+      // current max score is (addPlayer() sets their starting score to the
+      // current highest on the board).
+      for (const pid of room.order) {
+        if (!room.game.playerIds.includes(pid)) room.game.addPlayer(pid);
+      }
+
+      room.game.startRound();
+      beginStartSequence(room, roomCode);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('new_game', ({ roomCode }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can start a new game.');
+      clearTurnTimer(room);
+      clearStartSequenceTimers(room);
+      room.game = null;
+      room.phase = 'lobby';
+      broadcastRoom(room);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('leave_room', ({ roomCode }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      const playerId = entry.playerId;
+
+      if (room.phase === 'starting') {
+        throw new Error('Cannot leave while the game is starting. Wait for it to finish.');
+      }
+      if (room.phase === 'playing' && room.game && !room.game.roundOver) {
+        throw new Error('Cannot leave in the middle of a round. Wait for it to finish.');
+      }
+
+      // Only ask the game engine to remove the player if the game is still
+      // going - if it already ended (e.g. because the last leave dropped the
+      // active count to 1), removePlayer() would throw and wrongly block
+      // this person from leaving a finished game.
+      if (room.game && !room.game.gameOver) {
+        room.game.removePlayer(playerId);
+        if (room.game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
+      }
+
+      room.players.delete(playerId);
+      room.order = room.order.filter((id) => id !== playerId);
+      socketIndex.delete(socket.id);
+      socket.leave(roomCode);
+
+      // Also clean up a solo room once no human is left in it -- bots never
+      // leave on their own, so without this a solo player leaving would
+      // otherwise leak a room that lingers forever with only bots in it.
+      const noHumansLeft = room.order.every((id) => room.players.get(id).isBot);
+      if (room.order.length === 0 || noHumansLeft) {
+        clearTurnTimer(room);
+        clearStartSequenceTimers(room);
+        rooms.delete(roomCode);
+        ack && ack({ ok: true });
+        return;
+      }
+
+      if (room.hostPlayerId === playerId) {
+        const nextHost = pickNextHost(room, playerId);
+        if (nextHost) room.hostPlayerId = nextHost;
+      }
+
+      broadcastRoom(room);
+      if (room.game) broadcastGameState(room);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('chat_message', ({ roomCode, type, text, gifUrl }, ack) => {
+    try {
+      if (isRateLimited(socket, 'chat_message')) throw new Error('You are sending messages too quickly. Please slow down.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+
+      const player = room.players.get(entry.playerId);
+      const msg = {
+        id: crypto.randomUUID(),
+        playerId: entry.playerId,
+        name: player ? player.name : '?',
+        ts: Date.now(),
+      };
+
+      if (type === 'gif') {
+        const cleanUrl = (gifUrl || '').toString().trim().slice(0, 500);
+        if (!cleanUrl) throw new Error('No GIF selected.');
+        // Only allow actual Giphy media links through, not arbitrary URLs.
+        if (!/^https:\/\/media\d*\.giphy\.com\//.test(cleanUrl)) throw new Error('Invalid GIF link.');
+        msg.type = 'gif';
+        msg.gifUrl = cleanUrl;
+      } else {
+        const cleanText = censorText((text || '').toString().trim().slice(0, 300));
+        if (!cleanText) throw new Error('Empty message.');
+        msg.type = 'text';
+        msg.text = cleanText;
+      }
+
+      room.chatHistory.push(msg);
+      if (room.chatHistory.length > CHAT_HISTORY_LIMIT) room.chatHistory.shift();
+      io.to(roomCode).emit('chat_message', msg);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // A player flagging another player's message. Deliberately not something
+  // that takes automatic action (no auto-mute/auto-kick) -- it just records
+  // the report to Firestore's "reports" collection so it can be reviewed by
+  // hand, since there's no live moderator watching every room. Falls back to
+  // a server log line if Firestore isn't connected, so nothing is silently
+  // lost either way.
+  socket.on('report_player', ({ roomCode, reportedPlayerId, reportedName, messageType, messageText }, ack) => {
+    try {
+      if (isRateLimited(socket, 'report_player')) throw new Error('Too many reports too quickly. Please wait a moment.');
+      if (isIpRateLimited(socket, 'report_player')) throw new Error('Too many reports from this network too quickly. Please wait a moment.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      const reporter = room.players.get(entry.playerId);
+      const reportDoc = {
+        roomCode: (roomCode || '').toString().slice(0, 10),
+        reportedPlayerId: (reportedPlayerId || '').toString().slice(0, 100),
+        reportedName: (reportedName || '').toString().slice(0, 40),
+        reporterPlayerId: entry.playerId,
+        reporterName: reporter ? reporter.name : '?',
+        messageType: (messageType || 'text').toString().slice(0, 10),
+        messageText: (messageText || '').toString().slice(0, 300),
+        createdAt: new Date().toISOString(),
+      };
+      if (db) {
+        db.collection('reports').add(reportDoc).catch((e) => {
+          console.error('[Firebase] Failed to save report:', e.message);
+        });
+      } else {
+        console.warn('[Report] (Firestore not connected, logged here instead):', reportDoc);
+      }
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // ---------------- player-facing stats (own + opponents') ----------------
+  // Both read the same `users` collection that recordGameResult() already
+  // writes to after every finished game -- no new data collection, just a
+  // read-only view onto stats that already exist. Neither handler ever sends
+  // a firebaseUid back to the browser, including the requester's own -- only
+  // the two numbers (gamesPlayed, wins), so tapping an opponent's seat can
+  // never hand you a stable account identifier for them, just their record.
+  socket.on('get_my_stats', async ({ firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'get_my_stats')) throw new Error('Too many requests. Please wait a moment.');
+      if (!db) throw new Error('Stats are not available right now.');
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      if (!verifiedUid) throw new Error('Not signed in yet.');
+      const doc = await db.collection('users').doc(verifiedUid).get();
+      const data = doc.exists ? doc.data() : {};
+      ack && ack({ ok: true, stats: { gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0 } });
+    } catch (e) {
+      console.error('[Firebase] Failed to read own stats:', e.message);
+      ack && ack({ ok: false, error: e.message || 'Could not load stats right now.' });
+    }
+  });
+
+  socket.on('get_player_stats', ({ roomCode, playerId }, ack) => {
+    try {
+      if (isRateLimited(socket, 'get_player_stats')) throw new Error('Too many requests. Please wait a moment.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const player = room.players.get(playerId);
+      if (!player) throw new Error('Player not found.');
+      // Bots and anyone who never got linked to a Firebase account (guest
+      // whose sign-in hadn't finished yet when they joined) simply have no
+      // record to show -- not an error, just null stats.
+      if (player.isBot || !player.firebaseUid || !db) {
+        ack && ack({ ok: true, stats: null });
+        return;
+      }
+      db.collection('users').doc(player.firebaseUid).get()
+        .then((doc) => {
+          const data = doc.exists ? doc.data() : {};
+          ack && ack({ ok: true, stats: { gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0 } });
+        })
+        .catch((e) => {
+          console.error('[Firebase] Failed to read player stats:', e.message);
+          ack && ack({ ok: false, error: 'Could not load stats right now.' });
+        });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('disconnect', () => {
+    rateBuckets.delete(socket.id); // this socket is gone -- no point keeping its rate-limit history around
+    // Clean up matchmaking queue membership too -- someone who closes the
+    // app while waiting for a match shouldn't count toward filling a table.
+    const queuedSize = queueIndex.get(socket.id);
+    if (queuedSize !== undefined) {
+      const bucket = matchQueues.get(queuedSize);
+      const idx = bucket.findIndex((e) => e.socketId === socket.id);
+      if (idx !== -1) bucket.splice(idx, 1);
+      queueIndex.delete(socket.id);
+    }
+    const entry = socketIndex.get(socket.id);
+    if (!entry) return;
+    socketIndex.delete(socket.id);
+    const room = rooms.get(entry.roomCode);
+    if (!room) return;
+    // A still-pending mid-game join requester who closes the app/loses
+    // connection isn't in room.players at all -- clean up their waiting
+    // request (and its timer) immediately instead of leaving it sitting in
+    // the host's banner for up to 2 minutes for someone who's already gone.
+    if (entry.pending) {
+      denyJoinRequest(room, entry.playerId, 'disconnected');
+      return;
+    }
+    const p = room.players.get(entry.playerId);
+    if (p) {
+      p.connected = false;
+      p.socketId = null;
+      // If the disconnected player was the host, hand hosting off to an
+      // actually-active player (see pickNextHost) -- otherwise a host who
+      // closes the app/tab (rather than tapping Leave Room, e.g. right after
+      // being eliminated) permanently strands the room. Every host-only
+      // action (Next Round, changing max score, kicking) checks
+      // hostPlayerId, and that id could otherwise never match a real
+      // connected player again.
+      if (room.hostPlayerId === entry.playerId) {
+        const nextHost = pickNextHost(room, entry.playerId);
+        if (nextHost) room.hostPlayerId = nextHost;
+      }
+      // If that was the last connected human in the room (bots don't count),
+      // start the clock on the abandoned-room cleanup sweep below -- unlike
+      // leave_room, closing the tab/losing connection was never actually
+      // deleting the room, so without this a "Play with Bots" session (or a
+      // friends room everyone just closes) sat in memory forever.
+      const anyHumanConnected = room.order.some((id) => {
+        const pl = room.players.get(id);
+        return pl && !pl.isBot && pl.connected;
+      });
+      if (!anyHumanConnected && room.allHumansDisconnectedAt == null) {
+        room.allHumansDisconnectedAt = Date.now();
+      }
+      broadcastRoom(room);
+    }
+  });
+});
+
+// --------------------------------------------------------------------------
+// Abandoned-room cleanup sweep. A room only gets its allHumansDisconnectedAt
+// timestamp set above once every human in it has disconnected (a bot-only
+// room, or a friends room everyone closed the tab on); it's cleared the
+// moment any human reconnects (see the 'rejoin' handler). This runs every
+// minute and deletes any room that's been fully human-abandoned for 10+
+// minutes -- long enough that a real reconnect (page refresh, brief network
+// drop) never gets caught by it, short enough that a script looping
+// "create solo room -> disconnect" can't grow server memory indefinitely.
+// --------------------------------------------------------------------------
+const ROOM_CLEANUP_SWEEP_MS = 60 * 1000;
+const ROOM_ABANDONED_GRACE_MS = 10 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of rooms) {
+    if (room.allHumansDisconnectedAt != null && now - room.allHumansDisconnectedAt > ROOM_ABANDONED_GRACE_MS) {
+      clearTurnTimer(room);
+      clearStartSequenceTimers(room);
+      rooms.delete(code);
+      console.log(`[Cleanup] Deleted abandoned room ${code} (no human connected for 10+ minutes).`);
+    }
+  }
+  // Same sweep also prunes expired IP rate-limit buckets -- otherwise every
+  // distinct visitor IP the server has ever seen stays in memory forever.
+  for (const [ip, bucket] of ipRateBuckets) {
+    let anyHitsLeft = false;
+    for (const eventName of Object.keys(bucket)) {
+      const limit = IP_RATE_LIMITS[eventName];
+      const hits = bucket[eventName];
+      while (hits.length && now - hits[0] > limit.windowMs) hits.shift();
+      if (hits.length) anyHitsLeft = true;
+    }
+    if (!anyHitsLeft) ipRateBuckets.delete(ip);
+  }
+}, ROOM_CLEANUP_SWEEP_MS);
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Least Count server listening on port ${PORT}`);
+});
