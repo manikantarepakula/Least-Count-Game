@@ -656,7 +656,65 @@
       if (id === 'screen-game' || adsRemoved) window.LCAds.hideBanner();
       else window.LCAds.showBanner();
     }
+    if (id === 'screen-game') {
+      maxViewportHeight = 0; // fresh baseline each time the game screen opens
+      applyKeyboardSafeLayout();
+    } else {
+      // Leaving the game screen -- release the inline pixel height back to
+      // CSS, since landing/lobby are meant to scroll normally and were never
+      // part of this problem.
+      document.body.style.height = '';
+      const screenGameEl = document.getElementById('screen-game');
+      if (screenGameEl) screenGameEl.style.height = '';
+      const chatPanelEl = document.getElementById('chat-panel');
+      if (chatPanelEl) chatPanelEl.style.bottom = '';
+    }
   }
+
+  // --------------------------------------------------------------------
+  // Keyboard-safe game screen height. Neither CSS viewport units
+  // (100vh/100dvh/100svh) nor the native Android windowSoftInputMode /
+  // interactive-widget settings reliably stopped the on-screen keyboard
+  // from shrinking the visible area on the actual test device -- both were
+  // tried and confirmed still squishing the oval table. This sidesteps the
+  // whole question of which browser/OS viewport mechanism the current
+  // device happens to respect, by taking manual control via the
+  // VisualViewport API instead (supported on Android Chrome/WebView since
+  // 2017, far broader than the newer CSS-only tools):
+  //   - Tracks the tallest visible height seen since the game screen opened
+  //     -- that's "keyboard closed", since the keyboard only ever shrinks
+  //     the visible area, never grows it past the real full-screen value.
+  //   - Pins #screen-game and body to exactly that many pixels via inline
+  //     style, which wins over any CSS vh/dvh/svh rule regardless of
+  //     whether THIS device's browser/OS actually respects those units for
+  //     the keyboard case.
+  //   - Separately computes the keyboard's own height (baseline minus
+  //     current visible height) to lift the chat panel above it, instead of
+  //     relying on env(keyboard-inset-height) support.
+  // --------------------------------------------------------------------
+  let maxViewportHeight = 0;
+  function applyKeyboardSafeLayout() {
+    if (!window.visualViewport || !document.body.classList.contains('game-active')) return;
+    const vv = window.visualViewport;
+    maxViewportHeight = Math.max(maxViewportHeight, vv.height);
+
+    document.body.style.height = maxViewportHeight + 'px';
+    const screenGameEl = document.getElementById('screen-game');
+    if (screenGameEl) screenGameEl.style.height = maxViewportHeight + 'px';
+
+    const keyboardHeight = Math.max(0, Math.round(maxViewportHeight - vv.height));
+    const chatPanelEl = document.getElementById('chat-panel');
+    if (chatPanelEl) chatPanelEl.style.bottom = keyboardHeight + 'px';
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', applyKeyboardSafeLayout);
+  }
+  // A genuine device rotation (not just the keyboard) should get a fresh
+  // baseline instead of staying pinned to the previous orientation's height.
+  window.addEventListener('orientationchange', () => {
+    maxViewportHeight = 0;
+    setTimeout(applyKeyboardSafeLayout, 300);
+  });
 
   // ---------------- game-start sequence ----------------
   // 3-2-1 countdown, then a "dealing cards" animation, then the round's
