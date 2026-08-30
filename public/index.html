@@ -2,7 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<!-- interactive-widget=overlays-content is the actual fix for the on-screen
+     keyboard crushing the game table when chat is open: without it, Chrome
+     on Android treats the keyboard like a collapsing toolbar and shrinks the
+     WHOLE layout viewport to make room for it -- which is what 100vh/dvh/svh
+     are all computed against, so switching between those units alone (tried
+     previously) never touched the real cause. This tells the browser the
+     keyboard should overlay on top of the page instead, so the layout
+     (and everything sized off it, like the oval table) never resizes at
+     all. The chat panel then lifts itself above the keyboard manually via
+     env(keyboard-inset-height) in style.css, instead of relying on the
+     browser to shrink the page to reveal it. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=overlays-content" />
 <title>Least Count</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
