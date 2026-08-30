@@ -9,7 +9,37 @@ const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, cardValue, DECLARE_MAX_VAL
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+// --------------------------------------------------------------------------
+// Lock Socket.IO down to the real deployed clients instead of accepting a
+// connection (and therefore create_room/chat_message/etc calls) from ANY
+// origin, which is the default when no cors option is set at all. Includes
+// the Android/iOS app's WebView origins (Capacitor apps don't share the
+// website's origin) alongside the live site, so this doesn't break the
+// mobile app while closing the door on some other page embedding a socket
+// straight to this server. A request with no Origin header at all (some
+// native WebView configurations omit it) is let through rather than
+// rejected -- blocking it would risk breaking the mobile app for everyone,
+// not just an attacker. Configurable via CLIENT_ORIGINS (comma-separated)
+// in case the deployed origin ever changes without a code deploy.
+// --------------------------------------------------------------------------
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://least-count-game.onrender.com',
+  'capacitor://localhost',
+  'https://localhost',
+  'http://localhost',
+];
+const ALLOWED_ORIGINS = process.env.CLIENT_ORIGINS
+  ? process.env.CLIENT_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
+  : DEFAULT_ALLOWED_ORIGINS;
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+      callback(new Error('Origin not allowed'));
+    },
+  },
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -93,6 +123,29 @@ async function recordGameResult(room) {
     console.log(`[Firebase] Recorded game result for room ${room.code} (${writes.length} player(s) with linked accounts).`);
   } catch (e) {
     console.error(`[Firebase] Failed to record game result for room ${room.code}:`, e.message);
+  }
+}
+
+// --------------------------------------------------------------------------
+// Verifies a Firebase ID token the client sent and returns the uid it
+// actually, provably belongs to -- or null if there's no token, it fails
+// verification, or Firebase Admin isn't configured. Every place that used to
+// take a raw `firebaseUid` string straight out of the client's payload (and
+// trust it completely) now sends the short-lived ID token instead and uses
+// ONLY what this returns -- so a player can no longer open dev tools, type
+// in a stranger's uid (or a made-up one), and have game results/stats
+// attributed to that account. Deliberately fails soft (null, not a thrown
+// error) so a token hiccup degrades to "this game just won't count toward
+// your stats" instead of blocking someone from playing at all.
+// --------------------------------------------------------------------------
+async function verifyFirebaseToken(idToken) {
+  if (!idToken || !db) return null;
+  try {
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    return decoded.uid;
+  } catch (e) {
+    console.warn('[Firebase] ID token verification failed:', e.message);
+    return null;
   }
 }
 
@@ -236,6 +289,47 @@ function isRateLimited(socket, eventName) {
   let hits = bucket[eventName];
   if (!hits) { hits = []; bucket[eventName] = hits; }
   while (hits.length && now - hits[0] > limit.windowMs) hits.shift(); // drop expired hits
+  if (hits.length >= limit.max) return true;
+  hits.push(now);
+  return false;
+}
+
+// --------------------------------------------------------------------------
+// Per-IP rate limiting, on top of (not instead of) the per-socket limits
+// above. Per-socket limits reset the instant a socket reconnects, so they're
+// closer to "friction" than "protection" against anything scripted -- this
+// adds a second, IP-keyed check on just the three endpoints that actually
+// matter for abuse (spinning up rooms, and filing reports), which survives
+// a reconnect. Deliberately generous (25/min) so a household or office on
+// one shared/NAT'd public IP never gets penalized for normal play -- this
+// is aimed at a script hammering the server, not a family playing together.
+// --------------------------------------------------------------------------
+const IP_RATE_LIMITS = {
+  create_room: { max: 25, windowMs: 60000 },
+  create_solo_room: { max: 25, windowMs: 60000 },
+  report_player: { max: 25, windowMs: 60000 },
+};
+const ipRateBuckets = new Map(); // ip -> { [eventName]: number[] recent timestamps }
+
+function getClientIp(socket) {
+  // Render (and most hosts) put the app behind a proxy, so the raw socket
+  // address is the proxy's own IP, not the visitor's -- prefer the
+  // forwarded-for header (first hop is the original client) when present.
+  const xff = socket.handshake.headers['x-forwarded-for'];
+  if (xff) return xff.split(',')[0].trim();
+  return socket.handshake.address;
+}
+
+function isIpRateLimited(socket, eventName) {
+  const limit = IP_RATE_LIMITS[eventName];
+  if (!limit) return false;
+  const ip = getClientIp(socket);
+  const now = Date.now();
+  let bucket = ipRateBuckets.get(ip);
+  if (!bucket) { bucket = {}; ipRateBuckets.set(ip, bucket); }
+  let hits = bucket[eventName];
+  if (!hits) { hits = []; bucket[eventName] = hits; }
+  while (hits.length && now - hits[0] > limit.windowMs) hits.shift();
   if (hits.length >= limit.max) return true;
   hits.push(now);
   return false;
@@ -612,10 +706,12 @@ function handleTurnTimeout(room) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('create_room', ({ name, firebaseUid }, ack) => {
+  socket.on('create_room', async ({ name, firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'create_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
+      if (isIpRateLimited(socket, 'create_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
       const code = makeRoomCode();
       const playerId = makePlayerId();
       const room = {
@@ -632,8 +728,9 @@ io.on('connection', (socket) => {
         chatHistory: [],
         statsRecorded: false,
         pendingJoins: new Map(), // mid-game join requests awaiting host approval -- see join_room below
+        allHumansDisconnectedAt: null, // set once every human is gone -- see the cleanup sweep below
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: firebaseUid || null });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid });
       room.order.push(playerId);
       rooms.set(code, room);
       socketIndex.set(socket.id, { roomCode: code, playerId });
@@ -650,10 +747,12 @@ io.on('connection', (socket) => {
   // countdown -> deal -> reveal sequence, exactly like a real multiplayer
   // game starting -- bots are just regular players to the game engine, the
   // only special handling is how quickly they act (see scheduleTurnTimer).
-  socket.on('create_solo_room', ({ name, botCount, firebaseUid }, ack) => {
+  socket.on('create_solo_room', async ({ name, botCount, firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
+      if (isIpRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
       const n = Math.max(1, Math.min(MAX_BOTS, Math.round(Number(botCount)) || 3));
       const code = makeRoomCode();
       const playerId = makePlayerId();
@@ -670,8 +769,9 @@ io.on('connection', (socket) => {
         revealTimer: null,
         chatHistory: [],
         statsRecorded: false,
+        allHumansDisconnectedAt: null,
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: firebaseUid || null });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid });
       room.order.push(playerId);
       for (let i = 1; i <= n; i++) {
         const botId = makePlayerId();
@@ -699,15 +799,16 @@ io.on('connection', (socket) => {
   // and, after a while with no match, offers wait/fill-with-bots/cancel.
   // Actual matching happens via queue_matched (pushed, not an ack reply),
   // since a match can land seconds or minutes after this call returns.
-  socket.on('queue_join', ({ playerCount, name, firebaseUid }, ack) => {
+  socket.on('queue_join', async ({ playerCount, name, firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
       const n = Math.round(Number(playerCount));
       if (!QUEUE_SIZES.includes(n)) throw new Error('Invalid player count for online matchmaking.');
       if (queueIndex.has(socket.id)) throw new Error('Already in a matchmaking queue.');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
       const playerId = makePlayerId();
-      matchQueues.get(n).push({ playerId, socketId: socket.id, name: cleanName, firebaseUid: firebaseUid || null });
+      matchQueues.get(n).push({ playerId, socketId: socket.id, name: cleanName, firebaseUid: verifiedUid });
       queueIndex.set(socket.id, n);
       ack && ack({ ok: true, queued: true, playerId });
       tryMatchQueue(n);
@@ -749,6 +850,7 @@ io.on('connection', (socket) => {
         code, hostPlayerId, players: new Map(), order: [], phase: 'lobby', game: null,
         turnTimer: null, turnDeadline: null, dealTimer: null, revealTimer: null,
         chatHistory: [], statsRecorded: false, pendingJoins: new Map(),
+        allHumansDisconnectedAt: null,
       };
       for (const e of entries) {
         room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null });
@@ -777,7 +879,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('join_room', ({ roomCode, name, firebaseUid }, ack) => {
+  socket.on('join_room', async ({ roomCode, name, firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
       const code = (roomCode || '').trim().toUpperCase();
@@ -785,12 +887,13 @@ io.on('connection', (socket) => {
       if (!room) throw new Error('Room not found. Check the code.');
       if (room.order.length >= 10) throw new Error('Room is full (max 10 players).');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
 
       // Room hasn't started yet -- exactly the original behavior, join
       // straight into the lobby, no approval needed.
       if (room.phase === 'lobby') {
         const playerId = makePlayerId();
-        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: firebaseUid || null });
+        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid });
         room.order.push(playerId);
         socketIndex.set(socket.id, { roomCode: code, playerId });
         socket.join(code);
@@ -814,7 +917,7 @@ io.on('connection', (socket) => {
       const JOIN_REQUEST_TIMEOUT_MS = 120000; // 2 minutes -- see the "Waiting for host" screen client-side
       const timer = setTimeout(() => denyJoinRequest(room, playerId, 'timeout'), JOIN_REQUEST_TIMEOUT_MS);
       room.pendingJoins.set(playerId, {
-        name: cleanName, firebaseUid: firebaseUid || null, socketId: socket.id, requestedAt: Date.now(), timer,
+        name: cleanName, firebaseUid: verifiedUid, socketId: socket.id, requestedAt: Date.now(), timer,
       });
       socketIndex.set(socket.id, { roomCode: code, playerId, pending: true });
       socket.join(code);
@@ -910,6 +1013,7 @@ io.on('connection', (socket) => {
         notifyHostOfJoinRequest(room);
       }
       p.connected = true;
+      room.allHumansDisconnectedAt = null; // a human is back -- cancel any pending abandoned-room cleanup
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
       ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
@@ -1218,6 +1322,7 @@ io.on('connection', (socket) => {
   socket.on('report_player', ({ roomCode, reportedPlayerId, reportedName, messageType, messageText }, ack) => {
     try {
       if (isRateLimited(socket, 'report_player')) throw new Error('Too many reports too quickly. Please wait a moment.');
+      if (isIpRateLimited(socket, 'report_player')) throw new Error('Too many reports from this network too quickly. Please wait a moment.');
       const room = rooms.get(roomCode);
       if (!room) throw new Error('Room not found.');
       const entry = socketIndex.get(socket.id);
@@ -1253,22 +1358,18 @@ io.on('connection', (socket) => {
   // a firebaseUid back to the browser, including the requester's own -- only
   // the two numbers (gamesPlayed, wins), so tapping an opponent's seat can
   // never hand you a stable account identifier for them, just their record.
-  socket.on('get_my_stats', ({ firebaseUid }, ack) => {
+  socket.on('get_my_stats', async ({ firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'get_my_stats')) throw new Error('Too many requests. Please wait a moment.');
-      if (!firebaseUid) throw new Error('Not signed in yet.');
       if (!db) throw new Error('Stats are not available right now.');
-      db.collection('users').doc(firebaseUid.toString().slice(0, 100)).get()
-        .then((doc) => {
-          const data = doc.exists ? doc.data() : {};
-          ack && ack({ ok: true, stats: { gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0 } });
-        })
-        .catch((e) => {
-          console.error('[Firebase] Failed to read own stats:', e.message);
-          ack && ack({ ok: false, error: 'Could not load stats right now.' });
-        });
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      if (!verifiedUid) throw new Error('Not signed in yet.');
+      const doc = await db.collection('users').doc(verifiedUid).get();
+      const data = doc.exists ? doc.data() : {};
+      ack && ack({ ok: true, stats: { gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0 } });
     } catch (e) {
-      ack && ack({ ok: false, error: e.message });
+      console.error('[Firebase] Failed to read own stats:', e.message);
+      ack && ack({ ok: false, error: e.message || 'Could not load stats right now.' });
     }
   });
 
@@ -1339,10 +1440,58 @@ io.on('connection', (socket) => {
         const nextHost = pickNextHost(room, entry.playerId);
         if (nextHost) room.hostPlayerId = nextHost;
       }
+      // If that was the last connected human in the room (bots don't count),
+      // start the clock on the abandoned-room cleanup sweep below -- unlike
+      // leave_room, closing the tab/losing connection was never actually
+      // deleting the room, so without this a "Play with Bots" session (or a
+      // friends room everyone just closes) sat in memory forever.
+      const anyHumanConnected = room.order.some((id) => {
+        const pl = room.players.get(id);
+        return pl && !pl.isBot && pl.connected;
+      });
+      if (!anyHumanConnected && room.allHumansDisconnectedAt == null) {
+        room.allHumansDisconnectedAt = Date.now();
+      }
       broadcastRoom(room);
     }
   });
 });
+
+// --------------------------------------------------------------------------
+// Abandoned-room cleanup sweep. A room only gets its allHumansDisconnectedAt
+// timestamp set above once every human in it has disconnected (a bot-only
+// room, or a friends room everyone closed the tab on); it's cleared the
+// moment any human reconnects (see the 'rejoin' handler). This runs every
+// minute and deletes any room that's been fully human-abandoned for 10+
+// minutes -- long enough that a real reconnect (page refresh, brief network
+// drop) never gets caught by it, short enough that a script looping
+// "create solo room -> disconnect" can't grow server memory indefinitely.
+// --------------------------------------------------------------------------
+const ROOM_CLEANUP_SWEEP_MS = 60 * 1000;
+const ROOM_ABANDONED_GRACE_MS = 10 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of rooms) {
+    if (room.allHumansDisconnectedAt != null && now - room.allHumansDisconnectedAt > ROOM_ABANDONED_GRACE_MS) {
+      clearTurnTimer(room);
+      clearStartSequenceTimers(room);
+      rooms.delete(code);
+      console.log(`[Cleanup] Deleted abandoned room ${code} (no human connected for 10+ minutes).`);
+    }
+  }
+  // Same sweep also prunes expired IP rate-limit buckets -- otherwise every
+  // distinct visitor IP the server has ever seen stays in memory forever.
+  for (const [ip, bucket] of ipRateBuckets) {
+    let anyHitsLeft = false;
+    for (const eventName of Object.keys(bucket)) {
+      const limit = IP_RATE_LIMITS[eventName];
+      const hits = bucket[eventName];
+      while (hits.length && now - hits[0] > limit.windowMs) hits.shift();
+      if (hits.length) anyHitsLeft = true;
+    }
+    if (!anyHitsLeft) ipRateBuckets.delete(ip);
+  }
+}, ROOM_CLEANUP_SWEEP_MS);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
