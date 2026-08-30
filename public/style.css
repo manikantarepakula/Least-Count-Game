@@ -62,11 +62,21 @@ button .icon:only-child { margin-right: 0; }
    hidden), taller than what's actually visible. That leftover min-height
    was clamping the game screen upward and forcing a page-level scrollbar
    even after switching it to 100dvh. Locking body itself to the current
-   dynamic viewport while the game screen is active removes that scroll. */
+   dynamic viewport while the game screen is active removes that scroll.
+   dvh, though, tracks EVERY change to the visible area -- including the
+   on-screen keyboard opening for chat, which shrank this down to a sliver
+   and crushed the oval table/seat chips into an unreadable overlapping mess
+   while typing. svh (smallest viewport -- assumes browser chrome is at its
+   most expanded, same as dvh's usual resting state) stays fixed once set,
+   so opening the keyboard no longer resizes the game screen at all -- safe
+   here specifically because the game screen never scrolls (overflow:hidden
+   below), so there's no gesture that would ever need the browser chrome to
+   collapse and reveal extra space in the first place. */
 body.game-active {
   min-height: 0;
   height: 100vh;
   height: 100dvh;
+  height: 100svh;
   overflow: hidden;
 }
 
@@ -89,6 +99,10 @@ body.game-active {
   min-height: 0;
   height: 100vh;
   height: 100dvh;
+  /* svh wins over dvh above (see body.game-active for the full reasoning) --
+     fixes the table visibly shrinking/crushing together the moment the
+     on-screen keyboard opens for chat, since svh doesn't react to it. */
+  height: 100svh;
   padding: 6px 8px;
   overflow: hidden;
 }
