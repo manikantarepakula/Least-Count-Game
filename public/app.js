@@ -640,6 +640,14 @@
 
   // ---------------- screen management ----------------
   function showScreen(id) {
+    // Captured BEFORE we touch any classList below -- this is the only way
+    // to tell "genuinely just arrived at the game screen" apart from
+    // "already there, this is just a routine re-render". The latter matters
+    // a lot: showScreen('screen-game') isn't called once per visit, it's
+    // called on EVERY 'game_state' push from the server (every card played,
+    // every bot move, every turn change -- see the socket.on('game_state')
+    // handler far below), which happens continuously throughout a game.
+    const alreadyOnGameScreen = document.getElementById('screen-game').classList.contains('active');
     document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     // The game screen locks the page to one viewport (no drag/scroll needed);
@@ -657,7 +665,21 @@
       else window.LCAds.showBanner();
     }
     if (id === 'screen-game') {
-      maxViewportHeight = 0; // fresh baseline each time the game screen opens
+      // BUG (found via live testing, Sept 2026): this used to reset
+      // unconditionally on every call. Since a fresh game_state arrives
+      // constantly during play, that meant: open chat, keyboard shrinks the
+      // visible area, then the very next bot move calls showScreen('screen-
+      // game') again -- which wiped the "no keyboard" baseline and replaced
+      // it with the CURRENT keyboard-shrunk height, permanently baking the
+      // squished table in as the new "normal" for the rest of that keyboard
+      // session. That's what was actually causing the table/seats to visibly
+      // collapse the moment chat was opened mid-game. Only reset when this
+      // is a genuine fresh arrival at the game screen (from lobby, landing,
+      // round-result, etc.) -- routine re-renders while already here must
+      // leave the established baseline alone.
+      if (!alreadyOnGameScreen) {
+        maxViewportHeight = 0; // fresh baseline only on genuine entry
+      }
       applyKeyboardSafeLayout();
     } else {
       // Leaving the game screen -- release the inline pixel height back to
