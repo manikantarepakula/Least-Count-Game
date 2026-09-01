@@ -2605,6 +2605,20 @@
     document.getElementById('chat-fab').classList.remove('hidden');
   }
 
+  // Timestamp of the last time the player actually touched the chat panel
+  // (scrolling history, or typing) -- used below to stop the your-turn
+  // auto-minimize hook from yanking the panel shut mid-scroll/mid-type.
+  // Without this, minimizeChatPanel() fires unconditionally the instant
+  // your turn starts, even if you're mid-gesture reading old messages --
+  // which felt exactly like "the chat won't let me scroll", because it got
+  // ripped away under your finger every time turns cycled back to you.
+  let chatLastInteractionAt = 0;
+  const markChatInteraction = () => { chatLastInteractionAt = Date.now(); };
+  document.querySelector('.chat-messages').addEventListener('scroll', markChatInteraction, { passive: true });
+  document.querySelector('.chat-messages').addEventListener('touchstart', markChatInteraction, { passive: true });
+  document.getElementById('chat-input').addEventListener('input', markChatInteraction);
+  document.getElementById('chat-input').addEventListener('focus', markChatInteraction);
+
   document.getElementById('chat-fab').onclick = () => {
     document.getElementById('chat-panel').classList.remove('hidden');
     document.getElementById('chat-fab').classList.add('hidden');
@@ -2848,7 +2862,13 @@
       // own turn. Chat is still one tap away via the bubble; this doesn't
       // close it forever, just stops it from silently sitting over the
       // timer during the moment that matters most.
-      minimizeChatPanel();
+      // EXCEPTION: skip this if the player touched the chat panel (scrolled
+      // or typed) within the last 3 seconds -- otherwise this fires mid-
+      // scroll/mid-type and rips the panel away, which is what made chat
+      // feel broken/unscrollable during real games with fast turn cycles.
+      if (Date.now() - chatLastInteractionAt > 3000) {
+        minimizeChatPanel();
+      }
     }
     if (game.chainCount > 0 && prev.chainCount === 0) {
       Sound.chainAlert();
