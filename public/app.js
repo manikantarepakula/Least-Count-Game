@@ -190,27 +190,8 @@
   let adsRemoved = false;
   const removeAdsBtn = document.getElementById('btn-remove-ads');
 
-  // GIF sending gate (Sept 2026): browsing the GIF picker was found to be
-  // the single largest driver of Render bandwidth usage -- every open pulls
-  // ~24 fresh full-size GIFs, and re-shuffles the sample each time so the
-  // browser cache barely helps. Rather than removing the feature outright,
-  // it's gated behind the same "remove ads" entitlement this function
-  // already checks: nearly-free to wire in, keeps it working for anyone
-  // who's already paid, and turns it into a real perk once there's a wider
-  // audience worth re-promoting it to. Defaults to hidden (see index.html)
-  // and only ever un-hides once a purchase is positively confirmed below --
-  // fails closed on the website (no purchase flow exists there at all) and
-  // during the brief window before RevenueCat finishes initializing.
-  function setGifButtonVisible(visible) {
-    const gifOpenBtn = document.getElementById('btn-gif-open');
-    if (gifOpenBtn) gifOpenBtn.classList.toggle('hidden', !visible);
-  }
-
   async function refreshRemoveAdsUI() {
-    if (!removeAdsBtn || !window.LCPurchases || !window.LCPurchases.isReady()) {
-      setGifButtonVisible(false);
-      return;
-    }
+    if (!removeAdsBtn || !window.LCPurchases || !window.LCPurchases.isReady()) return;
     try {
       // Make sure RevenueCat has finished switching identity to the current
       // Firebase uid before checking entitlements -- identify() is kicked
@@ -229,7 +210,6 @@
     } catch (e) {
       adsRemoved = false;
     }
-    setGifButtonVisible(adsRemoved);
     if (adsRemoved) {
       removeAdsBtn.classList.add('hidden');
       if (window.LCAds) window.LCAds.hideBanner();
@@ -254,7 +234,6 @@
         await window.LCPurchases.purchasePackage(pkg);
         adsRemoved = true;
         removeAdsBtn.classList.add('hidden');
-        setGifButtonVisible(true);
         if (window.LCAds) window.LCAds.hideBanner();
         if (window.LCAnalytics) window.LCAnalytics.log('ads_removed_purchase');
         alert('Ads removed -- thanks for supporting Least Count!');
@@ -2452,7 +2431,6 @@
   function hideChatUI() {
     document.getElementById('chat-fab').classList.add('hidden');
     document.getElementById('chat-panel').classList.add('hidden');
-    document.getElementById('gif-picker').classList.add('hidden');
     chatUnread = 0;
   }
 
@@ -2711,171 +2689,16 @@
     if (latestGame) triggerChatBubble(msg.playerId, msg);
   });
 
-  // ---------------- GIF picker ----------------
-  // The quick-tap chips now load from a small self-hosted meme library
-  // (public/memes/<category>/*.gif, ~150 GIFs total) instead of hitting the
-  // live Giphy API on every tap -- instant, no rate limit, no network call.
-  // The free-text search box still falls back to live Giphy search for
-  // anything outside that curated set.
-  const GIF_CATEGORIES = [
-    { label: 'Telugu', key: 'telugu_memes_general' },
-    { label: 'Tollywood', key: 'tollywood_memes' },
-    { label: 'Brahmanandam', key: 'brahmanandam' },
-    { label: 'Ali', key: 'ali' },
-    { label: 'Venu Madhav', key: 'venu_madhav' },
-    { label: 'MS Narayana', key: 'ms_narayana' },
-    { label: 'Sunil', key: 'sunil' },
-    { label: 'Satya', key: 'satya_akkala' },
-  ];
-  let localMemeManifest = null; // { category: [filenames] }, fetched once
-  let gifSearchTimer = null;
-
-  // Giphy's free key is capped at 100 calls/hour total, shared by everyone
-  // in every room on the whole app. Only the free-text search box below
-  // still uses it now, but results are still cached for a few minutes so
-  // retyping/retapping the same query doesn't fire a fresh call each time.
-  const GIF_CACHE_TTL_MS = 10 * 60 * 1000;
-  const gifResultsCache = new Map(); // normalized query -> { gifs, ts }
-
-  function loadLocalManifest() {
-    if (localMemeManifest) return Promise.resolve(localMemeManifest);
-    return fetch('/memes/manifest.json')
-      .then((r) => r.json())
-      .then((data) => { localMemeManifest = data; return data; })
-      .catch(() => { localMemeManifest = {}; return {}; });
-  }
-
-  function renderGifSuggestions() {
-    const wrap = document.getElementById('gif-suggestions');
-    wrap.innerHTML = '';
-    GIF_CATEGORIES.forEach((cat) => {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'gif-suggestion-chip';
-      chip.textContent = cat.label;
-      chip.onclick = () => {
-        document.getElementById('gif-search-input').value = '';
-        loadLocalCategory(cat.key);
-      };
-      wrap.appendChild(chip);
-    });
-  }
-
-  function loadLocalCategory(categoryKey) {
-    const results = document.getElementById('gif-results');
-    results.innerHTML = '<div class="gif-results-hint">Loading...</div>';
-    loadLocalManifest().then((manifest) => {
-      const files = manifest[categoryKey] || [];
-      const gifs = files.map((f) => {
-        const url = `/memes/${categoryKey}/${f}`;
-        return { preview: url, full: url };
-      });
-      renderGifTiles(gifs);
-    });
-  }
-
-  // Default view when the picker opens: a shuffled sample pulled across
-  // every local category, so there's always something to browse without
-  // typing or tapping a chip first.
-  function loadLocalMixed() {
-    const results = document.getElementById('gif-results');
-    results.innerHTML = '<div class="gif-results-hint">Loading...</div>';
-    loadLocalManifest().then((manifest) => {
-      const all = [];
-      Object.keys(manifest).forEach((cat) => {
-        (manifest[cat] || []).forEach((f) => all.push({ cat, f }));
-      });
-      for (let i = all.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [all[i], all[j]] = [all[j], all[i]];
-      }
-      const gifs = all.slice(0, 24).map(({ cat, f }) => {
-        const url = `/memes/${cat}/${f}`;
-        return { preview: url, full: url };
-      });
-      renderGifTiles(gifs);
-    });
-  }
-
-  function openGifPicker() {
-    document.getElementById('gif-picker').classList.remove('hidden');
-    const input = document.getElementById('gif-search-input');
-    input.value = '';
-    input.focus();
-    renderGifSuggestions();
-    loadLocalMixed();
-  }
-  function closeGifPicker() {
-    document.getElementById('gif-picker').classList.add('hidden');
-  }
-  document.getElementById('btn-gif-open').onclick = () => {
-    const picker = document.getElementById('gif-picker');
-    if (picker.classList.contains('hidden')) openGifPicker();
-    else closeGifPicker();
-  };
-  document.getElementById('btn-gif-close').onclick = closeGifPicker;
-  document.getElementById('gif-search-input').addEventListener('input', (e) => {
-    const q = e.target.value;
-    if (gifSearchTimer) clearTimeout(gifSearchTimer);
-    if (!q.trim()) {
-      // Empty box -- back to the local mixed view, no API call at all.
-      loadLocalMixed();
-      return;
-    }
-    // Waits a bit longer after you stop typing before actually searching --
-    // fewer wasted calls for someone still mid-word, at the cost of feeling
-    // very slightly less instant. This still hits live Giphy search since
-    // it's a custom typed query, not one of the local quick-tap categories.
-    gifSearchTimer = setTimeout(() => loadGifResults(q), 550);
-  });
-
-  function renderGifTiles(gifs) {
-    const results = document.getElementById('gif-results');
-    results.innerHTML = '';
-    if (!gifs || gifs.length === 0) {
-      results.innerHTML = '<div class="gif-results-hint">No GIFs found</div>';
-      return;
-    }
-    gifs.forEach((g) => {
-      const img = document.createElement('img');
-      img.src = g.preview;
-      img.loading = 'lazy';
-      img.alt = 'GIF result';
-      img.onclick = () => sendGif(g.full);
-      results.appendChild(img);
-    });
-  }
-
-  function loadGifResults(query) {
-    const key = (query || '').trim().toLowerCase();
-    const cached = gifResultsCache.get(key);
-    if (cached && Date.now() - cached.ts < GIF_CACHE_TTL_MS) {
-      renderGifTiles(cached.gifs);
-      return;
-    }
-    const results = document.getElementById('gif-results');
-    results.innerHTML = '<div class="gif-results-hint">Searching...</div>';
-    fetch('/api/gif-search?q=' + encodeURIComponent(query || ''))
-      .then((r) => r.json())
-      .then((data) => {
-        if (!data.ok) {
-          results.innerHTML = `<div class="gif-results-hint">${escapeHtml(data.error || 'GIF search unavailable')}</div>`;
-          return;
-        }
-        gifResultsCache.set(key, { gifs: data.gifs || [], ts: Date.now() });
-        renderGifTiles(data.gifs);
-      })
-      .catch(() => {
-        results.innerHTML = '<div class="gif-results-hint">GIF search failed</div>';
-      });
-  }
-
-  function sendGif(url) {
-    socket.emit('chat_message', { roomCode: myRoomCode, type: 'gif', gifUrl: url }, (res) => {
-      if (!res.ok) setGameError(res.error);
-    });
-    closeGifPicker();
-  }
+  // ---------------- GIF picker: REMOVED (Sept 2026) ----------------
+  // Pulled entirely for now rather than keeping it gated: the self-hosted
+  // meme library backing it (public/memes/*) never actually made it into
+  // the GitHub repo (confirmed 404 live), and separately, all ~150 memes
+  // were Telugu-specific -- not a fair "Remove Ads" perk for the wider
+  // audience this app is now aiming for. May come back later with broader,
+  // properly-licensed/curated content if that turns out feasible. The
+  // server still has the 'gif' chat_message type and /api/gif-search route
+  // (harmless, just unreachable with no UI pointing at them) in case this
+  // gets revisited rather than rebuilt from scratch.
 
   // ---------------- +2 chain flash notification ----------------
   // A brief, table-wide toast every time a 2 lands, the chain escalates, or
