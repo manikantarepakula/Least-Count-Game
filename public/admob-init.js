@@ -46,12 +46,27 @@
     listenerAdded = true;
     // Runtime event name for BannerAdPluginEvents.SizeChanged -- using the
     // raw string since this file talks to the plugin via window.Capacitor
-    // rather than importing the TS enum.
-    AdMob.addListener('bannerAdSizeChanged', (size) => {
-      if (bannerShown && size && typeof size.height === 'number' && size.height > 0) {
-        setSafeBottom(size.height);
+    // rather than importing the TS enum. This name was a best guess (not
+    // verified against the actual installed plugin version), and it turned
+    // out to break EVERY banner on EVERY screen: addListener() is called
+    // unconditionally at the top of showBanner(), so if it throws (sync or
+    // via a rejected promise) it can take the whole call down with it before
+    // the real AdMob.showBanner() below ever runs. Wrapped defensively so a
+    // bad/unsupported event name only costs the size-refinement feature
+    // (banner falls back to FALLBACK_BANNER_HEIGHT_PX and stays there),
+    // never the banner itself.
+    try {
+      const result = AdMob.addListener('bannerAdSizeChanged', (size) => {
+        if (bannerShown && size && typeof size.height === 'number' && size.height > 0) {
+          setSafeBottom(size.height);
+        }
+      });
+      if (result && typeof result.catch === 'function') {
+        result.catch((e) => console.warn('[AdMob] size listener failed:', e && e.message));
       }
-    });
+    } catch (e) {
+      console.warn('[AdMob] addListener threw:', e && e.message);
+    }
   }
 
   function ensureInit() {
