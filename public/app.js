@@ -114,13 +114,30 @@
     googleSigninBtn.onclick = async () => {
       googleSigninBtn.disabled = true;
       googleSigninBtn.textContent = 'Signing in...';
+      // TEMPORARY instrumentation block (debugging native-app sign-in "shows
+      // nothing" report, Sept 2026) -- two things were true before this:
+      // (1) any error was caught and only console.warn'd, invisible without
+      // a USB debugger attached to the phone; (2) if the native call never
+      // resolves OR rejects at all (e.g. a WebView-blocked popup that just
+      // sits there forever, which is what happens if the native Capacitor
+      // Firebase plugin isn't actually wired into this build), there'd be no
+      // error to even catch -- the button would just silently sit on
+      // "Signing in..." forever with nothing to look at. The timeout race
+      // below turns THAT case into a visible message too. Safe to remove
+      // once the native sign-in issue is confirmed fixed.
+      const timeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('TIMEOUT: no response from Google sign-in after 15s -- the native call likely never started (plugin not registered in this build?) rather than failing outright.')), 15000)
+      );
       try {
-        await window.LCAuth.signInWithGoogle();
+        await Promise.race([window.LCAuth.signInWithGoogle(), timeout]);
       } catch (e) {
         // Most common cases: the user closed the Google popup, or the
         // browser blocked it -- neither is a real error worth alarming
         // anyone over, just let them try again.
         console.warn('[Firebase] Google sign-in did not complete:', e.message);
+        if (signinStatusEl) {
+          signinStatusEl.textContent = `Sign-in failed: ${e.code || 'no code'} - ${e.message || e}`;
+        }
       } finally {
         googleSigninBtn.disabled = false;
         googleSigninBtn.textContent = 'Sign in with Google';
