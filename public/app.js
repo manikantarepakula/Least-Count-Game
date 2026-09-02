@@ -670,15 +670,16 @@
     // The game screen locks the page to one viewport (no drag/scroll needed);
     // other screens (lobby, overlays) are allowed to scroll normally.
     document.body.classList.toggle('game-active', id === 'screen-game');
-    // Banner ad (native Android app only -- see admob-init.js) shows on the
-    // landing/lobby screens, where there's room for it, and hides during
-    // actual gameplay, where every pixel of the single-viewport layout
-    // already matters.
+    // Banner ad (native Android app only -- see admob-init.js) now shows on
+    // every screen including the game table -- the game screen's layout was
+    // reworked (fixed-height hand tray, merged joker/normal cards, reserved
+    // --ad-safe-bottom padding) specifically to make room for it here too,
+    // instead of the banner being the one thing hidden during actual play.
     if (window.LCAds) {
       // adsRemoved (see the Remove Ads purchase block above) overrides
       // everything else -- once someone's paid to remove ads, the banner
       // should never come back, on any screen.
-      if (id === 'screen-game' || adsRemoved) window.LCAds.hideBanner();
+      if (adsRemoved) window.LCAds.hideBanner();
       else window.LCAds.showBanner();
     }
     if (id === 'screen-game') {
@@ -743,7 +744,17 @@
 
     const keyboardHeight = Math.max(0, Math.round(maxViewportHeight - vv.height));
     const chatPanelEl = document.getElementById('chat-panel');
-    if (chatPanelEl) chatPanelEl.style.bottom = keyboardHeight + 'px';
+    if (chatPanelEl) {
+      // This inline style wins over the CSS default (which already adds
+      // --ad-safe-bottom -- see style.css), so the same reservation has to
+      // be repeated here manually, or the chat sheet would sit right at the
+      // true bottom of the WebView on the game screen, underneath the
+      // native banner, whenever the keyboard is closed (keyboardHeight: 0).
+      const adSafeBottom = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--ad-safe-bottom')
+      ) || 0;
+      chatPanelEl.style.bottom = (keyboardHeight + adSafeBottom) + 'px';
+    }
   }
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', applyKeyboardSafeLayout);
@@ -797,9 +808,12 @@
     // the countdown and the entire dealing animation, since nothing ever
     // cleared it until the new hand actually arrived. Wipe it immediately so
     // no stale cards are visible while the new deal is in progress.
-    document.getElementById('hand').innerHTML = '';
+    // #hand is now the shared tray for both sub-groups (see index.html) --
+    // clear the two inner containers individually rather than wiping
+    // #hand's own innerHTML, which would delete those containers outright.
+    document.getElementById('hand-normal').innerHTML = '';
     document.getElementById('hand-jokers').innerHTML = '';
-    document.getElementById('hand-jokers-row').classList.add('hidden');
+    document.getElementById('hand-divider').classList.add('hidden');
     document.getElementById('hand-value').textContent = '0';
     selectedIds = new Set();
     document.getElementById('btn-discard').disabled = true;
@@ -1824,9 +1838,12 @@
     const jokerGroups = groups.filter(isWildGroup);
     const normalGroups = groups.filter((g) => !isWildGroup(g));
 
-    document.getElementById('hand-jokers-row').classList.toggle('hidden', jokerGroups.length === 0);
+    // Divider only shows when there's actually a joker/wild group to
+    // separate from the normal cards -- with none, #hand-jokers is empty
+    // and (being display:contents) takes up no space of its own anyway.
+    document.getElementById('hand-divider').classList.toggle('hidden', jokerGroups.length === 0);
     renderHandTiles(document.getElementById('hand-jokers'), jokerGroups, isMyTurn, game, duringChain);
-    renderHandTiles(document.getElementById('hand'), normalGroups, isMyTurn, game, duringChain);
+    renderHandTiles(document.getElementById('hand-normal'), normalGroups, isMyTurn, game, duringChain);
 
     const discardBtn = document.getElementById('btn-discard');
     const declareBtn = document.getElementById('btn-declare');
@@ -2431,6 +2448,7 @@
   function hideChatUI() {
     document.getElementById('chat-fab').classList.add('hidden');
     document.getElementById('chat-panel').classList.add('hidden');
+    document.getElementById('chat-backdrop').classList.add('hidden');
     chatUnread = 0;
   }
 
@@ -2630,6 +2648,12 @@
       return;
     }
     visible.forEach((m) => appendChatMessage(m, { silent: true }));
+    // Land on the latest message, same as opening any real chat app --
+    // previously this left whatever scroll position the (freshly emptied
+    // and rebuilt) container defaulted to, which is the top, so re-joining
+    // a room with an active conversation dropped you into old messages
+    // instead of where the conversation actually is.
+    container.scrollTop = container.scrollHeight;
   }
 
   // Used both by the manual close button and by the auto-minimize-on-your-
@@ -2640,6 +2664,7 @@
     const panel = document.getElementById('chat-panel');
     if (panel.classList.contains('hidden')) return;
     panel.classList.add('hidden');
+    document.getElementById('chat-backdrop').classList.add('hidden');
     document.getElementById('chat-fab').classList.remove('hidden');
   }
 
@@ -2659,14 +2684,27 @@
 
   document.getElementById('chat-fab').onclick = () => {
     document.getElementById('chat-panel').classList.remove('hidden');
+    document.getElementById('chat-backdrop').classList.remove('hidden');
     document.getElementById('chat-fab').classList.add('hidden');
     chatUnread = 0;
     updateChatBadge();
+    // Same fix as loadChatHistory() above -- land on the newest message
+    // every time the sheet opens, not wherever it happened to be scrolled
+    // last time it was closed.
+    const container = document.getElementById('chat-messages');
+    container.scrollTop = container.scrollHeight;
     document.getElementById('chat-input').focus();
   };
   document.getElementById('btn-chat-close').onclick = () => {
     document.getElementById('chat-panel').classList.add('hidden');
+    document.getElementById('chat-backdrop').classList.add('hidden');
     document.getElementById('chat-fab').classList.remove('hidden');
+  };
+  // Tapping the dimmed area behind the sheet closes it too -- standard
+  // bottom-sheet behavior (same as tapping outside an Instagram/WhatsApp
+  // comment or chat sheet).
+  document.getElementById('chat-backdrop').onclick = () => {
+    document.getElementById('btn-chat-close').click();
   };
   function sendChat() {
     const input = document.getElementById('chat-input');
