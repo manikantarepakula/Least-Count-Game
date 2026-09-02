@@ -190,8 +190,27 @@
   let adsRemoved = false;
   const removeAdsBtn = document.getElementById('btn-remove-ads');
 
+  // GIF sending gate (Sept 2026): browsing the GIF picker was found to be
+  // the single largest driver of Render bandwidth usage -- every open pulls
+  // ~24 fresh full-size GIFs, and re-shuffles the sample each time so the
+  // browser cache barely helps. Rather than removing the feature outright,
+  // it's gated behind the same "remove ads" entitlement this function
+  // already checks: nearly-free to wire in, keeps it working for anyone
+  // who's already paid, and turns it into a real perk once there's a wider
+  // audience worth re-promoting it to. Defaults to hidden (see index.html)
+  // and only ever un-hides once a purchase is positively confirmed below --
+  // fails closed on the website (no purchase flow exists there at all) and
+  // during the brief window before RevenueCat finishes initializing.
+  function setGifButtonVisible(visible) {
+    const gifOpenBtn = document.getElementById('btn-gif-open');
+    if (gifOpenBtn) gifOpenBtn.classList.toggle('hidden', !visible);
+  }
+
   async function refreshRemoveAdsUI() {
-    if (!removeAdsBtn || !window.LCPurchases || !window.LCPurchases.isReady()) return;
+    if (!removeAdsBtn || !window.LCPurchases || !window.LCPurchases.isReady()) {
+      setGifButtonVisible(false);
+      return;
+    }
     try {
       // Make sure RevenueCat has finished switching identity to the current
       // Firebase uid before checking entitlements -- identify() is kicked
@@ -210,6 +229,7 @@
     } catch (e) {
       adsRemoved = false;
     }
+    setGifButtonVisible(adsRemoved);
     if (adsRemoved) {
       removeAdsBtn.classList.add('hidden');
       if (window.LCAds) window.LCAds.hideBanner();
@@ -234,6 +254,7 @@
         await window.LCPurchases.purchasePackage(pkg);
         adsRemoved = true;
         removeAdsBtn.classList.add('hidden');
+        setGifButtonVisible(true);
         if (window.LCAds) window.LCAds.hideBanner();
         if (window.LCAnalytics) window.LCAnalytics.log('ads_removed_purchase');
         alert('Ads removed -- thanks for supporting Least Count!');
