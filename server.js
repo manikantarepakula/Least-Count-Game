@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
+const compression = require('compression');
 const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
@@ -41,7 +42,39 @@ const io = new Server(server, {
   },
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+// gzip/deflate every response this server sends -- confirmed via code
+// review (Sept 2026) that NOTHING was compressing responses before this:
+// app.js (~140KB) and style.css (~70KB) were going out over the wire fully
+// raw on every single page load. Text assets like these typically shrink
+// 60-80% under gzip, so this alone meaningfully cuts bandwidth for free,
+// with zero risk (compression is purely transport-level, the content
+// itself is unchanged) and no client-side changes needed -- every browser
+// and the Capacitor WebView both negotiate this automatically via the
+// standard Accept-Encoding header.
+app.use(compression());
+
+// Static file caching, split into two tiers:
+//  - /memes gets a long, "immutable" cache. Safe specifically because each
+//    meme file's name is a stable, randomly-generated id that never gets
+//    reused for different content (see the manifest.json bundling from the
+//    self-hosted meme library work) -- once a filename exists, its bytes
+//    never change, so there's nothing to ever invalidate.
+//  - Everything else (index.html, app.js, style.css) gets a short cache
+//    instead of Express's default (basically no caching beyond ETag
+//    revalidation). Short on purpose: this app deploys multiple times a
+//    day during active development, and a long/immutable cache here would
+//    mean players silently stuck on a stale build for hours after a fix --
+//    exactly the kind of "wait, which version is actually live" confusion
+//    that already cost real debugging time earlier this project. 10 minutes
+//    still meaningfully cuts repeat-load bandwidth within a single playing
+//    session without that risk.
+app.use('/memes', express.static(path.join(__dirname, 'public', 'memes'), {
+  maxAge: '30d',
+  immutable: true,
+}));
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: '10m',
+}));
 
 // --------------------------------------------------------------------------
 // Firebase Admin (server-side). This is the ONLY trusted place stats,
