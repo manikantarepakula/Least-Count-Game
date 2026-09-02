@@ -23,8 +23,36 @@
   // working end-to-end on a real device, switched over for release).
   const BANNER_AD_ID = 'ca-app-pub-1398110480284026/3640352329';
 
+  // The banner is a native view with zero footprint in the page's own
+  // layout, so every screen -- including the game table -- needs to reserve
+  // real space for it (bottom padding) or its bottom-most buttons/nav get
+  // covered. This CSS var is that reserved space; style.css reads it on
+  // every screen and overlay uniformly. A conservative guess is set the
+  // instant the banner is requested so there's no flash of unprotected UI
+  // while we wait for AdMob to report the real adaptive height, which then
+  // corrects it.
+  const FALLBACK_BANNER_HEIGHT_PX = 50;
+
+  function setSafeBottom(px) {
+    document.documentElement.style.setProperty('--ad-safe-bottom', px + 'px');
+  }
+
   let initPromise = null;
   let bannerShown = false;
+  let listenerAdded = false;
+
+  function ensureSizeListener() {
+    if (listenerAdded) return;
+    listenerAdded = true;
+    // Runtime event name for BannerAdPluginEvents.SizeChanged -- using the
+    // raw string since this file talks to the plugin via window.Capacitor
+    // rather than importing the TS enum.
+    AdMob.addListener('bannerAdSizeChanged', (size) => {
+      if (bannerShown && size && typeof size.height === 'number' && size.height > 0) {
+        setSafeBottom(size.height);
+      }
+    });
+  }
 
   function ensureInit() {
     if (!initPromise) {
@@ -37,6 +65,7 @@
 
   async function showBanner() {
     if (bannerShown) return;
+    ensureSizeListener();
     await ensureInit();
     try {
       await AdMob.showBanner({
@@ -46,6 +75,7 @@
         margin: 0,
       });
       bannerShown = true;
+      setSafeBottom(FALLBACK_BANNER_HEIGHT_PX);
     } catch (e) {
       console.warn('[AdMob] showBanner failed:', e && e.message);
     }
@@ -59,6 +89,7 @@
       console.warn('[AdMob] hideBanner failed:', e && e.message);
     } finally {
       bannerShown = false;
+      setSafeBottom(0);
     }
   }
 
