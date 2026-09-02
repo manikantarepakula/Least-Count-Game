@@ -436,17 +436,12 @@
     <button id="btn-chat-close" class="tiny"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
   </div>
   <div id="chat-messages" class="chat-messages"></div>
-  <div id="gif-picker" class="gif-picker hidden">
-    <div class="gif-picker-header">
-      <input id="gif-search-input" type="text" placeholder="Search GIFs..." />
-      <button id="btn-gif-close" class="tiny"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
-    </div>
-    <div id="gif-suggestions" class="gif-suggestions"></div>
-    <div id="gif-results" class="gif-results"></div>
-  </div>
+  <!-- GIF picker removed (Sept 2026) -- see app.js for the reasoning
+       (self-hosted meme library never made it to GitHub, plus the content
+       was Telugu-only and not a fair Remove Ads perk for a wider audience).
+       May come back later with broader content. -->
   <div class="chat-input-row">
     <input id="chat-input" type="text" maxlength="300" placeholder="Message..." />
-    <button id="btn-gif-open" class="tiny" title="Send a GIF">GIF</button>
     <button id="btn-chat-send" class="tiny primary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg></button>
   </div>
 </div>
