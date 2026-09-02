@@ -82,6 +82,12 @@ body.game-active {
 
 .screen { display: none; min-height: 100vh; padding: 16px; }
 .screen.active { display: block; }
+/* Reserve space for the native AdMob banner (zero footprint in the DOM on
+   its own -- see admob-init.js) so it never sits on top of a screen's
+   bottom-most buttons/nav. --ad-safe-bottom is 0px whenever the banner is
+   hidden, which is always true on #screen-game, so this is harmless there
+   too -- no #screen-game exclusion needed. */
+.screen { padding-bottom: calc(16px + var(--ad-safe-bottom, 0px)); }
 
 /* Game screen fits one viewport height, no page scroll, on any device.
    justify-content:center matters on screens taller than the oval table's own
@@ -104,6 +110,13 @@ body.game-active {
      on-screen keyboard opens for chat, since svh doesn't react to it. */
   height: 100svh;
   padding: 6px 8px;
+  /* Reserves the same native-banner safe zone as every other screen (see
+     --ad-safe-bottom in admob-init.js). Since box-sizing is border-box
+     (see the * rule at the top of this file), this just shrinks the
+     content box within the fixed height above -- the oval table (the only
+     flex:1 1 auto, freely-shrinkable element in this column) absorbs the
+     reduction, so the "one viewport, no scroll" layout stays intact. */
+  padding-bottom: calc(6px + var(--ad-safe-bottom, 0px));
   overflow: hidden;
 }
 
@@ -1022,14 +1035,31 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
    action buttons stretch edge-to-edge while the table stays centered above
    them, leaving the cards looking left-aligned and disconnected from the
    table instead of sitting under it. */
-.hand-jokers, .hand-header, .hand, .action-bar, .hint-banner {
+.hand-header, .hand, .action-bar, .hint-banner {
   max-width: 640px; width: 100%; margin-left: auto; margin-right: auto;
 }
 
-.hand-jokers { flex-shrink: 0; margin-top: 2px; }
-.hand-jokers.hidden { display: none; }
-.hand-jokers-label { font-size: 10px; color: var(--gold); margin-bottom: 3px; }
-.hand-jokers-cards { display: flex; flex-wrap: wrap; gap: 5px; }
+/* Joker/wild and normal cards used to be two stacked sections, each with
+   its own label line -- merged into one tray (#hand) so both groups flow
+   into a single wrapping row instead. display:contents drops these two
+   inner divs out of the box model entirely, so their card tiles become
+   direct flex items of #hand and share its one gap/wrap behavior, while
+   app.js can still target #hand-jokers/#hand-normal independently to
+   render each group. */
+.hand-jokers-cards, .hand-normal-cards { display: contents; }
+/* Thin vertical rule between the two groups, only shown when jokers are
+   present (see app.js). align-self:stretch makes it match the height of
+   whichever row it's wrapped into, so it always reads as a proper divider
+   rather than a short floating tick mark. */
+.hand-divider {
+  align-self: stretch; width: 1px; background: var(--jade-border);
+  margin: 2px 1px; flex-shrink: 0;
+}
+.hand-divider.hidden { display: none; }
+/* Cards worth 0 this round get a gold border instead of the old separate
+   "Jokers / Wild -- only you see this" label line -- the border plus their
+   position on the joker side of the divider is enough of a cue on its own,
+   and the Rules screen covers the mechanic in full for anyone new. */
 .card.wild-zero { border-color: var(--gold); }
 
 .hand-header {
@@ -1061,19 +1091,28 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .hand {
   display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 4px;
-  /* Sized to actual content (about 2 rows of cards) instead of stretching to
-     fill all leftover screen space -- previously this grew to fill whatever
-     was left over even with just 1-2 rows of cards, leaving a big empty gap
-     below the cards. Rare huge hands (after several stacked +2 penalties)
-     scroll within this cap instead of pushing the action buttons off-screen. */
-  flex: 0 1 auto; max-height: 148px; min-height: 0; overflow-y: auto;
+  /* FIXED height, not max-height -- this used to be a cap that shrank
+     whenever the hand had fewer cards/rows, which meant the oval table
+     above (the sibling flex-grow element that absorbs whatever the hand
+     row ISN'T using) visibly grew and shrank turn to turn as cards were
+     drawn/discarded. A constant height here makes the table's leftover
+     space constant too -- it only differs device to device now, never
+     turn to turn on the same device. Rare huge hands (after several
+     stacked +2 penalties) scroll within this fixed box instead of pushing
+     the action buttons off-screen or growing the tray itself. */
+  flex: 0 0 auto; height: 148px; overflow-y: auto;
 }
 
 .action-bar { display: flex; gap: 8px; padding: 4px; flex-shrink: 0; }
 .action-bar button { padding: 10px; font-size: 14px; }
 
 .overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  position: fixed; top: 0; left: 0; right: 0;
+  /* Same banner safe-zone as .screen -- 0px whenever no banner is showing
+     (e.g. an overlay like Rules opened from mid-game), so this only takes
+     effect when it actually needs to. */
+  bottom: var(--ad-safe-bottom, 0px);
+  background: rgba(0,0,0,0.6);
   display: flex; align-items: center; justify-content: center; z-index: 10;
   padding: 16px;
 }
@@ -1335,7 +1374,12 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 
 /* ---- Chat ---- */
 .chat-fab {
-  position: fixed; bottom: 16px; right: 16px; width: 52px; height: 52px; border-radius: 50%;
+  position: fixed;
+  /* Offset above the native banner (0 when none is showing) so the fab
+     never ends up sitting half-underneath it -- this now matters on the
+     game screen too, since the banner shows there as well. */
+  bottom: calc(16px + var(--ad-safe-bottom, 0px));
+  right: 16px; width: 52px; height: 52px; border-radius: 50%;
   background: linear-gradient(135deg, var(--red), var(--red-dark)); color: white; display: flex; align-items: center; justify-content: center;
   box-shadow: var(--shadow-md); cursor: pointer; z-index: 20;
 }
@@ -1348,6 +1392,17 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .badge.hidden { display: none; }
 
+/* Standard bottom-sheet scrim, dimming/hiding the table behind the chat
+   panel instead of the panel just sitting bare on top of it. Toggled
+   alongside #chat-panel in app.js; tapping it closes the sheet, same as
+   tapping outside a comments sheet in Instagram/WhatsApp. */
+.chat-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 24;
+  animation: chatBackdropFadeIn 0.2s ease-out;
+}
+.chat-backdrop.hidden { display: none; }
+@keyframes chatBackdropFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
 .chat-panel {
   position: fixed;
   /* With the keyboard now set to overlay content (see index.html's viewport
@@ -1357,16 +1412,34 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
      height) is exactly the keyboard's current height, 0 when it's closed,
      so this is a no-op until the input is actually focused. Falls back to
      plain 0 on browsers that don't support the env() (nothing lost there --
-     same as the old fixed bottom:0 they'd have had anyway). */
-  bottom: env(keyboard-inset-height, 0px);
+     same as the old fixed bottom:0 they'd have had anyway). The banner
+     safe-zone is added on top so the sheet's own bottom edge (and its input
+     row) never lands underneath the native ad banner -- on the game screen
+     specifically, app.js overrides this with an inline pixel value that
+     also includes the same safe-zone amount (see applyKeyboardSafeLayout). */
+  bottom: calc(env(keyboard-inset-height, 0px) + var(--ad-safe-bottom, 0px));
   right: 0; left: 0; margin: 0 auto; width: 100%; max-width: 380px;
   height: 60vh; max-height: 480px;
   background: var(--jade-panel); color: var(--text-light); border: 1px solid var(--jade-border); border-bottom: none;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0; z-index: 25;
   display: flex; flex-direction: column; box-shadow: var(--shadow-lg);
   transition: bottom 0.15s ease-out;
+  /* Slides up from off-screen every time the panel goes from display:none
+     to display:flex (browsers restart a CSS animation whenever that
+     happens) -- instead of the old hard, instant snap-into-place, which is
+     what made it feel like it was just dropped on top of the table rather
+     than opened as a proper sheet. */
+  animation: chatSlideUp 0.25s ease-out;
 }
 .chat-panel.hidden { display: none; }
+@keyframes chatSlideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.chat-drag-handle {
+  width: 36px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.25);
+  margin: 8px auto 0; flex-shrink: 0;
+}
 .chat-header {
   display: flex; justify-content: space-between; align-items: center;
   padding: 10px 14px; border-bottom: 1px solid var(--jade-border); font-weight: 700;
