@@ -744,7 +744,22 @@
     document.body.style.height = maxViewportHeight + 'px';
     const screenGameEl = document.getElementById('screen-game');
     if (screenGameEl) screenGameEl.style.height = maxViewportHeight + 'px';
-
+  }
+  // Chat panel's keyboard-avoidance is deliberately SEPARATE from
+  // applyKeyboardSafeLayout() above (found via screen recording, Sept
+  // 2026: it used to live in that same function, which showScreen() calls
+  // on EVERY 'game_state' push -- i.e. constantly during play, not just on
+  // real keyboard events). With chat + keyboard open while bots kept
+  // playing in the background, one of those unrelated re-renders ended up
+  // recomputing the panel's bottom/max-height from a bad visualViewport
+  // reading and corrupting its position again, well after it had opened
+  // correctly. This function is now only ever called from the actual
+  // visualViewport 'resize' listener below (a genuine keyboard open/close)
+  // and once when the chat panel itself is opened -- never from routine
+  // game-state re-renders that have nothing to do with the keyboard.
+  function applyChatPanelKeyboardOffset() {
+    if (!window.visualViewport || !document.body.classList.contains('game-active')) return;
+    const vv = window.visualViewport;
     const keyboardHeight = Math.max(0, Math.round(maxViewportHeight - vv.height));
     const chatPanelEl = document.getElementById('chat-panel');
     if (chatPanelEl) {
@@ -776,13 +791,19 @@
     }
   }
   if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', applyKeyboardSafeLayout);
+    window.visualViewport.addEventListener('resize', () => {
+      applyKeyboardSafeLayout();
+      applyChatPanelKeyboardOffset();
+    });
   }
   // A genuine device rotation (not just the keyboard) should get a fresh
   // baseline instead of staying pinned to the previous orientation's height.
   window.addEventListener('orientationchange', () => {
     maxViewportHeight = 0;
-    setTimeout(applyKeyboardSafeLayout, 300);
+    setTimeout(() => {
+      applyKeyboardSafeLayout();
+      applyChatPanelKeyboardOffset();
+    }, 300);
   });
 
   // ---------------- game-start sequence ----------------
@@ -2700,6 +2721,16 @@
   document.querySelector('.chat-messages').addEventListener('touchstart', markChatInteraction, { passive: true });
   document.getElementById('chat-input').addEventListener('input', markChatInteraction);
   document.getElementById('chat-input').addEventListener('focus', markChatInteraction);
+  // Belt-and-suspenders alongside the visualViewport 'resize' listener:
+  // recompute the sheet's keyboard offset right when the input is actually
+  // focused (the moment the keyboard starts opening from a real tap), and
+  // again shortly after once the keyboard animation has settled -- in case
+  // this device's resize events land late or get missed during the
+  // transition. Harmless if the resize listener already handled it by then.
+  document.getElementById('chat-input').addEventListener('focus', () => {
+    applyChatPanelKeyboardOffset();
+    setTimeout(applyChatPanelKeyboardOffset, 350);
+  });
 
   document.getElementById('chat-fab').onclick = () => {
     document.getElementById('chat-panel').classList.remove('hidden');
@@ -2707,6 +2738,11 @@
     document.getElementById('chat-fab').classList.add('hidden');
     chatUnread = 0;
     updateChatBadge();
+    // Fresh, correct read at the moment the sheet opens (keyboard is
+    // always closed right here, since we no longer auto-focus the input --
+    // see below), independent of whatever routine game-state re-render
+    // last touched the panel while it was hidden.
+    applyChatPanelKeyboardOffset();
     // Same fix as loadChatHistory() above -- land on the newest message
     // every time the sheet opens, not wherever it happened to be scrolled
     // last time it was closed.
