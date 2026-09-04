@@ -2693,7 +2693,16 @@
     // last time it was closed.
     const container = document.getElementById('chat-messages');
     container.scrollTop = container.scrollHeight;
-    document.getElementById('chat-input').focus();
+    // Deliberately NOT auto-focusing the input here anymore (removed Sept
+    // 2026). Focusing it immediately forces the on-screen keyboard open the
+    // instant the sheet appears, and on the actual Android WebView that
+    // fought with this panel's position:fixed layout badly enough to break
+    // it entirely -- confirmed via screen recording: header, drag handle,
+    // and the dimmed backdrop all disappeared, leaving only the input row
+    // stranded near the top of the screen. Also just better UX on its own:
+    // WhatsApp/Instagram don't force the keyboard open when you open a
+    // chat thread either -- tapping the input to type is a deliberate,
+    // separate action.
   };
   document.getElementById('btn-chat-close').onclick = () => {
     document.getElementById('chat-panel').classList.add('hidden');
