@@ -707,7 +707,10 @@
       const screenGameEl = document.getElementById('screen-game');
       if (screenGameEl) screenGameEl.style.height = '';
       const chatPanelEl = document.getElementById('chat-panel');
-      if (chatPanelEl) chatPanelEl.style.bottom = '';
+      if (chatPanelEl) {
+        chatPanelEl.style.bottom = '';
+        chatPanelEl.style.maxHeight = '';
+      }
     }
   }
 
@@ -754,6 +757,22 @@
         getComputedStyle(document.documentElement).getPropertyValue('--ad-safe-bottom')
       ) || 0;
       chatPanelEl.style.bottom = (keyboardHeight + adSafeBottom) + 'px';
+      // BUG (found via screen recording, Sept 2026): the sheet's height was
+      // a flat 60vh/480px measured against the FULL screen, never
+      // shrinking for the keyboard. bottom:fixed is anchored relative to
+      // the un-shrunk layout viewport (that's the whole point of
+      // overlays-content -- see the meta tag in index.html), so once the
+      // keyboard ate a big chunk of the actually-visible area, a
+      // still-480px-tall sheet no longer fit: its top edge (header, drag
+      // handle) got pushed above the visible screen entirely, leaving only
+      // the input row on screen. Capping max-height to whatever vertical
+      // space is actually free above the sheet's own bottom-anchor point
+      // keeps the whole sheet on-screen no matter how much room the
+      // keyboard takes. 16px top margin so it never touches the very edge;
+      // 480px ceiling keeps the original design size when there's no
+      // keyboard at all.
+      const availableForPanel = Math.max(160, vv.height - adSafeBottom - 16);
+      chatPanelEl.style.maxHeight = Math.min(480, availableForPanel) + 'px';
     }
   }
   if (window.visualViewport) {
