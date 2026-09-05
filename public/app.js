@@ -701,37 +701,51 @@
   // device happens to respect, by taking manual control via the
   // VisualViewport API instead (supported on Android Chrome/WebView since
   // 2017, far broader than the newer CSS-only tools):
-  //   - window.innerHeight (the LAYOUT viewport, not the visual one) is the
-  //     real "keyboard closed" full height on this device/config --
-  //     interactive-widget=overlays-content (see the meta tag in index.html)
-  //     makes the layout viewport immune to the on-screen keyboard; only the
-  //     VISUAL viewport (window.visualViewport) shrinks for it. Read fresh
-  //     every time instead of caching a "tallest ever seen" value.
-  //   - BUG (found via a 4th round of device testing, Sept 2026): an earlier
-  //     version tracked maxViewportHeight as "the tallest visualViewport.
-  //     height seen so far" and reset it to 0 on every genuine fresh arrival
-  //     at the game screen (e.g. round-result -> next round). But if chat +
-  //     keyboard were still open at that exact instant -- entirely possible,
-  //     since chat can stay open across a round transition while bots keep
-  //     playing -- the reset baseline got re-captured from the CURRENT
-  //     keyboard-shrunk visualViewport.height, permanently baking the
-  //     squished height in as "full screen" for the rest of that session.
-  //     That's what was actually causing the flicker/corruption the user
-  //     kept seeing specifically during "Setting up decks.../Shuffling.../
-  //     Dealing cards..." -- exactly when a new round hands the screen back
-  //     to screen-game. Reading window.innerHeight fresh removes the whole
-  //     "when do we reset the baseline" question: there's no history to go
-  //     stale, so there's nothing to reset.
-  //   - Separately computes the keyboard's own height (window.innerHeight
-  //     minus the current visual viewport height) to lift the chat panel
-  //     above it, instead of relying on env(keyboard-inset-height) support.
+  //   - CORRECTION (Sept 2026, after the fix below made things visibly
+  //     WORSE on a real device -- table squishing live while typing):
+  //     window.innerHeight is NOT actually keyboard-immune on this device,
+  //     despite interactive-widget=overlays-content being set (see the meta
+  //     tag in index.html) -- that's the exact same unreliability the
+  //     original comment above already warned about ("neither CSS viewport
+  //     units nor the native interactive-widget settings reliably stopped
+  //     the keyboard from shrinking the visible area"). A brief attempt to
+  //     replace the tracking below with a live window.innerHeight read
+  //     caused the whole oval table to visibly compress into a tiny strip
+  //     the instant the keyboard opened, because window.innerHeight shrinks
+  //     right along with it here. Reverted back to the tracking approach:
+  //   - Tracks the tallest visualViewport.height seen since page load --
+  //     that's "keyboard closed", since the keyboard only ever shrinks the
+  //     visible area, never grows it past the real full-screen value.
+  //     Seeded once at script load (nothing can have focus yet, so no
+  //     keyboard can be open), and ONLY EVER GROWS from there -- it must
+  //     never be reset back down just because the game screen re-renders,
+  //     which is exactly the bug fixed separately below.
+  //   - Pins #screen-game and body to exactly that many pixels via inline
+  //     style, which wins over any CSS vh/dvh/svh rule regardless of
+  //     whether THIS device's browser/OS actually respects those units for
+  //     the keyboard case.
+  //   - Separately computes the keyboard's own height (baseline minus
+  //     current visible height) to lift the chat panel above it, instead of
+  //     relying on env(keyboard-inset-height) support.
+  //   - The ONE legitimate reason to reset this baseline is a genuine
+  //     device rotation (width/height actually swap) -- handled in the
+  //     orientationchange listener below, not here. Round transitions,
+  //     game-state pushes, and every other routine re-render must leave it
+  //     alone -- resetting it there was the earlier, now-fixed bug where a
+  //     round starting while chat+keyboard were still open baked the
+  //     keyboard-shrunk height in as "full screen" for the rest of the
+  //     session (matches the "Setting up decks.../Shuffling.../Dealing
+  //     cards..." flicker from the previous report).
   // --------------------------------------------------------------------
+  let maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
   function applyKeyboardSafeLayout() {
-    if (!document.body.classList.contains('game-active')) return;
-    const fullHeight = window.innerHeight;
-    document.body.style.height = fullHeight + 'px';
+    if (!window.visualViewport || !document.body.classList.contains('game-active')) return;
+    const vv = window.visualViewport;
+    maxViewportHeight = Math.max(maxViewportHeight, vv.height);
+
+    document.body.style.height = maxViewportHeight + 'px';
     const screenGameEl = document.getElementById('screen-game');
-    if (screenGameEl) screenGameEl.style.height = fullHeight + 'px';
+    if (screenGameEl) screenGameEl.style.height = maxViewportHeight + 'px';
   }
   // Chat panel's keyboard-avoidance is deliberately SEPARATE from
   // applyKeyboardSafeLayout() above (found via screen recording, Sept
@@ -748,7 +762,7 @@
   function applyChatPanelKeyboardOffset() {
     if (!window.visualViewport || !document.body.classList.contains('game-active')) return;
     const vv = window.visualViewport;
-    const keyboardHeight = Math.max(0, Math.round(window.innerHeight - vv.height));
+    const keyboardHeight = Math.max(0, Math.round(maxViewportHeight - vv.height));
     const chatPanelEl = document.getElementById('chat-panel');
     if (chatPanelEl) {
       // This inline style wins over the CSS default (which already adds
@@ -784,12 +798,15 @@
       applyChatPanelKeyboardOffset();
     });
   }
-  // A genuine device rotation needs a delay before re-reading, since
-  // window.innerHeight/visualViewport don't settle to the new orientation's
-  // real value instantly. No baseline to reset any more -- both functions
-  // above read window.innerHeight fresh on every call.
+  // A genuine device rotation (not just the keyboard) should get a fresh
+  // baseline instead of staying pinned to the previous orientation's height
+  // -- re-read immediately (best-effort) and again after a short delay,
+  // since visualViewport doesn't always settle to the new orientation's
+  // real value instantly.
   window.addEventListener('orientationchange', () => {
+    maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
     setTimeout(() => {
+      maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
       applyKeyboardSafeLayout();
       applyChatPanelKeyboardOffset();
     }, 300);
