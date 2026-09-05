@@ -1,6 +1,18 @@
 (function () {
   const socket = io();
 
+  // Which build is this player actually on? The same server and the same
+  // web code back both the website and the Capacitor-wrapped Android app,
+  // so without this flag the two are indistinguishable server-side -- which
+  // made the tester-activity report unable to answer the one question it
+  // exists for: "are my PLAY STORE testers playing, or is that traffic just
+  // people on the website?". window.Capacitor only exists inside the native
+  // app (same check admob-init.js uses to decide whether to show ads).
+  const CLIENT_PLATFORM =
+    (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())
+      ? 'android-app'
+      : 'web';
+
   const SUIT_SYMBOL = { S: '♠', H: '♥', D: '♦', C: '♣' };
   const RED_SUITS = new Set(['H', 'D']);
   const RANK_ORDER = ['A','2','3','4','5','6','7','8','9','10','J','Q','K','JOKER'];
@@ -1170,7 +1182,7 @@
     const name = getPlayerName();
     if (!name) return setLandingError('Enter your name');
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_room', { name, firebaseIdToken }, (res) => {
+    socket.emit('create_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('room_created');
       saveSession(res.roomCode, res.playerId);
@@ -1186,7 +1198,7 @@
     if (!name) return setLandingError('Enter your name');
     if (!roomCode) return setLandingError('Enter room code');
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('join_room', { roomCode, name, firebaseIdToken }, (res) => {
+    socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       // room.phase was already 'playing' when the request landed -- the
       // server held it as a pending request instead of joining outright
@@ -1431,7 +1443,7 @@
     if (!name) return setLandingError('Enter your name');
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_solo_room', { name, botCount, firebaseIdToken }, (res) => {
+    socket.emit('create_solo_room', { name, botCount, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('solo_game_started', { bot_count: botCount });
       saveSession(res.roomCode, res.playerId);
@@ -1467,7 +1479,7 @@
     if (!name) return setLandingError('Enter your name');
     const playerCount = Number(document.getElementById('input-online-playercount').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('queue_join', { playerCount, name, firebaseIdToken }, (res) => {
+    socket.emit('queue_join', { playerCount, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       queuedPlayerCount = playerCount;
       document.getElementById('queue-waiting-count').textContent = String(playerCount);
