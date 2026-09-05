@@ -125,6 +125,191 @@ app.get('/api/firebase-test', async (req, res) => {
 });
 
 // --------------------------------------------------------------------------
+// Tester-activity report -- built for the Google Play closed-testing review,
+// which requires 12+ testers opted in for 14 continuous days AND evidence
+// that they actually USED the app (Google checks real engagement, not just
+// opt-in counts). Play Console suppresses its own stats below small user
+// thresholds, and Firebase Analytics won't tell you who finished a game, so
+// this reads the append-only `activity` log written by recordGameResult().
+//
+// PRIVACY/SECURITY: this exposes player display names, so it is NOT public.
+// It requires ?key= matching the ADMIN_KEY environment variable, and if
+// ADMIN_KEY isn't set the endpoint refuses to run at all (fails closed
+// rather than open). Set ADMIN_KEY in the Render dashboard to a long random
+// string before using it.
+//
+//   /api/admin/tester-activity?key=YOUR_KEY            -> last 14 days, HTML
+//   /api/admin/tester-activity?key=YOUR_KEY&days=7     -> last 7 days
+//   /api/admin/tester-activity?key=YOUR_KEY&format=json
+// --------------------------------------------------------------------------
+app.get('/api/admin/tester-activity', async (req, res) => {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey) {
+    return res.status(503).json({ ok: false, error: 'ADMIN_KEY is not configured on the server, so this endpoint is disabled.' });
+  }
+  if (req.query.key !== adminKey) {
+    return res.status(403).json({ ok: false, error: 'Forbidden' });
+  }
+  if (!db) return res.status(500).json({ ok: false, error: 'Firestore is not initialized on the server.' });
+
+  const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 14));
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    // ISO-8601 UTC strings sort lexicographically in true chronological
+    // order, which is why `at` is stored as a string and can be range-queried
+    // directly. A where+orderBy on the SAME single field needs no composite
+    // index, so this works on a fresh Firestore with no setup.
+    const snap = await db.collection('activity')
+      .where('at', '>=', cutoff)
+      .orderBy('at', 'desc')
+      .get();
+
+    const byPlayer = new Map();
+    let totalGames = 0;
+    snap.forEach((doc) => {
+      const d = doc.data();
+      totalGames++;
+      if (!byPlayer.has(d.uid)) {
+        byPlayer.set(d.uid, {
+          uid: d.uid,
+          displayName: d.displayName || '(unknown)',
+          games: 0,
+          wins: 0,
+          solo: 0,
+          multiplayer: 0,
+          days: new Set(),
+          firstSeen: d.at,
+          lastSeen: d.at,
+        });
+      }
+      const p = byPlayer.get(d.uid);
+      p.games++;
+      if (d.won) p.wins++;
+      if (d.mode === 'multiplayer') p.multiplayer++; else p.solo++;
+      if (d.day) p.days.add(d.day);
+      if (d.at > p.lastSeen) p.lastSeen = d.at;
+      if (d.at < p.firstSeen) p.firstSeen = d.at;
+    });
+
+    const players = [...byPlayer.values()]
+      .map((p) => ({
+        uid: p.uid,
+        displayName: p.displayName,
+        games: p.games,
+        wins: p.wins,
+        solo: p.solo,
+        multiplayer: p.multiplayer,
+        activeDays: p.days.size,
+        firstSeen: p.firstSeen,
+        lastSeen: p.lastSeen,
+      }))
+      .sort((a, b) => b.games - a.games);
+
+    // Anyone whose stats doc shows they've played, but who has no rows in the
+    // window -- either they went quiet, or they last played before the
+    // activity log existed. Worth surfacing so a silent tester isn't
+    // invisible just because the log started recently.
+    let quiet = [];
+    try {
+      const usersSnap = await db.collection('users').get();
+      usersSnap.forEach((doc) => {
+        const u = doc.data();
+        if (byPlayer.has(doc.id)) return;
+        if (!u.gamesPlayed) return;
+        quiet.push({
+          uid: doc.id,
+          displayName: u.displayName || '(unknown)',
+          gamesPlayedAllTime: u.gamesPlayed,
+          lastPlayedAt: u.lastPlayedAt || null,
+        });
+      });
+      quiet.sort((a, b) => String(b.lastPlayedAt).localeCompare(String(a.lastPlayedAt)));
+    } catch (e) {
+      quiet = [];
+    }
+
+    const summary = {
+      windowDays: days,
+      since: cutoff,
+      generatedAt: new Date().toISOString(),
+      distinctPlayers: players.length,
+      totalGames,
+      playersWith3PlusGames: players.filter((p) => p.games >= 3).length,
+      playersActive3PlusDays: players.filter((p) => p.activeDays >= 3).length,
+    };
+
+    if (req.query.format === 'json') {
+      return res.json({ ok: true, summary, players, quiet });
+    }
+
+    // Plain HTML so it's readable by just opening the URL on a phone.
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
+    ));
+    const shortTime = (iso) => (iso ? esc(String(iso).replace('T', ' ').slice(0, 16)) + ' UTC' : '-');
+    const rows = players.map((p) => `
+      <tr>
+        <td>${esc(p.displayName)}</td>
+        <td class="n">${p.games}</td>
+        <td class="n">${p.activeDays}</td>
+        <td class="n">${p.multiplayer}</td>
+        <td class="n">${p.solo}</td>
+        <td class="n">${p.wins}</td>
+        <td>${shortTime(p.lastSeen)}</td>
+      </tr>`).join('');
+    const quietRows = quiet.map((q) => `
+      <tr>
+        <td>${esc(q.displayName)}</td>
+        <td class="n">${q.gamesPlayedAllTime}</td>
+        <td>${shortTime(q.lastPlayedAt)}</td>
+      </tr>`).join('');
+
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tester activity - last ${days} days</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 16px; background: #0d1f16; color: #e8f0ea; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #8fae9c; font-size: 12px; margin-bottom: 16px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+  .card { background: #143d29; border: 1px solid #205237; border-radius: 10px; padding: 10px 14px; min-width: 110px; }
+  .card .v { font-size: 22px; font-weight: 700; }
+  .card .k { font-size: 11px; color: #8fae9c; text-transform: uppercase; letter-spacing: .04em; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #205237; }
+  th { color: #8fae9c; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  td.n, th.n { text-align: right; }
+  h2 { font-size: 14px; margin: 0 0 8px; }
+  .empty { color: #8fae9c; font-size: 13px; }
+</style></head><body>
+<h1>Tester activity — last ${days} days</h1>
+<div class="sub">Since ${esc(cutoff.slice(0, 16).replace('T', ' '))} UTC · generated ${esc(new Date().toISOString().slice(0, 16).replace('T', ' '))} UTC</div>
+<div class="cards">
+  <div class="card"><div class="v">${summary.distinctPlayers}</div><div class="k">Players</div></div>
+  <div class="card"><div class="v">${summary.totalGames}</div><div class="k">Games finished</div></div>
+  <div class="card"><div class="v">${summary.playersWith3PlusGames}</div><div class="k">Played 3+ games</div></div>
+  <div class="card"><div class="v">${summary.playersActive3PlusDays}</div><div class="k">Active 3+ days</div></div>
+</div>
+<h2>Active testers</h2>
+${players.length ? `<table>
+  <tr><th>Player</th><th class="n">Games</th><th class="n">Active days</th><th class="n">Multi</th><th class="n">Solo</th><th class="n">Wins</th><th>Last played</th></tr>
+  ${rows}
+</table>` : '<p class="empty">No finished games recorded in this window yet. Note the activity log only starts from the deploy that added it — earlier games are in the section below.</p>'}
+<h2>Played before, but not in this window</h2>
+${quiet.length ? `<table>
+  <tr><th>Player</th><th class="n">Games (all time)</th><th>Last played</th></tr>
+  ${quietRows}
+</table>` : '<p class="empty">None.</p>'}
+</body></html>`);
+  } catch (e) {
+    console.error('[Admin] tester-activity failed:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// --------------------------------------------------------------------------
 // Real stat-tracking. Called from every place a game can actually end (a
 // correct declare, someone leaving down to 1 player, etc). Deliberately
 // server-driven, not client-driven -- the server is the only thing that
@@ -139,6 +324,14 @@ async function recordGameResult(room) {
   room.statsRecorded = true;
   const winnerId = room.game.winner;
   const writes = [];
+  const finishedAt = new Date().toISOString();
+  // Is anyone at this table a real human other than the player themselves?
+  // Used purely to label the row in the tester-activity report below, so a
+  // solo-vs-bots game can be told apart from a real multiplayer one.
+  const humanCount = room.game.playerIds.filter((id) => {
+    const p = room.players.get(id);
+    return p && !p.isBot;
+  }).length;
   for (const pid of room.game.playerIds) {
     const player = room.players.get(pid);
     if (!player || player.isBot || !player.firebaseUid) continue;
@@ -148,8 +341,24 @@ async function recordGameResult(room) {
       displayName: player.name,
       gamesPlayed: admin.firestore.FieldValue.increment(1),
       wins: admin.firestore.FieldValue.increment(isWinner ? 1 : 0),
-      lastPlayedAt: new Date().toISOString(),
+      lastPlayedAt: finishedAt,
     }, { merge: true }));
+    // Append-only activity log, one row per human player per finished game.
+    // The `users` doc above only ever holds a RUNNING TOTAL plus the single
+    // most recent timestamp, which can't answer "who played, on which days,
+    // over the last two weeks" -- exactly the question Google Play's closed-
+    // testing review asks. This collection can, because each game leaves its
+    // own dated row behind. Read back by /api/admin/tester-activity.
+    writes.push(db.collection('activity').add({
+      uid: player.firebaseUid,
+      displayName: player.name,
+      at: finishedAt,
+      day: finishedAt.slice(0, 10), // YYYY-MM-DD, for counting distinct active days
+      roomCode: room.code,
+      won: isWinner,
+      mode: humanCount > 1 ? 'multiplayer' : 'solo-vs-bots',
+      humanCount,
+    }));
   }
   try {
     await Promise.all(writes);
