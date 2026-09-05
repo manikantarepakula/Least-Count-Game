@@ -1443,6 +1443,10 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 .chat-header {
   display: flex; justify-content: space-between; align-items: center;
   padding: 10px 14px; border-bottom: 1px solid var(--jade-border); font-weight: 700;
+  /* Never shrink -- the close button lives here, so it has to stay usable
+     even when the keyboard leaves very little room for the sheet overall.
+     .chat-messages (flex:1, min-height:0) absorbs the squeeze instead. */
+  flex-shrink: 0;
 }
 .chat-header button.tiny .icon, .chat-header span .icon { margin: 0; }
 /* min-height: 0 is required here, not optional -- a flex item defaults to
@@ -1463,7 +1467,10 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 .chat-msg .chat-text { word-break: break-word; }
 .chat-msg .chat-gif { display: block; max-width: 160px; border-radius: 8px; margin-top: 4px; }
 .chat-empty { color: var(--text-muted); font-size: 12px; text-align: center; margin-top: 20px; }
-.chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--jade-border); }
+/* Never shrink -- this is the actual text box, so it has to stay usable
+   even when the keyboard leaves very little room for the sheet overall.
+   .chat-messages (flex:1, min-height:0) absorbs the squeeze instead. */
+.chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--jade-border); flex-shrink: 0; }
 .chat-input-row input {
   flex: 1; padding: 10px; border-radius: 20px; border: 1px solid var(--jade-border);
   background: var(--jade-panel-alt); color: var(--text-light); font-size: 14px;
