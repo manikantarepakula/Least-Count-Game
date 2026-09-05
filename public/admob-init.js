@@ -21,7 +21,30 @@
 
   // Real, live AdMob banner ad unit ID for this app (test ads confirmed
   // working end-to-end on a real device, switched over for release).
-  const BANNER_AD_ID = 'ca-app-pub-1398110480284026/3640352329';
+  const REAL_BANNER_AD_ID = 'ca-app-pub-1398110480284026/3640352329';
+
+  // Google's official, always-fills test banner unit. Not our account, not
+  // billable, and it serves 100% of the time on any device -- which makes it
+  // the one decisive way to tell the two possible causes of "no ads" apart:
+  //   - test ad SHOWS  -> the integration (plugin, manifest app ID, init,
+  //     showBanner call, placement, safe-zone) is all correct, and the real
+  //     unit is silent for an AdMob-side reason: account/app still pending
+  //     review, unit created too recently, or genuine no-fill.
+  //   - test ad ALSO BLANK -> the problem is on our side (plugin/native
+  //     wiring), and no amount of waiting on AdMob will fix it.
+  // Toggle it from the chrome://inspect console with:
+  //   localStorage.setItem('lc_test_ads','1'); location.reload();
+  // and turn it back off with:
+  //   localStorage.removeItem('lc_test_ads'); location.reload();
+  const TEST_BANNER_AD_ID = 'ca-app-pub-3940256099942544/6300978111';
+
+  let useTestAds = false;
+  try {
+    useTestAds = localStorage.getItem('lc_test_ads') === '1';
+  } catch (e) { /* storage blocked -- fall through to real ads */ }
+
+  const BANNER_AD_ID = useTestAds ? TEST_BANNER_AD_ID : REAL_BANNER_AD_ID;
+  console.log('[AdMob] using', useTestAds ? 'TEST' : 'REAL', 'banner unit:', BANNER_AD_ID);
 
   // The banner is a native view with zero footprint in the page's own
   // layout, so every screen -- including the game table -- needs to reserve
@@ -69,11 +92,60 @@
     }
   }
 
+  // The missing piece in every previous round of this investigation:
+  // showBanner()'s promise resolves as soon as the NATIVE CALL completes
+  // (container created, ad request sent) -- NOT when an ad has actually
+  // loaded and become visible. So a totally silent, totally successful-
+  // looking showBanner() is exactly what both "the ad loaded fine" and "the
+  // ad request came back empty" look like from JS. These listeners are the
+  // only way to see which one actually happened: bannerAdLoaded fires on
+  // success, bannerAdFailedToLoad carries the SDK's own error code, which
+  // is the thing that says whether this is our bug or AdMob's answer.
+  //
+  // AdMob error codes (from the Android SDK):
+  //   0 = INTERNAL_ERROR   -- SDK-side problem
+  //   1 = INVALID_REQUEST  -- bad ad unit ID / app ID mismatch (OUR bug)
+  //   2 = NETWORK_ERROR    -- device couldn't reach the ad servers
+  //   3 = NO_FILL          -- request was valid, AdMob simply had no ad to
+  //                           give (the normal answer for a brand-new app or
+  //                           an account/app still pending review)
+  // Every name is wrapped defensively, same reasoning as the size listener
+  // above -- an unsupported event name must never take the banner down.
+  function addDiagListener(eventName, handler) {
+    try {
+      const result = AdMob.addListener(eventName, handler);
+      if (result && typeof result.catch === 'function') {
+        result.catch((e) => console.warn('[AdMob] listener', eventName, 'rejected:', e && e.message));
+      }
+    } catch (e) {
+      console.warn('[AdMob] listener', eventName, 'threw:', e && e.message);
+    }
+  }
+
+  function ensureDiagListeners() {
+    addDiagListener('bannerAdLoaded', () => {
+      console.log('[AdMob] BANNER LOADED -- an ad really is on screen now.');
+    });
+    addDiagListener('bannerAdFailedToLoad', (err) => {
+      console.warn('[AdMob] BANNER FAILED TO LOAD:', JSON.stringify(err));
+      console.warn('[AdMob]   code 3 = NO_FILL (AdMob had no ad -- account/app' +
+        ' still pending review, or unit too new). code 1 = INVALID_REQUEST' +
+        ' (our ad unit / app ID is wrong). code 2 = NETWORK_ERROR.');
+    });
+    addDiagListener('bannerAdOpened', () => console.log('[AdMob] banner opened'));
+    addDiagListener('bannerAdClosed', () => console.log('[AdMob] banner closed'));
+    addDiagListener('bannerAdImpression', () => console.log('[AdMob] banner impression recorded'));
+  }
+
   function ensureInit() {
     if (!initPromise) {
-      initPromise = AdMob.initialize({ initializeForTesting: false }).catch((e) => {
-        console.warn('[AdMob] initialize failed:', e && e.message);
-      });
+      initPromise = AdMob.initialize({ initializeForTesting: false })
+        .then((res) => {
+          console.log('[AdMob] initialize OK:', JSON.stringify(res));
+        })
+        .catch((e) => {
+          console.warn('[AdMob] initialize failed:', e && e.message);
+        });
     }
     return initPromise;
   }
@@ -81,6 +153,7 @@
   async function showBanner() {
     if (bannerShown) return;
     ensureSizeListener();
+    ensureDiagListeners();
     await ensureInit();
     try {
       await AdMob.showBanner({
@@ -89,6 +162,10 @@
         position: 'BOTTOM_CENTER',
         margin: 0,
       });
+      // NOTE: reaching here only means the native call returned -- see the
+      // long comment above. Watch for the BANNER LOADED / BANNER FAILED TO
+      // LOAD log that follows this one; that's the real outcome.
+      console.log('[AdMob] showBanner() native call returned (ad not necessarily loaded yet)');
       bannerShown = true;
       setSafeBottom(FALLBACK_BANNER_HEIGHT_PX);
     } catch (e) {
