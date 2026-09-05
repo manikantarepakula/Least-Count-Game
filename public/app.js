@@ -788,7 +788,23 @@
       // keyboard takes. 16px top margin so it never touches the very edge;
       // 480px ceiling keeps the original design size when there's no
       // keyboard at all.
-      const availableForPanel = Math.max(160, vv.height - adSafeBottom - 16);
+      //
+      // BUG #2 (found via a later device test, Sept 2026): this used to
+      // floor availableForPanel at 160px ("never make the sheet uselessly
+      // tiny"). But that floor can force the sheet TALLER than the space
+      // that's actually free above the keyboard -- on a device/keyboard
+      // combo where less than 160px is left (a tall Gboard/SwiftKey with a
+      // suggestion or emoji row, plus the ad safe-zone, easily eats more
+      // than that), the sheet got pushed up regardless, and its top portion
+      // (header, drag handle, close button) landed above y=0 and off
+      // screen -- the exact "chat opens at the top, header missing,
+      // scrolling stuck at the bottom" symptom this whole block exists to
+      // prevent, just re-introduced by the floor itself. Staying fully
+      // on-screen has to win over a minimum size: no floor here means the
+      // sheet can shrink all the way down to whatever room genuinely
+      // exists (even just enough for the input row) rather than ever
+      // spilling past the top edge.
+      const availableForPanel = Math.max(0, vv.height - adSafeBottom - 16);
       chatPanelEl.style.maxHeight = Math.min(480, availableForPanel) + 'px';
     }
   }
