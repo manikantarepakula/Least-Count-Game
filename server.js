@@ -124,6 +124,14 @@ app.get('/api/firebase-test', async (req, res) => {
   }
 });
 
+// Whitelists the platform flag the client sends (see CLIENT_PLATFORM in
+// app.js). Never trust the raw string into storage -- it lands in Firestore
+// and is rendered in the admin report, so anything unrecognised collapses to
+// 'unknown' rather than being stored verbatim.
+function cleanPlatform(p) {
+  return (p === 'android-app' || p === 'web') ? p : 'unknown';
+}
+
 // --------------------------------------------------------------------------
 // Tester-activity report -- built for the Google Play closed-testing review,
 // which requires 12+ testers opted in for 14 continuous days AND evidence
@@ -178,6 +186,8 @@ app.get('/api/admin/tester-activity', async (req, res) => {
           wins: 0,
           solo: 0,
           multiplayer: 0,
+          appGames: 0,
+          webGames: 0,
           days: new Set(),
           firstSeen: d.at,
           lastSeen: d.at,
@@ -187,6 +197,8 @@ app.get('/api/admin/tester-activity', async (req, res) => {
       p.games++;
       if (d.won) p.wins++;
       if (d.mode === 'multiplayer') p.multiplayer++; else p.solo++;
+      if (d.platform === 'android-app') p.appGames++;
+      else if (d.platform === 'web') p.webGames++;
       if (d.day) p.days.add(d.day);
       if (d.at > p.lastSeen) p.lastSeen = d.at;
       if (d.at < p.firstSeen) p.firstSeen = d.at;
@@ -200,11 +212,23 @@ app.get('/api/admin/tester-activity', async (req, res) => {
         wins: p.wins,
         solo: p.solo,
         multiplayer: p.multiplayer,
+        appGames: p.appGames,
+        webGames: p.webGames,
+        // How this player is counted in the app-vs-web split below. Someone
+        // who's played on both (e.g. tried the site, then installed the test
+        // build) is labelled 'both' rather than being silently filed under
+        // whichever happened to be first.
+        platform: p.appGames && p.webGames ? 'both' : (p.appGames ? 'android-app' : (p.webGames ? 'web' : 'unknown')),
         activeDays: p.days.size,
         firstSeen: p.firstSeen,
         lastSeen: p.lastSeen,
       }))
       .sort((a, b) => b.games - a.games);
+
+    // The number that actually answers "are my Play testers playing?" --
+    // anyone who has finished at least one game inside the native Android
+    // build during the window.
+    const appPlayers = players.filter((p) => p.appGames > 0);
 
     // Anyone whose stats doc shows they've played, but who has no rows in the
     // window -- either they went quiet, or they last played before the
@@ -237,6 +261,13 @@ app.get('/api/admin/tester-activity', async (req, res) => {
       totalGames,
       playersWith3PlusGames: players.filter((p) => p.games >= 3).length,
       playersActive3PlusDays: players.filter((p) => p.activeDays >= 3).length,
+      // App-only figures -- these are the ones that speak to the Play
+      // closed-test requirement (12 testers, genuinely using the app).
+      appPlayers: appPlayers.length,
+      appGames: players.reduce((n, p) => n + p.appGames, 0),
+      appPlayersWith3PlusGames: appPlayers.filter((p) => p.appGames >= 3).length,
+      appPlayersActive3PlusDays: appPlayers.filter((p) => p.activeDays >= 3).length,
+      webOnlyPlayers: players.filter((p) => p.platform === 'web').length,
     };
 
     if (req.query.format === 'json') {
@@ -248,16 +279,26 @@ app.get('/api/admin/tester-activity', async (req, res) => {
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
     ));
     const shortTime = (iso) => (iso ? esc(String(iso).replace('T', ' ').slice(0, 16)) + ' UTC' : '-');
-    const rows = players.map((p) => `
+    const platformTag = (p) => {
+      if (p.platform === 'android-app') return '<span class="tag app">App</span>';
+      if (p.platform === 'web') return '<span class="tag web">Web</span>';
+      if (p.platform === 'both') return '<span class="tag app">App</span> <span class="tag web">Web</span>';
+      return '<span class="tag unk">?</span>';
+    };
+    const rowFor = (p) => `
       <tr>
         <td>${esc(p.displayName)}</td>
+        <td>${platformTag(p)}</td>
         <td class="n">${p.games}</td>
+        <td class="n">${p.appGames}</td>
         <td class="n">${p.activeDays}</td>
         <td class="n">${p.multiplayer}</td>
         <td class="n">${p.solo}</td>
         <td class="n">${p.wins}</td>
         <td>${shortTime(p.lastSeen)}</td>
-      </tr>`).join('');
+      </tr>`;
+    const rows = players.map(rowFor).join('');
+    const appRows = appPlayers.map(rowFor).join('');
     const quietRows = quiet.map((q) => `
       <tr>
         <td>${esc(q.displayName)}</td>
@@ -282,19 +323,38 @@ app.get('/api/admin/tester-activity', async (req, res) => {
   th { color: #8fae9c; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
   td.n, th.n { text-align: right; }
   h2 { font-size: 14px; margin: 0 0 8px; }
+  h2 .note { font-weight: 400; color: #8fae9c; font-size: 12px; }
   .empty { color: #8fae9c; font-size: 13px; }
+  .tag { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+  .tag.app { background: #1d5c3a; color: #a8f0c6; }
+  .tag.web { background: #3a3f5c; color: #c3c8f0; }
+  .tag.unk { background: #4a4a4a; color: #bbb; }
+  .cards.app .card { border-color: #2f7a4f; }
 </style></head><body>
 <h1>Tester activity — last ${days} days</h1>
 <div class="sub">Since ${esc(cutoff.slice(0, 16).replace('T', ' '))} UTC · generated ${esc(new Date().toISOString().slice(0, 16).replace('T', ' '))} UTC</div>
+
+<h2>Android app testers <span class="note">— the Play closed-test numbers</span></h2>
+<div class="cards app">
+  <div class="card"><div class="v">${summary.appPlayers}</div><div class="k">App testers</div></div>
+  <div class="card"><div class="v">${summary.appGames}</div><div class="k">Games in app</div></div>
+  <div class="card"><div class="v">${summary.appPlayersWith3PlusGames}</div><div class="k">Played 3+ games</div></div>
+  <div class="card"><div class="v">${summary.appPlayersActive3PlusDays}</div><div class="k">Active 3+ days</div></div>
+</div>
+${appPlayers.length ? `<table>
+  <tr><th>Player</th><th>Platform</th><th class="n">Games</th><th class="n">In app</th><th class="n">Active days</th><th class="n">Multi</th><th class="n">Solo</th><th class="n">Wins</th><th>Last played</th></tr>
+  ${appRows}
+</table>` : '<p class="empty">No games finished from the Android app in this window yet.</p>'}
+
+<h2>Everyone <span class="note">— app and website combined</span></h2>
 <div class="cards">
   <div class="card"><div class="v">${summary.distinctPlayers}</div><div class="k">Players</div></div>
   <div class="card"><div class="v">${summary.totalGames}</div><div class="k">Games finished</div></div>
   <div class="card"><div class="v">${summary.playersWith3PlusGames}</div><div class="k">Played 3+ games</div></div>
-  <div class="card"><div class="v">${summary.playersActive3PlusDays}</div><div class="k">Active 3+ days</div></div>
+  <div class="card"><div class="v">${summary.webOnlyPlayers}</div><div class="k">Web only</div></div>
 </div>
-<h2>Active testers</h2>
 ${players.length ? `<table>
-  <tr><th>Player</th><th class="n">Games</th><th class="n">Active days</th><th class="n">Multi</th><th class="n">Solo</th><th class="n">Wins</th><th>Last played</th></tr>
+  <tr><th>Player</th><th>Platform</th><th class="n">Games</th><th class="n">In app</th><th class="n">Active days</th><th class="n">Multi</th><th class="n">Solo</th><th class="n">Wins</th><th>Last played</th></tr>
   ${rows}
 </table>` : '<p class="empty">No finished games recorded in this window yet. Note the activity log only starts from the deploy that added it — earlier games are in the section below.</p>'}
 <h2>Played before, but not in this window</h2>
@@ -358,6 +418,11 @@ async function recordGameResult(room) {
       won: isWinner,
       mode: humanCount > 1 ? 'multiplayer' : 'solo-vs-bots',
       humanCount,
+      // 'android-app' vs 'web' -- the whole point of the split in the report.
+      // The same server backs the website and the Play Store build, so
+      // without this a busy website day is indistinguishable from your
+      // closed-test testers actually playing.
+      platform: player.platform || 'unknown',
     }));
   }
   try {
@@ -712,7 +777,7 @@ function startMatchedRoom(entries) {
     pendingJoins: new Map(),
   };
   for (const e of entries) {
-    room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null });
+    room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null, platform: e.platform || 'unknown' });
     room.order.push(e.playerId);
     socketIndex.set(e.socketId, { roomCode: code, playerId: e.playerId });
     const s = io.sockets.sockets.get(e.socketId);
@@ -948,7 +1013,7 @@ function handleTurnTimeout(room) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('create_room', async ({ name, firebaseIdToken }, ack) => {
+  socket.on('create_room', async ({ name, firebaseIdToken, platform }, ack) => {
     try {
       if (isRateLimited(socket, 'create_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       if (isIpRateLimited(socket, 'create_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
@@ -972,7 +1037,7 @@ io.on('connection', (socket) => {
         pendingJoins: new Map(), // mid-game join requests awaiting host approval -- see join_room below
         allHumansDisconnectedAt: null, // set once every human is gone -- see the cleanup sweep below
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
       room.order.push(playerId);
       rooms.set(code, room);
       socketIndex.set(socket.id, { roomCode: code, playerId });
@@ -989,7 +1054,7 @@ io.on('connection', (socket) => {
   // countdown -> deal -> reveal sequence, exactly like a real multiplayer
   // game starting -- bots are just regular players to the game engine, the
   // only special handling is how quickly they act (see scheduleTurnTimer).
-  socket.on('create_solo_room', async ({ name, botCount, firebaseIdToken }, ack) => {
+  socket.on('create_solo_room', async ({ name, botCount, firebaseIdToken, platform }, ack) => {
     try {
       if (isRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       if (isIpRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
@@ -1013,7 +1078,7 @@ io.on('connection', (socket) => {
         statsRecorded: false,
         allHumansDisconnectedAt: null,
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
       room.order.push(playerId);
       for (let i = 1; i <= n; i++) {
         const botId = makePlayerId();
@@ -1041,7 +1106,7 @@ io.on('connection', (socket) => {
   // and, after a while with no match, offers wait/fill-with-bots/cancel.
   // Actual matching happens via queue_matched (pushed, not an ack reply),
   // since a match can land seconds or minutes after this call returns.
-  socket.on('queue_join', async ({ playerCount, name, firebaseIdToken }, ack) => {
+  socket.on('queue_join', async ({ playerCount, name, firebaseIdToken, platform }, ack) => {
     try {
       if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
       const n = Math.round(Number(playerCount));
@@ -1050,7 +1115,7 @@ io.on('connection', (socket) => {
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
       const playerId = makePlayerId();
-      matchQueues.get(n).push({ playerId, socketId: socket.id, name: cleanName, firebaseUid: verifiedUid });
+      matchQueues.get(n).push({ playerId, socketId: socket.id, name: cleanName, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
       queueIndex.set(socket.id, n);
       ack && ack({ ok: true, queued: true, playerId });
       tryMatchQueue(n);
@@ -1095,7 +1160,7 @@ io.on('connection', (socket) => {
         allHumansDisconnectedAt: null,
       };
       for (const e of entries) {
-        room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null });
+        room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null, platform: e.platform || 'unknown' });
         room.order.push(e.playerId);
         socketIndex.set(e.socketId, { roomCode: code, playerId: e.playerId });
         const s = io.sockets.sockets.get(e.socketId);
@@ -1121,7 +1186,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('join_room', async ({ roomCode, name, firebaseIdToken }, ack) => {
+  socket.on('join_room', async ({ roomCode, name, firebaseIdToken, platform }, ack) => {
     try {
       if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
       const code = (roomCode || '').trim().toUpperCase();
@@ -1135,7 +1200,7 @@ io.on('connection', (socket) => {
       // straight into the lobby, no approval needed.
       if (room.phase === 'lobby') {
         const playerId = makePlayerId();
-        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid });
+        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
         room.order.push(playerId);
         socketIndex.set(socket.id, { roomCode: code, playerId });
         socket.join(code);
@@ -1159,7 +1224,7 @@ io.on('connection', (socket) => {
       const JOIN_REQUEST_TIMEOUT_MS = 120000; // 2 minutes -- see the "Waiting for host" screen client-side
       const timer = setTimeout(() => denyJoinRequest(room, playerId, 'timeout'), JOIN_REQUEST_TIMEOUT_MS);
       room.pendingJoins.set(playerId, {
-        name: cleanName, firebaseUid: verifiedUid, socketId: socket.id, requestedAt: Date.now(), timer,
+        name: cleanName, firebaseUid: verifiedUid, socketId: socket.id, platform: cleanPlatform(platform), requestedAt: Date.now(), timer,
       });
       socketIndex.set(socket.id, { roomCode: code, playerId, pending: true });
       socket.join(code);
@@ -1181,7 +1246,7 @@ io.on('connection', (socket) => {
       clearTimeout(req.timer);
       room.pendingJoins.delete(playerId);
 
-      room.players.set(playerId, { name: req.name, socketId: req.socketId, connected: true, isBot: false, firebaseUid: req.firebaseUid });
+      room.players.set(playerId, { name: req.name, socketId: req.socketId, connected: true, isBot: false, firebaseUid: req.firebaseUid, platform: req.platform || 'unknown' });
       room.order.push(playerId);
       const sockEntry = socketIndex.get(req.socketId);
       if (sockEntry) sockEntry.pending = false;
