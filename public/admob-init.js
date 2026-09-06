@@ -21,6 +21,8 @@
       hideBanner() {},
       prepareInterstitial() {},
       showInterstitial() { return Promise.resolve(false); },
+      showResultAd() {},
+      hideResultAd() {},
     };
     return;
   }
@@ -56,6 +58,25 @@
   const REAL_INTERSTITIAL_AD_ID = 'ca-app-pub-1398110480284026/1563848703';
   const TEST_INTERSTITIAL_AD_ID = 'ca-app-pub-3940256099942544/1033173712';
 
+  // ---- Large banner (320x100), shown on the round-result screen ----
+  // A SEPARATE banner ad unit from the bottom banner above: same format
+  // (banner), different size, and worth its own unit so the two placements
+  // report and optimise independently.
+  //
+  // This started as a 300x250 medium rectangle (matching what chess.com does
+  // on its game-over screen) and was cut down after measuring the real panel:
+  // at 6 players on a 375x812 phone the scorecard needs 950px against 778px
+  // available, so a 250px ad left it scrolling with Next Round below the fold
+  // even after dropping the podium, the card rows and the emoji. 320x100
+  // gives back 150px, which is what actually lets every player and every
+  // control fit on one screen -- including on shorter phones, where a
+  // rectangle was never going to work.
+  // Real round-result banner unit, created in the AdMob console Sept 2026.
+  // Third unit under the same app (ca-app-pub-1398110480284026~3196770244),
+  // alongside the bottom banner and the interstitial.
+  const REAL_RECT_AD_ID = 'ca-app-pub-1398110480284026/9607658553';
+  const TEST_RECT_AD_ID = 'ca-app-pub-3940256099942544/6300978111';
+
   let useTestAds = false;
   try {
     useTestAds = localStorage.getItem('lc_test_ads') === '1';
@@ -67,9 +88,12 @@
   const INTERSTITIAL_AD_ID = (useTestAds || !REAL_INTERSTITIAL_AD_ID)
     ? TEST_INTERSTITIAL_AD_ID
     : REAL_INTERSTITIAL_AD_ID;
+  const RECT_AD_ID = (useTestAds || !REAL_RECT_AD_ID) ? TEST_RECT_AD_ID : REAL_RECT_AD_ID;
   console.log('[AdMob] using', useTestAds ? 'TEST' : 'REAL', 'banner unit:', BANNER_AD_ID);
   console.log('[AdMob] interstitial unit:', INTERSTITIAL_AD_ID,
     REAL_INTERSTITIAL_AD_ID ? '' : '(TEST -- real interstitial ID not set yet)');
+  console.log('[AdMob] round-result banner unit:', RECT_AD_ID,
+    REAL_RECT_AD_ID ? '' : '(TEST -- real round-result ID not set yet)');
 
   // The banner is a native view with zero footprint in the page's own
   // layout, so every screen -- including the game table -- needs to reserve
@@ -276,5 +300,67 @@
     }
   }
 
-  window.LCAds = { showBanner, hideBanner, prepareInterstitial, showInterstitial };
+  // ------------------------------------------------------------------------
+  // Round-result banner (320x100).
+  //
+  // The plugin holds exactly ONE banner instance, so this can't sit alongside
+  // the bottom banner -- showing the rectangle replaces it, and hiding the
+  // rectangle has to put the bottom banner back. That swap is the whole
+  // complexity here, and it's why both directions are funnelled through these
+  // two functions rather than callers poking showBanner/hideBanner directly.
+  //
+  // Like the bottom banner, this is a NATIVE view floating over the WebView --
+  // it isn't in the page's layout. So the round-result panel reserves a real
+  // 320x100 hole for it (see #round-result-ad in index.html/style.css) and the
+  // ad is positioned to land in that hole, measured fresh each time because
+  // the panel's height changes with the number of players.
+  // ------------------------------------------------------------------------
+  let rectShown = false;
+
+  async function showResultAd(topOffsetPx) {
+    await ensureInit();
+    try {
+      // Swap out the bottom banner first -- one banner instance, so leaving
+      // it up would simply mean the rectangle never appears.
+      if (bannerShown) {
+        try { await AdMob.hideBanner(); } catch (e) { /* nothing was up */ }
+        bannerShown = false;
+        setSafeBottom(0);
+      }
+      await AdMob.showBanner({
+        adId: RECT_AD_ID,
+        adSize: 'LARGE_BANNER',
+        position: 'TOP_CENTER',
+        // Distance from the top of the screen to the reserved hole. Passed
+        // in by the caller, which measures the actual slot, so the ad tracks
+        // the panel instead of being pinned to a guessed constant.
+        margin: Math.max(0, Math.round(topOffsetPx || 0)),
+      });
+      rectShown = true;
+      console.log('[AdMob] round-result banner shown at top margin', Math.round(topOffsetPx || 0));
+    } catch (e) {
+      rectShown = false;
+      console.warn('[AdMob] showResultAd failed:', e && e.message);
+    }
+  }
+
+  async function hideResultAd() {
+    if (!rectShown) return;
+    try {
+      await AdMob.hideBanner();
+    } catch (e) {
+      console.warn('[AdMob] hideResultAd failed:', e && e.message);
+    } finally {
+      rectShown = false;
+      // Put the bottom banner back -- bannerShown is already false, so this
+      // goes through the normal path and re-reserves the safe zone with it.
+      showBanner();
+    }
+  }
+
+  window.LCAds = {
+    showBanner, hideBanner,
+    prepareInterstitial, showInterstitial,
+    showResultAd, hideResultAd,
+  };
 })();
