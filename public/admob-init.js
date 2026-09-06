@@ -47,13 +47,13 @@
   const TEST_BANNER_AD_ID = 'ca-app-pub-3940256099942544/6300978111';
 
   // ---- Interstitial (full screen, shown when leaving a room) ----
-  // TODO: replace with the real interstitial unit once it's created in the
-  // AdMob console (Apps -> Least Count -> Ad units -> Add ad unit ->
-  // Interstitial). It is a DIFFERENT unit from the banner -- a banner ID
-  // will not serve here. Until this is filled in, the test unit is used
-  // automatically (see below), so the flow can be built and tested now and
-  // the real ID dropped in later with no other change.
-  const REAL_INTERSTITIAL_AD_ID = '';
+  // Real interstitial unit, created in the AdMob console Sept 2026. This is
+  // a DIFFERENT unit from the banner above -- same publisher number
+  // (1398110480284026), different digits after the slash -- and the two are
+  // not interchangeable: a banner ID will not serve a full-screen ad.
+  // Both sit under app ID ca-app-pub-1398110480284026~3196770244, which is
+  // the value already registered in AndroidManifest.xml.
+  const REAL_INTERSTITIAL_AD_ID = 'ca-app-pub-1398110480284026/1563848703';
   const TEST_INTERSTITIAL_AD_ID = 'ca-app-pub-3940256099942544/1033173712';
 
   let useTestAds = false;
