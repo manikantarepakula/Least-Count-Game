@@ -959,6 +959,80 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .seat-meta { font-size: 10px; opacity: 0.85; display: block; }
 
+/* ---- Round-end reveal: each player's remaining cards, at their own chair.
+   Shown for a few seconds after a round ends, before the scorecard (see
+   startRevealPhase in app.js).
+
+   The box hangs off its own seat and is never dragged toward the middle.
+   Hanging it INWARD was tried first and works fine at 4 players, but at 6 it
+   collapses -- the top, upper-left and upper-right boxes all land on top of
+   each other, since six chairs around an oval leave no inward room. Sitting
+   under the chip (over it, for bottom seats) survives a full 6-player table
+   with zero overlaps, which is why it's built this way.
+
+   Every number below is bounded by one hard constraint, measured on a real
+   6-player table at 375px wide: the upper-right and lower-right seats leave
+   ~150px of vertical room between them for TWO boxes, so a box may not
+   exceed ~73px tall. That rules out a 2-column grid -- six slots in two
+   columns is three rows, which overflows and makes those two boxes collide.
+   Three columns is two rows and comes in at 71px, and at 70px wide it still
+   sits well inside the 96px seat, so it can't clip at the screen edge the
+   way a wider box does on the left/right seats.
+
+   The type is then pushed as large as that 71px allows: at the first
+   attempt (18x22 cards at the stock .card.mini 7.5px) the faces were
+   unreadable -- blank white tiles where only the ×N badges showed, which
+   defeats the entire point of showing the cards. 20x24 with a 10px bold
+   rank is the largest that fits, and the badge is shrunk to 10px so it
+   stops covering the rank it's annotating. ---- */
+.seat-reveal-box {
+  position: absolute; z-index: 7;
+  top: calc(100% + 4px); left: 50%; transform: translateX(-50%);
+  width: 70px; box-sizing: border-box;
+  padding: 2px 3px;
+  /* Slightly darker than .seat-chip's translucent white so the white card
+     faces stay legible against it wherever it lands on the felt. */
+  background: rgba(6,26,20,0.94);
+  border: 1px solid var(--jade-border); border-radius: var(--radius-sm);
+}
+.seat-reveal-box.above { top: auto; bottom: calc(100% + 4px); }
+.seat-reveal-box.declared { border: 2px solid var(--gold); }
+.seat-reveal-tag {
+  font-size: 7px; color: var(--gold-bright); font-weight: 700; letter-spacing: 0.04em;
+}
+.seat-reveal-value {
+  font-size: 12px; font-weight: 600; color: var(--gold-bright); line-height: 1.1;
+}
+/* justify-items keeps each card at its own natural mini size rather than
+   stretching it to the column -- a card stretched to fill a 1fr column comes
+   out wider than it is tall, which stops reading as a playing card at all. */
+.seat-reveal-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; margin-top: 2px;
+  justify-items: center;
+}
+.seat-reveal-grid .card.mini { width: 20px; height: 24px; }
+/* Bigger than .card.mini's stock 7.5px -- at this size the rank is the whole
+   point (it's what tells you the card's value), so it gets the pixels. */
+.seat-reveal-grid .card.mini .center-rank { font-size: 10px; font-weight: 700; }
+.seat-reveal-grid .card.mini .center-suit { font-size: 8px; }
+/* Stock mini badge is 13px on a 20px card -- it sat squarely on top of the
+   rank underneath it. Shrunk so it annotates the card instead of hiding it. */
+.seat-reveal-grid .card.mini .card-count-badge {
+  width: 10px; height: 10px; font-size: 6px; top: -3px; right: -3px;
+}
+.seat-reveal-more {
+  width: 20px; height: 24px;
+  background: rgba(255,255,255,0.10); border: 1px dashed rgba(255,255,255,0.35);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 6.5px; color: var(--text-muted); text-align: center; line-height: 1.05;
+}
+/* For the duration of the reveal the open card, joker and stock count carry
+   no information -- the round is already decided -- so they're hidden, which
+   is exactly what frees the middle of the oval for the boxes to sit in. */
+#screen-game.reveal-phase .table-center,
+#screen-game.reveal-phase .stock-badge { display: none; }
+
 /* Per-seat recent-discards line -- lives inside the chip itself so it never
    needs its own edge-aware positioning (see renderOvalTable()). */
 .seat-discard-history {
