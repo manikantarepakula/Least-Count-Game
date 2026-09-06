@@ -13,7 +13,15 @@
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
   if (!isNative || !window.Capacitor.Plugins || !window.Capacitor.Plugins.AdMob) {
-    window.LCAds = { showBanner() {}, hideBanner() {} };
+    // Same shape as the real object below, so callers in app.js never have
+    // to check which one they got. showInterstitial() resolves false (as in
+    // "no ad was shown") rather than undefined, matching the real one.
+    window.LCAds = {
+      showBanner() {},
+      hideBanner() {},
+      prepareInterstitial() {},
+      showInterstitial() { return Promise.resolve(false); },
+    };
     return;
   }
 
@@ -38,13 +46,30 @@
   //   localStorage.removeItem('lc_test_ads'); location.reload();
   const TEST_BANNER_AD_ID = 'ca-app-pub-3940256099942544/6300978111';
 
+  // ---- Interstitial (full screen, shown when leaving a room) ----
+  // TODO: replace with the real interstitial unit once it's created in the
+  // AdMob console (Apps -> Least Count -> Ad units -> Add ad unit ->
+  // Interstitial). It is a DIFFERENT unit from the banner -- a banner ID
+  // will not serve here. Until this is filled in, the test unit is used
+  // automatically (see below), so the flow can be built and tested now and
+  // the real ID dropped in later with no other change.
+  const REAL_INTERSTITIAL_AD_ID = '';
+  const TEST_INTERSTITIAL_AD_ID = 'ca-app-pub-3940256099942544/1033173712';
+
   let useTestAds = false;
   try {
     useTestAds = localStorage.getItem('lc_test_ads') === '1';
   } catch (e) { /* storage blocked -- fall through to real ads */ }
 
   const BANNER_AD_ID = useTestAds ? TEST_BANNER_AD_ID : REAL_BANNER_AD_ID;
+  // Falls back to the test unit whenever the real one is still blank, so a
+  // missing ID can never send a malformed/empty adId into the native SDK.
+  const INTERSTITIAL_AD_ID = (useTestAds || !REAL_INTERSTITIAL_AD_ID)
+    ? TEST_INTERSTITIAL_AD_ID
+    : REAL_INTERSTITIAL_AD_ID;
   console.log('[AdMob] using', useTestAds ? 'TEST' : 'REAL', 'banner unit:', BANNER_AD_ID);
+  console.log('[AdMob] interstitial unit:', INTERSTITIAL_AD_ID,
+    REAL_INTERSTITIAL_AD_ID ? '' : '(TEST -- real interstitial ID not set yet)');
 
   // The banner is a native view with zero footprint in the page's own
   // layout, so every screen -- including the game table -- needs to reserve
@@ -185,5 +210,71 @@
     }
   }
 
-  window.LCAds = { showBanner, hideBanner };
+  // ------------------------------------------------------------------------
+  // Interstitial -- the full-screen ad shown when a player leaves a room.
+  //
+  // Two rules shape everything below, both from Google's own policy (an
+  // account can be suspended for breaking them, which matters a lot more
+  // than the few rupees an extra impression earns):
+  //   1. Never interrupt play. It fires on the way OUT of a room, at a
+  //      natural stopping point -- never mid-hand, never on a timer.
+  //   2. Never make the ad feel mandatory or trap the user. Leaving the room
+  //      happens regardless of whether the ad loads, fails, or is skipped.
+  //
+  // An interstitial must be LOADED before it can be shown, and loading takes
+  // a few seconds, so prepare() is called early (when a game screen opens)
+  // and show() just presents whatever is already in hand. If nothing is
+  // ready, show() gives up immediately rather than making the player wait.
+  // ------------------------------------------------------------------------
+  const MIN_MS_BETWEEN_INTERSTITIALS = 3 * 60 * 1000; // ~1 ad per 3 minutes, max
+  let interstitialReady = false;
+  let interstitialLoading = false;
+  let lastInterstitialAt = 0;
+
+  async function prepareInterstitial() {
+    if (interstitialReady || interstitialLoading) return;
+    interstitialLoading = true;
+    try {
+      await ensureInit();
+      await AdMob.prepareInterstitial({ adId: INTERSTITIAL_AD_ID });
+      interstitialReady = true;
+      console.log('[AdMob] interstitial prepared and ready');
+    } catch (e) {
+      // Most often a no-fill, same as the banner -- nothing to do but carry
+      // on without one. Deliberately not retried in a loop; the next
+      // prepare() call comes from the next natural trigger.
+      interstitialReady = false;
+      console.warn('[AdMob] prepareInterstitial failed:', e && e.message);
+    } finally {
+      interstitialLoading = false;
+    }
+  }
+
+  async function showInterstitial() {
+    if (!interstitialReady) {
+      // Nothing loaded -- leave silently and start loading one for next time.
+      prepareInterstitial();
+      return false;
+    }
+    if (Date.now() - lastInterstitialAt < MIN_MS_BETWEEN_INTERSTITIALS) {
+      console.log('[AdMob] interstitial skipped (frequency cap)');
+      return false;
+    }
+    try {
+      await AdMob.showInterstitial();
+      lastInterstitialAt = Date.now();
+      console.log('[AdMob] interstitial shown');
+      return true;
+    } catch (e) {
+      console.warn('[AdMob] showInterstitial failed:', e && e.message);
+      return false;
+    } finally {
+      // A given interstitial is single-use -- once shown (or once it failed)
+      // the loaded ad is spent, so queue the next one up for later.
+      interstitialReady = false;
+      prepareInterstitial();
+    }
+  }
+
+  window.LCAds = { showBanner, hideBanner, prepareInterstitial, showInterstitial };
 })();
