@@ -112,6 +112,10 @@
   let initPromise = null;
   let bannerShown = false;
   let listenerAdded = false;
+  // True while the round-result banner has taken over the single banner slot.
+  // Declared up here with the other state flags rather than next to its own
+  // functions further down, because showBanner() below has to consult it.
+  let rectShown = false;
 
   function ensureSizeListener() {
     if (listenerAdded) return;
@@ -201,6 +205,16 @@
 
   async function showBanner() {
     if (bannerShown) return;
+    // BUG (found after the round-result ad shipped and never appeared): the
+    // guard above used to be the only one, and the round-result swap sets
+    // bannerShown=false so it can take over the single banner slot. But
+    // showScreen('screen-game') calls this on EVERY game_state push, and
+    // those keep arriving while the scorecard is open -- so the bottom
+    // banner immediately re-showed and replaced the round-result ad within
+    // a fraction of a second of it appearing. While the round-result ad
+    // owns the slot, the bottom banner has to stay out of the way; it's
+    // restored explicitly by hideResultAd() when the scorecard closes.
+    if (rectShown) return;
     ensureSizeListener();
     ensureDiagListeners();
     await ensureInit();
@@ -315,13 +329,17 @@
   // ad is positioned to land in that hole, measured fresh each time because
   // the panel's height changes with the number of players.
   // ------------------------------------------------------------------------
-  let rectShown = false;
-
   async function showResultAd(topOffsetPx) {
+    // Claim the slot BEFORE the first await, not after the ad is up. There
+    // are several awaits below, and game_state pushes keep arriving through
+    // them -- each one calls showBanner(), which would grab the single
+    // banner slot back mid-swap. Setting the flag first is what makes that
+    // guard effective for the whole operation, not just after it finishes.
+    rectShown = true;
     await ensureInit();
     try {
       // Swap out the bottom banner first -- one banner instance, so leaving
-      // it up would simply mean the rectangle never appears.
+      // it up would simply mean the round-result ad never appears.
       if (bannerShown) {
         try { await AdMob.hideBanner(); } catch (e) { /* nothing was up */ }
         bannerShown = false;
@@ -336,11 +354,14 @@
         // the panel instead of being pinned to a guessed constant.
         margin: Math.max(0, Math.round(topOffsetPx || 0)),
       });
-      rectShown = true;
       console.log('[AdMob] round-result banner shown at top margin', Math.round(topOffsetPx || 0));
     } catch (e) {
+      // Release the slot again on failure, otherwise the bottom banner would
+      // stay suppressed for the rest of the session over an ad that never
+      // actually appeared.
       rectShown = false;
       console.warn('[AdMob] showResultAd failed:', e && e.message);
+      showBanner();
     }
   }
 
