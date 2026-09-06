@@ -135,7 +135,19 @@ body.game-active {
 /* Cards fanned out on a felt circle at the top, fading straight into the
    page's own dark green background, with the form sitting directly on it
    (no white card-panel here -- these two screens use their own dark theme). */
-#screen-landing.screen.active, #screen-lobby.screen.active { padding: 0; }
+/* These two screens are full-bleed (the hero art and top bar run edge to
+   edge), so they drop .screen's 16px padding entirely. The bottom is the
+   exception: .screen reserves --ad-safe-bottom there so the native AdMob
+   banner -- which is drawn OVER the WebView and takes up no layout space of
+   its own -- can't cover anything. This rule's `padding: 0` shorthand was
+   silently wiping that reservation out (it's more specific than .screen), and
+   on the landing screen the bottom-most element is the Home/Stats/Rules nav,
+   which ended up sitting exactly underneath the banner and unreachable.
+   Keeping the horizontal/top padding at 0 but restoring the bottom safe zone
+   fixes it without touching the full-bleed look. */
+#screen-landing.screen.active, #screen-lobby.screen.active {
+  padding: 0 0 var(--ad-safe-bottom, 0px);
+}
 
 .hero-landing { position: relative; height: 210px; overflow: hidden; }
 .hero-landing-sm { height: 150px; }
@@ -252,7 +264,17 @@ body.game-active {
    so it doesn't stretch edge-to-edge on a wide monitor. ---- */
 #screen-landing.screen.active,
 #screen-lobby.screen.active {
-  background: var(--jade-bg-dark); position: relative; overflow: hidden;
+  background: var(--jade-bg-dark); position: relative;
+  /* Horizontal overflow stays hidden -- that's what keeps the decorative
+     suit-pattern ::before layer from widening the page. Vertical, though,
+     must NOT be hidden: on a short screen (or with a tall ad banner eating
+     the bottom), this screen's content is genuinely taller than the space
+     available, and `overflow: hidden` silently CLIPPED the overflowing part
+     -- which is the Home/Stats/Rules nav, since it sits last. Allowing a
+     scroll means that in the worst case the nav can still be reached by
+     scrolling, instead of being cut off with no way to get to it. On normal
+     phones nothing scrolls at all, because the content fits. */
+  overflow-x: hidden; overflow-y: auto;
   display: flex; flex-direction: column; min-height: 100vh;
 }
 #screen-landing.screen.active::before,
