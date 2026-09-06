@@ -684,7 +684,19 @@
       // everything else -- once someone's paid to remove ads, the banner
       // should never come back, on any screen.
       if (adsRemoved) window.LCAds.hideBanner();
-      else window.LCAds.showBanner();
+      else {
+        window.LCAds.showBanner();
+        // Start loading the leave-room interstitial as soon as a room is
+        // entered. An interstitial takes a few seconds to fetch and can
+        // only be shown once loaded, so waiting until the player actually
+        // taps Leave would mean there's nothing ready to show. Preparing it
+        // here -- minutes ahead of the moment it's needed -- is what makes
+        // the ad appear instantly instead of not at all. Safe to call
+        // repeatedly: it no-ops if one is already loaded or in flight.
+        if (id === 'screen-game' || id === 'screen-lobby') {
+          window.LCAds.prepareInterstitial();
+        }
+      }
     }
     if (id === 'screen-game') {
       applyKeyboardSafeLayout();
@@ -2511,6 +2523,16 @@
       document.getElementById('overlay-gameover').classList.add('hidden');
       document.getElementById('overlay-scores').classList.add('hidden');
       showScreen('screen-landing');
+      // Full-screen interstitial on the way out of a room -- a natural
+      // stopping point, never mid-game. Deliberately fired AFTER the leave
+      // has fully completed and the landing screen is already showing, so
+      // the player is never held up by it: if the ad is missing, slow, or
+      // fails outright, they're already where they wanted to be and simply
+      // see no ad. It also self-limits (see MIN_MS_BETWEEN_INTERSTITIALS in
+      // admob-init.js), so repeatedly hopping in and out of rooms won't
+      // produce an ad every time. adsRemoved covers the paid Remove Ads
+      // purchase -- those players must never see this.
+      if (window.LCAds && !adsRemoved) window.LCAds.showInterstitial();
     });
   }
   document.getElementById('btn-leave-lobby').onclick = leaveRoom;
