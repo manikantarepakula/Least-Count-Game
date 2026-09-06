@@ -2327,7 +2327,14 @@
       if (finalValues[p.playerId] !== undefined) {
         const valueEl = document.createElement('span');
         valueEl.className = 'reveal-value';
-        valueEl.textContent = finalValues[p.playerId] + ' in hand';
+        // "pts", not a bare number: this is the POINT VALUE of the cards they
+        // were caught holding, not how many cards that was. Written as plain
+        // "13 in hand" it read as "13 cards", which was actively misleading
+        // -- worst on the declarer's row, where "1 in hand" sat next to
+        // "0 + 0 = 0" and looked like a contradiction rather than "one point
+        // of cards, scoring nothing because the declare was correct".
+        const v = finalValues[p.playerId];
+        valueEl.textContent = v + (v === 1 ? ' pt' : ' pts') + ' in hand';
         cardsWrap.appendChild(valueEl);
       }
       mainRow.appendChild(cardsWrap);
@@ -2389,17 +2396,33 @@
   // when this runs and an element that's still display:none measures as 0.
   function showRoundResultAd() {
     const slot = document.getElementById('round-result-ad');
-    if (!slot) return;
+    if (!slot) { console.warn('[Ads] round-result: slot element missing'); return; }
     if (adsRemoved || !window.LCAds) {
+      console.log('[Ads] round-result: skipped (adsRemoved=' + adsRemoved + ', LCAds=' + !!window.LCAds + ')');
       slot.classList.add('hidden');
       return;
     }
     slot.classList.remove('hidden');
-    requestAnimationFrame(() => {
-      const rect = slot.getBoundingClientRect();
-      if (rect.height <= 0) return;
-      window.LCAds.showResultAd(rect.top);
-    });
+    // Measured synchronously, with NO requestAnimationFrame. The first
+    // version wrapped this in rAF to wait out the overlay's display:none,
+    // which was doubly wrong: the call site now runs after the overlay is
+    // already visible so there's nothing to wait for, and rAF only fires
+    // while the page is actually being painted -- if the WebView throttles
+    // rendering for even a moment, the callback never runs and the ad is
+    // silently never requested, with no error anywhere to explain it.
+    const rect = slot.getBoundingClientRect();
+    console.log('[Ads] round-result: slot top=' + Math.round(rect.top)
+      + ' height=' + Math.round(rect.height)
+      + ' hasShowResultAd=' + (typeof (window.LCAds || {}).showResultAd));
+    if (rect.height <= 0) {
+      console.warn('[Ads] round-result: slot has no height -- ad not requested');
+      return;
+    }
+    if (typeof window.LCAds.showResultAd !== 'function') {
+      console.warn('[Ads] round-result: LCAds.showResultAd missing -- stale admob-init.js?');
+      return;
+    }
+    window.LCAds.showResultAd(rect.top);
   }
 
   function hideRoundResultAd() {
@@ -2461,7 +2484,6 @@
       podiumEl.innerHTML = '';
     }
     renderHandRevealRows(game, ranked);
-    showRoundResultAd();
 
     const noteEl = document.getElementById('round-result-note');
     noteEl.textContent = (r.newlyEliminated && r.newlyEliminated.length)
@@ -2469,6 +2491,13 @@
       : '';
 
     document.getElementById('overlay-round-result').classList.remove('hidden');
+    // Deliberately AFTER the overlay is unhidden. It used to run before, and
+    // relied on requestAnimationFrame firing late enough for the panel to
+    // have been laid out -- but until the overlay loses .hidden the whole
+    // subtree is display:none, so the slot measures as zero height and the
+    // ad request was being skipped. Calling it here means the panel is
+    // already visible and measurable, with no timing assumption at all.
+    showRoundResultAd();
     updateRoundResultHostControls();
   }
 
