@@ -202,6 +202,25 @@
   let adsRemoved = false;
   const removeAdsBtn = document.getElementById('btn-remove-ads');
 
+  // Developer override: forces ads back on for THIS device even when the
+  // Remove Ads entitlement is active. Exists because making a test purchase
+  // permanently hides every ad on the tester's own phone, which then makes
+  // it impossible to check ad work without borrowing somebody else's device.
+  //
+  // Purely a display override -- it does not touch the purchase, the
+  // entitlement, or RevenueCat in any way, and it only affects the phone
+  // it's typed on. Turn on from the chrome://inspect console with:
+  //   localStorage.setItem('lc_force_ads','1'); location.reload();
+  // and off again with:
+  //   localStorage.removeItem('lc_force_ads'); location.reload();
+  let forceAdsForTesting = false;
+  try {
+    forceAdsForTesting = localStorage.getItem('lc_force_ads') === '1';
+  } catch (e) { /* storage blocked -- behave normally */ }
+  if (forceAdsForTesting) {
+    console.log('[Ads] lc_force_ads is ON -- ads shown even though Remove Ads may be purchased.');
+  }
+
   async function refreshRemoveAdsUI() {
     if (!removeAdsBtn || !window.LCPurchases || !window.LCPurchases.isReady()) return;
     try {
@@ -222,6 +241,9 @@
     } catch (e) {
       adsRemoved = false;
     }
+    // Applied after the real check, so the entitlement is still read and
+    // logged normally -- this only overrides what the UI does about it.
+    if (forceAdsForTesting) adsRemoved = false;
     if (adsRemoved) {
       removeAdsBtn.classList.add('hidden');
       if (window.LCAds) window.LCAds.hideBanner();
@@ -244,7 +266,10 @@
           return;
         }
         await window.LCPurchases.purchasePackage(pkg);
-        adsRemoved = true;
+        // The purchase itself always goes through; the override only decides
+        // whether THIS device then acts on it, so a tester can buy again and
+        // still keep seeing ads to check them.
+        adsRemoved = !forceAdsForTesting;
         removeAdsBtn.classList.add('hidden');
         if (window.LCAds) window.LCAds.hideBanner();
         if (window.LCAnalytics) window.LCAnalytics.log('ads_removed_purchase');
