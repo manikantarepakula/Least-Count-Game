@@ -2322,21 +2322,14 @@
       // this panel, which is what forced it to scroll once a table had more
       // than a few players. Dropping them is what lets every player fit on
       // one screen, and frees the room the ad slot now occupies.
+      // Nothing on the left of the row any more -- no card tiles, and no
+      // hand-value text either. The cards AND their value are both shown at
+      // each player's chair during the reveal phase that runs just before
+      // this screen, so repeating the value here was the third time the same
+      // information appeared. The round-score sum on the right (this round +
+      // previous = new total) is what this screen is actually for.
       const cardsWrap = document.createElement('div');
       cardsWrap.className = 'reveal-cards';
-      if (finalValues[p.playerId] !== undefined) {
-        const valueEl = document.createElement('span');
-        valueEl.className = 'reveal-value';
-        // "pts", not a bare number: this is the POINT VALUE of the cards they
-        // were caught holding, not how many cards that was. Written as plain
-        // "13 in hand" it read as "13 cards", which was actively misleading
-        // -- worst on the declarer's row, where "1 in hand" sat next to
-        // "0 + 0 = 0" and looked like a contradiction rather than "one point
-        // of cards, scoring nothing because the declare was correct".
-        const v = finalValues[p.playerId];
-        valueEl.textContent = v + (v === 1 ? ' pt' : ' pts') + ' in hand';
-        cardsWrap.appendChild(valueEl);
-      }
       mainRow.appendChild(cardsWrap);
 
       const mathEl = document.createElement('div');
