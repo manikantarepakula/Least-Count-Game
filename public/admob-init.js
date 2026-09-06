@@ -110,12 +110,7 @@
   }
 
   let initPromise = null;
-  let bannerShown = false;
   let listenerAdded = false;
-  // True while the round-result banner has taken over the single banner slot.
-  // Declared up here with the other state flags rather than next to its own
-  // functions further down, because showBanner() below has to consult it.
-  let rectShown = false;
 
   function ensureSizeListener() {
     if (listenerAdded) return;
@@ -133,7 +128,7 @@
     // never the banner itself.
     try {
       const result = AdMob.addListener('bannerAdSizeChanged', (size) => {
-        if (bannerShown && size && typeof size.height === 'number' && size.height > 0) {
+        if (appliedKind === BANNER_BOTTOM && size && typeof size.height === 'number' && size.height > 0) {
           setSafeBottom(size.height);
         }
       });
@@ -203,68 +198,129 @@
     return initPromise;
   }
 
-  // Is the scorecard actually on screen right now? Asked of the DOM rather
-  // than tracked in a variable, because this is the thing that decides
-  // whether the bottom banner should stand down -- and a variable that says
-  // "stand down" can get stuck, while the overlay's real visibility cannot.
+  // ------------------------------------------------------------------------
+  // Banner state: intent, not mirrored native state.
+  //
+  // Every banner bug in this app has had the same shape. There is ONE native
+  // banner slot, and we used to track what was in it with booleans
+  // (bannerShown / rectShown) that were only ever updated by our own calls.
+  // But the slot changes underneath us -- most importantly, showing an
+  // interstitial makes the plugin hide the banner itself (visible in the
+  // device log as showInterstitial immediately followed by hideBanner). Our
+  // boolean still said "banner is up", so showBanner() early-returned and
+  // the banner never came back. That's why the landing-page banner vanished
+  // after an interstitial, and why a stuck flag could kill every ad in the
+  // app for the rest of the session.
+  //
+  // So: `desired` records what SHOULD be on screen, `applied` records what we
+  // last actually told the native side, and apply() reconciles the two. Any
+  // time the native slot might have changed without us (after an
+  // interstitial), applied is invalidated and the desired state is simply
+  // re-issued. Nothing latches, and no failure can leave ads permanently off
+  // -- the worst case is one redundant native call.
+  // ------------------------------------------------------------------------
+  const BANNER_NONE = 'none';
+  const BANNER_BOTTOM = 'bottom';
+  const BANNER_RESULT = 'result';
+
+  let desiredKind = BANNER_NONE;
+  let desiredMargin = 0;
+  let appliedKind = null;   // null = unknown, must re-issue
+  let appliedMargin = null;
+  let applyRunning = null;
+
+  function requestBanner(kind, margin) {
+    desiredKind = kind;
+    desiredMargin = Math.max(0, Math.round(margin || 0));
+    scheduleApply();
+  }
+
+  // Marks our record of the native slot as unknown, so the next apply()
+  // re-issues the desired state even if it looks unchanged.
+  function invalidateBannerState(why) {
+    appliedKind = null;
+    appliedMargin = null;
+    if (why) console.log('[AdMob] banner state invalidated:', why);
+  }
+
+  function scheduleApply() {
+    if (applyRunning) return;   // the running loop re-checks desired at the end
+    applyRunning = (async () => {
+      try {
+        ensureSizeListener();
+        ensureDiagListeners();
+        await ensureInit();
+        // Loop until native matches intent -- intent can change while an
+        // await is in flight, which is exactly the race that used to let a
+        // game_state push steal the slot mid-swap.
+        for (let guard = 0; guard < 10; guard++) {
+          const kind = desiredKind;
+          const margin = desiredMargin;
+          if (kind === appliedKind && margin === appliedMargin) break;
+          try {
+            if (kind === BANNER_NONE) {
+              await AdMob.hideBanner();
+              setSafeBottom(0);
+            } else if (kind === BANNER_BOTTOM) {
+              await AdMob.showBanner({
+                adId: BANNER_AD_ID,
+                adSize: 'ADAPTIVE_BANNER',
+                position: 'BOTTOM_CENTER',
+                margin: 0,
+              });
+              // Reaching here only means the native call returned, not that
+              // an ad loaded -- watch for BANNER LOADED / FAILED TO LOAD.
+              console.log('[AdMob] bottom banner requested');
+              setSafeBottom(FALLBACK_BANNER_HEIGHT_PX);
+            } else {
+              await AdMob.showBanner({
+                adId: RECT_AD_ID,
+                adSize: 'LARGE_BANNER',
+                position: 'TOP_CENTER',
+                margin: margin,
+              });
+              console.log('[AdMob] round-result banner requested at top margin', margin);
+              // The round-result ad floats over the scorecard, not above the
+              // bottom nav, so it reserves no bottom safe-zone of its own.
+              setSafeBottom(0);
+            }
+            appliedKind = kind;
+            appliedMargin = margin;
+          } catch (e) {
+            console.warn('[AdMob] banner apply failed for "' + kind + '":', e && e.message);
+            // Leave applied as unknown so the next request retries rather
+            // than assuming this state stuck.
+            invalidateBannerState(null);
+            break;
+          }
+        }
+      } finally {
+        applyRunning = null;
+        // Intent may have changed during the final await -- run again if so.
+        if (desiredKind !== appliedKind || desiredMargin !== appliedMargin) scheduleApply();
+      }
+    })();
+  }
+
+  // Is the scorecard actually on screen right now? Asked of the DOM every
+  // time rather than tracked in a variable: this decides whether the bottom
+  // banner should stand down, and a variable saying "stand down" can get
+  // stuck (it did, and it killed every ad in the app), whereas the overlay's
+  // real visibility cannot.
   function resultOverlayOpen() {
     const el = document.getElementById('overlay-round-result');
     return !!el && !el.classList.contains('hidden');
   }
 
-  async function showBanner() {
-    if (bannerShown) return;
-    // While the round-result ad owns the single banner slot, the bottom
-    // banner must stay out of the way -- showScreen('screen-game') calls
-    // this on EVERY game_state push, and those keep arriving while the
-    // scorecard is open, so without this it would immediately re-show and
-    // replace the round-result ad within a fraction of a second.
-    //
-    // BUG (this broke every ad in the app, including the landing page):
-    // this used to be a bare `if (rectShown) return;`. rectShown is a latch
-    // set before the swap's awaits, so any path that failed to clear it --
-    // the scorecard closing without the restore running, an await that
-    // never settles -- left it stuck true and silently blocked EVERY banner
-    // request for the rest of the session. Checking whether the scorecard
-    // is genuinely open makes it self-healing: the moment it isn't, a stale
-    // flag is corrected and banners resume.
-    if (rectShown) {
-      if (resultOverlayOpen()) return;
-      console.warn('[AdMob] clearing stale round-result flag (scorecard is closed)');
-      rectShown = false;
-    }
-    ensureSizeListener();
-    ensureDiagListeners();
-    await ensureInit();
-    try {
-      await AdMob.showBanner({
-        adId: BANNER_AD_ID,
-        adSize: 'ADAPTIVE_BANNER',
-        position: 'BOTTOM_CENTER',
-        margin: 0,
-      });
-      // NOTE: reaching here only means the native call returned -- see the
-      // long comment above. Watch for the BANNER LOADED / BANNER FAILED TO
-      // LOAD log that follows this one; that's the real outcome.
-      console.log('[AdMob] showBanner() native call returned (ad not necessarily loaded yet)');
-      bannerShown = true;
-      setSafeBottom(FALLBACK_BANNER_HEIGHT_PX);
-    } catch (e) {
-      console.warn('[AdMob] showBanner failed:', e && e.message);
-    }
+  function showBanner() {
+    // showScreen('screen-game') calls this on EVERY game_state push, and
+    // those keep arriving while the scorecard is open. Without this the
+    // bottom banner would immediately reclaim the single slot and replace
+    // the round-result ad a fraction of a second after it appeared.
+    if (resultOverlayOpen()) return;
+    requestBanner(BANNER_BOTTOM, 0);
   }
-
-  async function hideBanner() {
-    if (!bannerShown) return;
-    try {
-      await AdMob.hideBanner();
-    } catch (e) {
-      console.warn('[AdMob] hideBanner failed:', e && e.message);
-    } finally {
-      bannerShown = false;
-      setSafeBottom(0);
-    }
-  }
+  function hideBanner() { requestBanner(BANNER_NONE, 0); }
 
   // ------------------------------------------------------------------------
   // Interstitial -- the full-screen ad shown when a player leaves a room.
@@ -329,6 +385,15 @@
       // the loaded ad is spent, so queue the next one up for later.
       interstitialReady = false;
       prepareInterstitial();
+      // THE landing-page-banner bug: showing a full-screen ad makes the
+      // plugin hide the banner ITSELF (device logs show showInterstitial
+      // immediately followed by hideBanner, which nothing in this file
+      // asked for). Our record still claimed a banner was up, so every
+      // later request was skipped as redundant and the landing page stayed
+      // blank for the rest of the session. Forget what we believe the slot
+      // holds and re-assert the desired banner, which brings it back.
+      invalidateBannerState('interstitial hid the banner natively');
+      scheduleApply();
     }
   }
 
@@ -347,54 +412,17 @@
   // ad is positioned to land in that hole, measured fresh each time because
   // the panel's height changes with the number of players.
   // ------------------------------------------------------------------------
-  async function showResultAd(topOffsetPx) {
-    // Claim the slot BEFORE the first await, not after the ad is up. There
-    // are several awaits below, and game_state pushes keep arriving through
-    // them -- each one calls showBanner(), which would grab the single
-    // banner slot back mid-swap. Setting the flag first is what makes that
-    // guard effective for the whole operation, not just after it finishes.
-    rectShown = true;
-    await ensureInit();
-    try {
-      // Swap out the bottom banner first -- one banner instance, so leaving
-      // it up would simply mean the round-result ad never appears.
-      if (bannerShown) {
-        try { await AdMob.hideBanner(); } catch (e) { /* nothing was up */ }
-        bannerShown = false;
-        setSafeBottom(0);
-      }
-      await AdMob.showBanner({
-        adId: RECT_AD_ID,
-        adSize: 'LARGE_BANNER',
-        position: 'TOP_CENTER',
-        // Distance from the top of the screen to the reserved hole. Passed
-        // in by the caller, which measures the actual slot, so the ad tracks
-        // the panel instead of being pinned to a guessed constant.
-        margin: Math.max(0, Math.round(topOffsetPx || 0)),
-      });
-      console.log('[AdMob] round-result banner shown at top margin', Math.round(topOffsetPx || 0));
-    } catch (e) {
-      // Release the slot again on failure, otherwise the bottom banner would
-      // stay suppressed for the rest of the session over an ad that never
-      // actually appeared.
-      rectShown = false;
-      console.warn('[AdMob] showResultAd failed:', e && e.message);
-      showBanner();
-    }
+  // Both directions are just intent changes now -- the reconciler above owns
+  // every native call, so the swap can't race a game_state push, and no
+  // failure can leave the slot in a state that nobody restores.
+  function showResultAd(topOffsetPx) {
+    requestBanner(BANNER_RESULT, topOffsetPx);
   }
 
-  async function hideResultAd() {
-    if (!rectShown) return;
-    try {
-      await AdMob.hideBanner();
-    } catch (e) {
-      console.warn('[AdMob] hideResultAd failed:', e && e.message);
-    } finally {
-      rectShown = false;
-      // Put the bottom banner back -- bannerShown is already false, so this
-      // goes through the normal path and re-reserves the safe zone with it.
-      showBanner();
-    }
+  function hideResultAd() {
+    // Back to the bottom banner. Safe to call even if the round-result ad
+    // never actually appeared -- reconciling to "bottom" is always valid.
+    requestBanner(BANNER_BOTTOM, 0);
   }
 
   window.LCAds = {
