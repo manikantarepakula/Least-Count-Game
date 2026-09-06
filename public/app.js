@@ -2290,36 +2290,19 @@
       const mainRow = document.createElement('div');
       mainRow.className = 'reveal-main';
 
+      // No card tiles here any more. Every player's actual cards are now
+      // shown face-up at their own chair during the reveal phase that runs
+      // before this screen (see startRevealPhase), so repeating them here
+      // was pure duplication -- and they were by far the tallest thing on
+      // this panel, which is what forced it to scroll once a table had more
+      // than a few players. Dropping them is what lets every player fit on
+      // one screen, and frees the room the ad slot now occupies.
       const cardsWrap = document.createElement('div');
       cardsWrap.className = 'reveal-cards';
-      const hand = finalHands[p.playerId] || [];
-      const groups = groupHand(hand)
-        .slice()
-        .sort((a, b) => cardValueClient(b.cards[0], wildRank) - cardValueClient(a.cards[0], wildRank));
-      const shownGroups = groups.slice(0, REVEAL_MAX_TILES);
-      shownGroups.forEach((g) => {
-        const el = cardEl(g.cards[0]);
-        el.classList.add('mini');
-        if (g.cards.length > 1) {
-          const badge = document.createElement('span');
-          badge.className = 'card-count-badge';
-          badge.textContent = '×' + g.cards.length;
-          el.appendChild(badge);
-        }
-        cardsWrap.appendChild(el);
-      });
-      const shownCardCount = shownGroups.reduce((sum, g) => sum + g.cards.length, 0);
-      const remaining = hand.length - shownCardCount;
-      if (remaining > 0) {
-        const more = document.createElement('span');
-        more.className = 'reveal-more';
-        more.textContent = '+' + remaining;
-        cardsWrap.appendChild(more);
-      }
       if (finalValues[p.playerId] !== undefined) {
         const valueEl = document.createElement('span');
         valueEl.className = 'reveal-value';
-        valueEl.textContent = '= ' + finalValues[p.playerId];
+        valueEl.textContent = finalValues[p.playerId] + ' in hand';
         cardsWrap.appendChild(valueEl);
       }
       mainRow.appendChild(cardsWrap);
@@ -2373,6 +2356,48 @@
     }
   }
 
+  // The 300x250 is a native view floating over the WebView, so it has to be
+  // told where the reserved hole actually is. The panel's height changes with
+  // the player count (and whether the podium is showing), so the slot is
+  // measured fresh on every open rather than positioned from a constant.
+  // Measured after a frame, because the overlay is only just being unhidden
+  // when this runs and an element that's still display:none measures as 0.
+  function showRoundResultAd() {
+    const slot = document.getElementById('round-result-ad');
+    if (!slot) return;
+    if (adsRemoved || !window.LCAds) {
+      slot.classList.add('hidden');
+      return;
+    }
+    slot.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      const rect = slot.getBoundingClientRect();
+      if (rect.height <= 0) return;
+      window.LCAds.showResultAd(rect.top);
+    });
+  }
+
+  function hideRoundResultAd() {
+    if (window.LCAds) window.LCAds.hideResultAd();
+  }
+
+  // The round-result overlay gets closed from six different places (Next
+  // Round, See Final Result, leaving the room, the game-over handoff, the
+  // rejoin path...). Hooking each one means one of them eventually gets
+  // missed, and a missed one strands a 300x250 native ad floating over the
+  // table with no way to dismiss it. Watching the element itself catches
+  // every path, including any added later.
+  (function watchRoundResultOverlay() {
+    const overlay = document.getElementById('overlay-round-result');
+    if (!overlay || typeof MutationObserver !== 'function') return;
+    let wasHidden = overlay.classList.contains('hidden');
+    new MutationObserver(() => {
+      const isHidden = overlay.classList.contains('hidden');
+      if (isHidden && !wasHidden) hideRoundResultAd();
+      wasHidden = isHidden;
+    }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
+  })();
+
   function showRoundResult(game) {
     window.__lastRoundResultShownFor = game.roundNumber;
     const r = game.lastRoundResult;
@@ -2396,8 +2421,22 @@
     emojiEl.style.animation = 'scoreCardEmojiPop 3.4s ease 1 both';
 
     const ranked = rankedPlayers(game);
-    renderPodium(game, ranked);
+    // Podium is a FINAL-STANDINGS idea, so it only earns its space once the
+    // game is actually over. Mid-game it was showing the top 3 of a race
+    // that isn't finished, while the rows below already list every player's
+    // round score and running total -- and it silently omitted anyone past
+    // 3rd, which on a 4+ player table meant hiding the most interesting
+    // number on the screen (whoever is closest to being knocked out).
+    const podiumEl = document.getElementById('podium');
+    if (game.gameOver) {
+      podiumEl.classList.remove('hidden');
+      renderPodium(game, ranked);
+    } else {
+      podiumEl.classList.add('hidden');
+      podiumEl.innerHTML = '';
+    }
     renderHandRevealRows(game, ranked);
+    showRoundResultAd();
 
     const noteEl = document.getElementById('round-result-note');
     noteEl.textContent = (r.newlyEliminated && r.newlyEliminated.length)
