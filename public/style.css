@@ -959,6 +959,32 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .seat-meta { font-size: 10px; opacity: 0.85; display: block; }
 
+/* Reserved space for the 320x100 native ad on the round-result screen. The
+   ad floats over the WebView and contributes no layout height of its own, so
+   without this box the score rows would render underneath it. Height matches
+   the ad exactly; app.js measures this element's real position each time and
+   tells the native side where to draw, since the panel's height shifts with
+   the player count. */
+.round-result-ad { height: 100px; width: 100%; max-width: 320px; margin: 8px auto; }
+.round-result-ad.hidden { display: none; }
+
+/* Compact one-line score rows. These used to carry each player's card tiles,
+   which made every row ~48px and, at six players, pushed Next Round below
+   the fold once the ad slot was added. The cards now live at the chairs
+   during the reveal phase, so a row only needs the name, the hand value and
+   the running-total sum -- which fits on one line at ~34px. */
+#round-result-hands .reveal-row { padding: 5px 8px; margin-bottom: 4px; }
+#round-result-hands .reveal-name { font-size: 13px; }
+#round-result-hands .reveal-main {
+  display: flex; align-items: center; justify-content: space-between; margin-top: 0;
+}
+#round-result-hands .reveal-value { font-size: 12px; }
+#round-result-hands .reveal-math { font-size: 12px; }
+/* The celebratory emoji is the cheapest thing on this panel to give up, and
+   the headline already says whether the declare was right or wrong. */
+#round-result-emoji { display: none; }
+#round-result-title { font-size: 17px; line-height: 1.25; margin: 0 0 4px; }
+
 /* ---- Round-end reveal: each player's remaining cards, at their own chair.
    Shown for a few seconds after a round ends, before the scorecard (see
    startRevealPhase in app.js).
@@ -1340,7 +1366,13 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
    the old separate at-the-seat card reveal -- everyone's actual final hand
    for the round (priciest cards first, capped tiles + "+N"), its value, and
    the round-score math, all in one merged screen. See renderHandRevealRows(). ---- */
-.reveal-rows { border-top: 1.5px solid var(--jade-border); padding-top: 6px; max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+/* 34vh was sized for the old rows, which carried card tiles and ran ~48px
+   each. The rows are ~41px now, and six of them need 276px -- exactly 34vh on
+   a 812px phone, so the sixth player was landing right on the cap and getting
+   clipped. 40vh clears a full 6-player table with the panel still inside its
+   own max-height. Beyond six the list scrolls, which is the right thing to
+   give up: the buttons underneath stay put either way. */
+.reveal-rows { border-top: 1.5px solid var(--jade-border); padding-top: 6px; max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .reveal-row { background: var(--jade-panel-alt); border-radius: var(--radius-sm); padding: 7px 9px; }
 .reveal-row.declared { background: rgba(212,160,23,0.14); border: 1px solid var(--gold); }
 .reveal-row.eliminated { opacity: 0.55; }
