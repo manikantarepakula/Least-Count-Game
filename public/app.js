@@ -1730,7 +1730,7 @@
       // separate floating box), so it never needs edge-aware positioning --
       // it just makes the pill a little taller, never wider than the seat.
       const history = (!dealing && game && game.discardHistory) ? game.discardHistory[p.playerId] : null;
-      if (history && history.length > 0) {
+      if (history && history.length > 0 && !revealPhaseActive) {
         const histEl = document.createElement('div');
         histEl.className = 'seat-discard-history';
         const label = document.createElement('span');
@@ -1747,6 +1747,16 @@
 
       seatEl.innerHTML = '';
       seatEl.appendChild(chipEl);
+
+      // Round-end reveal: everyone's remaining cards, shown at their own
+      // chair before the scorecard appears (see startRevealPhase below).
+      // Skipped for your own seat -- your cards are already face-up in the
+      // tray, and its header already prints "Your cards (Value: N)", so a
+      // box here would only duplicate both.
+      if (revealPhaseActive && p.playerId !== myPlayerId) {
+        const revealBox = buildSeatRevealBox(game, p.playerId, top);
+        if (revealBox) seatEl.appendChild(revealBox);
+      }
 
       const reaction = seatReactions[p.playerId];
       if (reaction) {
@@ -1975,6 +1985,135 @@
     // same screen appears too (minus the Next Round button); the celebratory
     // trophy screen only shows once the player taps through it.
     if (game.roundOver && game.lastRoundResult && game.roundNumber !== window.__lastRoundResultShownFor) {
+      // Marked as shown up front, not inside startRevealPhase -- renderGame
+      // runs again for every game_state push that arrives DURING the reveal
+      // hold, and without this the same round would re-trigger the phase on
+      // each one.
+      window.__lastRoundResultShownFor = game.roundNumber;
+      // Cards face-up at each chair first; the scorecard follows once the
+      // player taps or the hold elapses (see startRevealPhase above).
+      startRevealPhase(game);
+    }
+  }
+
+  // --------------------------------------------------------------------
+  // Round-end reveal phase.
+  //
+  // When a round ends the table now holds for a moment with everyone's
+  // remaining cards face-up at their own chair, BEFORE the scorecard
+  // appears. Two reasons this exists:
+  //   - It's how the game is actually played: cards go face-up on the
+  //     table, everyone looks, then you tally. Splitting the reveal from
+  //     the scoring is the natural seam.
+  //   - It lets the scorecard drop its card rows entirely, which is what
+  //     frees enough height there to fit every player without scrolling.
+  //
+  // Layout notes, all settled by testing against the real table rather
+  // than guessed (see REVEAL_BOX_* constants in style.css):
+  //   - The box hangs directly off its own chair, never dragged toward the
+  //     middle. Hanging it INWARD works at 4 players but collapses at 6 --
+  //     the top, upper-left and upper-right boxes all land in a heap. So
+  //     it sits under the chip instead (over it, for bottom seats), which
+  //     survives a full 6-player table with zero collisions.
+  //   - The open card / joker / stock badge are hidden for the duration:
+  //     the round is over, so they carry no information any more, and
+  //     hiding them is what frees the middle of the oval for the boxes.
+  // --------------------------------------------------------------------
+  const REVEAL_MAX_SEAT_TILES = 5;
+  const REVEAL_HOLD_MS = 8000;
+  let revealPhaseActive = false;
+  let revealTimer = null;
+  let revealPendingGame = null;
+
+  function buildSeatRevealBox(game, playerId, topPercent) {
+    const hand = (game.finalHands || {})[playerId];
+    if (!hand) return null;
+    const r = game.lastRoundResult;
+    const wildRank = game.roundJokerRank;
+    const value = (game.finalHandValues || {})[playerId];
+
+    const box = document.createElement('div');
+    // Bottom-half seats flip the box above the chip so it never runs off
+    // the lower edge of the table into the hand tray.
+    box.className = 'seat-reveal-box'
+      + (topPercent > 62 ? ' above' : '')
+      + (r && r.declaredBy === playerId ? ' declared' : '');
+
+    if (r && r.declaredBy === playerId) {
+      const tag = document.createElement('div');
+      tag.className = 'seat-reveal-tag';
+      tag.textContent = 'DECLARED';
+      box.appendChild(tag);
+    }
+
+    const valEl = document.createElement('div');
+    valEl.className = 'seat-reveal-value';
+    valEl.textContent = value !== undefined ? value : '';
+    box.appendChild(valEl);
+
+    // Same grouping + ordering as the hand tray and the old scorecard rows:
+    // duplicates collapse into one tile with a ×N badge, and the priciest
+    // cards come first so the "+N more" chip only ever hides cheap ones.
+    const grid = document.createElement('div');
+    grid.className = 'seat-reveal-grid';
+    const groups = groupHand(hand)
+      .slice()
+      .sort((a, b) => cardValueClient(b.cards[0], wildRank) - cardValueClient(a.cards[0], wildRank));
+    const shown = groups.slice(0, REVEAL_MAX_SEAT_TILES);
+    shown.forEach((g) => {
+      const el = cardEl(g.cards[0]);
+      el.classList.add('mini');
+      if (g.cards.length > 1) {
+        const badge = document.createElement('span');
+        badge.className = 'card-count-badge';
+        badge.textContent = '×' + g.cards.length;
+        el.appendChild(badge);
+      }
+      grid.appendChild(el);
+    });
+    const shownCount = shown.reduce((sum, g) => sum + g.cards.length, 0);
+    const remaining = hand.length - shownCount;
+    if (remaining > 0) {
+      const more = document.createElement('div');
+      more.className = 'seat-reveal-more';
+      // Reads "+2 more", not just "+2": the same grid already carries ×N
+      // badges meaning "two copies of THIS card", and the two numbers sit
+      // millimetres apart at this size. The word is what keeps "two more
+      // cards you can't see" from being read as another multiplier.
+      more.textContent = '+' + remaining + ' more';
+      grid.appendChild(more);
+    }
+    box.appendChild(grid);
+    return box;
+  }
+
+  // Holds the table for a beat, then hands off to the scorecard. Ends early
+  // on any tap -- players who've already looked shouldn't be made to wait,
+  // and players who want longer than the timeout can't be given it anyway
+  // (the host controls when the next round actually starts).
+  function startRevealPhase(game) {
+    if (revealPhaseActive) return;
+    revealPhaseActive = true;
+    revealPendingGame = game;
+    document.getElementById('screen-game').classList.add('reveal-phase');
+    renderGame(game);
+
+    const finish = () => endRevealPhase();
+    revealTimer = setTimeout(finish, REVEAL_HOLD_MS);
+    // Captured on the game screen only, and removed the moment it fires, so
+    // it can never leak into the scorecard's own taps underneath.
+    document.getElementById('screen-game').addEventListener('click', finish, { once: true });
+  }
+
+  function endRevealPhase() {
+    if (!revealPhaseActive) return;
+    revealPhaseActive = false;
+    if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+    document.getElementById('screen-game').classList.remove('reveal-phase');
+    const game = revealPendingGame || latestGame;
+    revealPendingGame = null;
+    if (game) {
+      renderGame(game);
       showRoundResult(game);
     }
   }
@@ -2516,6 +2655,13 @@
       latestRoom = null;
       latestGame = null;
       window.__lastRoundResultShownFor = null;
+      // Leaving mid-reveal would otherwise strand the phase flag as true,
+      // and the next room's table would render every seat's reveal box
+      // over a live game.
+      revealPhaseActive = false;
+      if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+      revealPendingGame = null;
+      document.getElementById('screen-game').classList.remove('reveal-phase');
       closePlayerActionPopover();
       playerStatsCache.clear();
       hideChatUI();
