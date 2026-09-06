@@ -326,6 +326,17 @@
 
     <div id="podium" class="podium"></div>
     <div id="round-result-note" class="round-result-note"></div>
+
+    <!-- Reserved hole for the 300x250 ad. The ad itself is a NATIVE view
+         floating over the WebView (same as the bottom banner), so it takes up
+         no space in this layout of its own -- this empty box is what stops the
+         score rows from sitting underneath it. Placed between the result and
+         the scores, never directly above Next Round: an ad touching the button
+         players tap every single round is an accidental-click risk Google
+         treats as a policy problem, not a style preference. Hidden entirely
+         for anyone who bought Remove Ads, so they get the space back. -->
+    <div id="round-result-ad" class="round-result-ad hidden"></div>
+
     <div id="round-result-hands" class="reveal-rows"></div>
 
     <!-- Same "See full scorecard" link as the in-game Scores overlay --
