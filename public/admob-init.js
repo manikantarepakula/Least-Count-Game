@@ -203,18 +203,36 @@
     return initPromise;
   }
 
+  // Is the scorecard actually on screen right now? Asked of the DOM rather
+  // than tracked in a variable, because this is the thing that decides
+  // whether the bottom banner should stand down -- and a variable that says
+  // "stand down" can get stuck, while the overlay's real visibility cannot.
+  function resultOverlayOpen() {
+    const el = document.getElementById('overlay-round-result');
+    return !!el && !el.classList.contains('hidden');
+  }
+
   async function showBanner() {
     if (bannerShown) return;
-    // BUG (found after the round-result ad shipped and never appeared): the
-    // guard above used to be the only one, and the round-result swap sets
-    // bannerShown=false so it can take over the single banner slot. But
-    // showScreen('screen-game') calls this on EVERY game_state push, and
-    // those keep arriving while the scorecard is open -- so the bottom
-    // banner immediately re-showed and replaced the round-result ad within
-    // a fraction of a second of it appearing. While the round-result ad
-    // owns the slot, the bottom banner has to stay out of the way; it's
-    // restored explicitly by hideResultAd() when the scorecard closes.
-    if (rectShown) return;
+    // While the round-result ad owns the single banner slot, the bottom
+    // banner must stay out of the way -- showScreen('screen-game') calls
+    // this on EVERY game_state push, and those keep arriving while the
+    // scorecard is open, so without this it would immediately re-show and
+    // replace the round-result ad within a fraction of a second.
+    //
+    // BUG (this broke every ad in the app, including the landing page):
+    // this used to be a bare `if (rectShown) return;`. rectShown is a latch
+    // set before the swap's awaits, so any path that failed to clear it --
+    // the scorecard closing without the restore running, an await that
+    // never settles -- left it stuck true and silently blocked EVERY banner
+    // request for the rest of the session. Checking whether the scorecard
+    // is genuinely open makes it self-healing: the moment it isn't, a stale
+    // flag is corrected and banners resume.
+    if (rectShown) {
+      if (resultOverlayOpen()) return;
+      console.warn('[AdMob] clearing stale round-result flag (scorecard is closed)');
+      rectShown = false;
+    }
     ensureSizeListener();
     ensureDiagListeners();
     await ensureInit();
