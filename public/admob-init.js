@@ -258,6 +258,18 @@
           const margin = desiredMargin;
           if (kind === appliedKind && margin === appliedMargin) break;
           try {
+            // ALWAYS tear the old banner down before putting a different one
+            // up. The plugin holds exactly ONE banner instance, and asking it
+            // to swap ad unit, size and position in place is a silent no-op:
+            // the new ad never appears, yet the call resolves so we believe
+            // it did. That is what broke both the round-result ad AND every
+            // banner after it -- we recorded the swap as applied, so the way
+            // back to the bottom banner was skipped as redundant too.
+            // The device log from the version that DID work shows exactly
+            // this pair: hideBanner immediately followed by showBanner.
+            if (appliedKind !== BANNER_NONE && appliedKind !== null) {
+              try { await AdMob.hideBanner(); } catch (e) { /* nothing up */ }
+            }
             if (kind === BANNER_NONE) {
               await AdMob.hideBanner();
               setSafeBottom(0);
