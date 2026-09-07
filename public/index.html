@@ -449,16 +449,16 @@
   <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg><span id="chat-badge" class="badge hidden">0</span>
 </div>
 
-<!-- Dims the table behind the chat sheet and doubles as a tap-to-close
-     target -- standard bottom-sheet pattern (see reference: Instagram/
-     WhatsApp-style comment/chat sheets), instead of the panel just
-     snapping on top of the table with nothing behind it. -->
+<!-- Tap-to-close target behind the chat sheet. Deliberately transparent
+     since Sept 2026 -- it used to dim the table to 50% black, which meant
+     you couldn't follow the game while chatting. The reference sheet
+     (Instagram comments) doesn't dim either. See .chat-backdrop. -->
 <div id="chat-backdrop" class="chat-backdrop hidden"></div>
 <div id="chat-panel" class="chat-panel hidden">
   <div class="chat-drag-handle"></div>
   <div class="chat-header">
-    <span><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg> Chat</span>
-    <button id="btn-chat-close" class="tiny"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
+    <span><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg> Table Chat</span>
+    <button id="btn-chat-close" class="tiny" aria-label="Close chat"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
   </div>
   <div id="chat-messages" class="chat-messages"></div>
   <!-- GIF picker removed (Sept 2026) -- see app.js for the reasoning
@@ -466,7 +466,13 @@
        was Telugu-only and not a fair Remove Ads perk for a wider audience).
        May come back later with broader content. -->
   <div class="chat-input-row">
-    <input id="chat-input" type="text" maxlength="300" placeholder="Message..." />
+    <!-- enterkeyhint="send" turns the Android keyboard's Enter key into a
+         Send key, and autocomplete/autocorrect off stops Gboard's
+         suggestion strip from growing mid-sentence, which changes the
+         keyboard's height and forces the sheet to reposition while you're
+         typing. -->
+    <input id="chat-input" type="text" maxlength="300" placeholder="Say something..."
+           enterkeyhint="send" autocomplete="off" autocapitalize="sentences" />
     <button id="btn-chat-send" class="tiny primary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg></button>
   </div>
 </div>
