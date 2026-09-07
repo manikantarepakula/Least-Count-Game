@@ -1520,57 +1520,94 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .badge.hidden { display: none; }
 
-/* Standard bottom-sheet scrim, dimming/hiding the table behind the chat
-   panel instead of the panel just sitting bare on top of it. Toggled
-   alongside #chat-panel in app.js; tapping it closes the sheet, same as
-   tapping outside a comments sheet in Instagram/WhatsApp. */
+/* Tap-outside-to-close target ONLY -- deliberately transparent (Sept 2026).
+   It used to be a 50% black scrim, which hid the whole table the moment
+   chat opened. The reference we're matching (Instagram's comment sheet)
+   never dims what's behind it, and in a card game that matters more than
+   in a photo feed: you have to be able to keep watching whose turn it is,
+   what the open card is, and the timer, while you're typing. So the layer
+   still exists (it's what makes tapping the table close the sheet) but it
+   paints nothing. */
 .chat-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 24;
-  animation: chatBackdropFadeIn 0.2s ease-out;
+  position: fixed; inset: 0; background: transparent; z-index: 24;
 }
 .chat-backdrop.hidden { display: none; }
-@keyframes chatBackdropFadeIn { from { opacity: 0; } to { opacity: 1; } }
 
+/* ------------------------------------------------------------------
+   Chat sheet -- Instagram-comments model (rewritten Sept 2026)
+   ------------------------------------------------------------------
+   The previous version positioned itself from its own HEIGHT: a flat
+   60vh/480px box anchored only at the bottom, with app.js then clamping
+   max-height and adding a keyboard offset. Two things went wrong with
+   that, both visible in the user's screen recording:
+
+     1. DOUBLE LIFT. app.js added `keyboardHeight` to `bottom`. But on the
+        real device the browser ALREADY shrinks the layout viewport when
+        the keyboard opens (interactive-widget=overlays-content is not
+        honoured there -- see index.html), which means a position:fixed
+        element with bottom:0 is ALREADY sitting on top of the keyboard.
+        Adding the keyboard height again shoved the sheet a full keyboard
+        further up, off the top of the screen. That is the "it jumps up
+        and I can't see what I'm typing" symptom exactly.
+
+     2. TOP EDGE DERIVED, NOT ANCHORED. With only `bottom` fixed, the top
+        edge is wherever `bottom + height` lands -- so any error in the
+        height math (or any keyboard taller than the room left) pushes the
+        header, drag handle and close button above y=0. Every previous
+        fix here was an attempt to keep that derived number in range.
+
+   The fix is structural: app.js now sets BOTH `top` and `bottom` in
+   pixels, so the sheet's height is whatever is left between two points
+   that are each independently clamped on-screen. It is impossible for
+   this sheet to overflow the top edge, because its top is an input, not
+   an output. When the keyboard opens, the bottom edge rises, the top
+   edge stays put, and .chat-messages (flex:1, min-height:0) absorbs the
+   difference -- which is precisely how a comments sheet behaves.
+
+   No height / max-height / bottom values are declared here on purpose:
+   they are owned entirely by positionChatSheet() in app.js. The only
+   fallback is for the (desktop) case where the sheet is opened before
+   that ever runs. */
 .chat-panel {
   position: fixed;
-  /* With the keyboard now set to overlay content (see index.html's viewport
-     meta tag) instead of resizing the page, the page itself never moves --
-     so this panel has to lift ITSELF above the keyboard instead of relying
-     on the old (page-shrinking) behavior to reveal it. env(keyboard-inset-
-     height) is exactly the keyboard's current height, 0 when it's closed,
-     so this is a no-op until the input is actually focused. Falls back to
-     plain 0 on browsers that don't support the env() (nothing lost there --
-     same as the old fixed bottom:0 they'd have had anyway). The banner
-     safe-zone is added on top so the sheet's own bottom edge (and its input
-     row) never lands underneath the native ad banner -- on the game screen
-     specifically, app.js overrides this with an inline pixel value that
-     also includes the same safe-zone amount (see applyKeyboardSafeLayout). */
-  bottom: calc(env(keyboard-inset-height, 0px) + var(--ad-safe-bottom, 0px));
-  right: 0; left: 0; margin: 0 auto; width: 100%; max-width: 380px;
-  height: 60vh; max-height: 480px;
-  background: var(--jade-panel); color: var(--text-light); border: 1px solid var(--jade-border); border-bottom: none;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0; z-index: 25;
-  display: flex; flex-direction: column; box-shadow: var(--shadow-lg);
-  transition: bottom 0.15s ease-out;
-  /* Slides up from off-screen every time the panel goes from display:none
-     to display:flex (browsers restart a CSS animation whenever that
-     happens) -- instead of the old hard, instant snap-into-place, which is
-     what made it feel like it was just dropped on top of the table rather
-     than opened as a proper sheet. */
-  animation: chatSlideUp 0.25s ease-out;
+  top: 40%; bottom: var(--ad-safe-bottom, 0px);
+  right: 0; left: 0; margin: 0 auto; width: 100%; max-width: 420px;
+  background: var(--jade-panel); color: var(--text-light);
+  border: 1px solid var(--jade-border); border-bottom: none;
+  border-radius: 16px 16px 0 0; z-index: 25;
+  display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: 0 -8px 32px rgba(0,0,0,0.45);
+  /* No transition on top/bottom: the keyboard opens in ~250ms and an
+     easing curve on top of that reads as lag/jitter rather than polish.
+     The open animation below is the only movement. */
+  animation: chatSlideUp 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .chat-panel.hidden { display: none; }
 @keyframes chatSlideUp {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }
 }
+/* The grab handle is the swipe-to-dismiss target (wired up in app.js), so
+   it needs a real finger-sized hit area, not a 4px hairline. The padding
+   is transparent; only the inner bar is drawn -- hence content-box and a
+   background on a ::before rather than on the element itself.
+   touch-action: none is required, not cosmetic: the drag listeners are
+   passive (so they can't preventDefault), which means without this the
+   browser would try to scroll the page underneath the gesture at the same
+   time as the sheet follows the finger. */
 .chat-drag-handle {
-  width: 36px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.25);
-  margin: 8px auto 0; flex-shrink: 0;
+  height: 4px; box-sizing: content-box; padding: 10px 0 6px;
+  flex-shrink: 0; touch-action: none; cursor: grab;
+  display: flex; align-items: center; justify-content: center;
+}
+.chat-drag-handle::before {
+  content: ''; display: block;
+  width: 40px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.28);
 }
 .chat-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 10px 14px; border-bottom: 1px solid var(--jade-border); font-weight: 700;
+  padding: 4px 14px 10px; border-bottom: 1px solid var(--jade-border);
+  font-weight: 700; font-size: 14px; touch-action: none;
   /* Never shrink -- the close button lives here, so it has to stay usable
      even when the keyboard leaves very little room for the sheet overall.
      .chat-messages (flex:1, min-height:0) absorbs the squeeze instead. */
@@ -1583,28 +1620,61 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
    the panel, the browser just silently clips them instead of ever engaging
    overflow-y's scrollbar/touch-scroll -- the item never registers as
    "smaller than its content," so there's nothing to scroll. This is why
-   chat looked stuck/unscrollable once a conversation got long enough. */
-.chat-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px; font-size: 13px; }
-.chat-msg { margin-bottom: 8px; }
+   chat looked stuck/unscrollable once a conversation got long enough.
+   overscroll-behavior:contain stops a flick at the end of the list from
+   chaining through to the page behind the sheet. */
+.chat-messages {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 14px 6px; font-size: 13px;
+}
+
+/* Comment row: round avatar on the left, name + text as one wrapped
+   paragraph on the right -- the Instagram layout, rather than the old
+   single "Name: text" line. The avatar is what makes a fast-moving group
+   chat scannable at a glance. */
+.chat-msg { display: flex; gap: 9px; margin-bottom: 12px; align-items: flex-start; }
+.chat-avatar {
+  flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #fff; text-transform: uppercase;
+  /* hue set inline per player in app.js */
+  background: var(--jade-panel-alt);
+}
+.chat-body { min-width: 0; flex: 1; }
 /* Gold for other players' names (matches the score/highlight role used
    everywhere else), red for your own -- same "you" accent as the primary
-   button and the timer, instead of the old one-off green/purple pair that
-   didn't relate to any other color in the app. */
+   button and the timer. */
 .chat-msg .chat-name { font-weight: 700; color: var(--gold-bright); }
 .chat-msg.me .chat-name { color: var(--red); }
-.chat-msg .chat-text { word-break: break-word; }
+.chat-msg .chat-text { word-break: break-word; color: var(--text-light); }
+.chat-msg .chat-time { display: block; font-size: 10px; color: var(--text-muted); margin-top: 2px; }
 .chat-msg .chat-gif { display: block; max-width: 160px; border-radius: 8px; margin-top: 4px; }
 .chat-empty { color: var(--text-muted); font-size: 12px; text-align: center; margin-top: 20px; }
+
 /* Never shrink -- this is the actual text box, so it has to stay usable
    even when the keyboard leaves very little room for the sheet overall.
    .chat-messages (flex:1, min-height:0) absorbs the squeeze instead. */
-.chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--jade-border); flex-shrink: 0; }
-.chat-input-row input {
-  flex: 1; padding: 10px; border-radius: 20px; border: 1px solid var(--jade-border);
-  background: var(--jade-panel-alt); color: var(--text-light); font-size: 14px;
+.chat-input-row {
+  display: flex; gap: 8px; align-items: center;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--jade-border); flex-shrink: 0;
+  background: var(--jade-panel);
 }
-.chat-input-row button.tiny { width: auto; padding: 8px 16px; border-radius: 20px; }
-.chat-input-row button.tiny .icon { width: 16px; height: 16px; margin: 0; }
+.chat-input-row input {
+  flex: 1; min-width: 0; padding: 10px 14px; border-radius: 20px;
+  border: 1px solid var(--jade-border);
+  background: var(--jade-panel-alt); color: var(--text-light);
+  /* 16px minimum: anything smaller and Android/iOS WebViews zoom the page
+     in on focus, which on this fixed-position sheet looks like the layout
+     lurching sideways the moment you tap the box. */
+  font-size: 16px; line-height: 20px;
+}
+.chat-input-row button.tiny {
+  width: 40px; height: 40px; flex-shrink: 0; padding: 0;
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+}
+.chat-input-row button.tiny .icon { width: 18px; height: 18px; margin: 0; }
 #btn-gif-open { font-weight: 700; font-size: 11px; background: rgba(255,255,255,0.1); color: var(--text-light); }
 
 /* ---- GIF picker (Giphy search) ---- */
