@@ -170,7 +170,20 @@
     }
   }
 
+  // BUG (found from a device log showing 400+ AdMob.addListener calls and the
+  // same "BANNER LOADED" line printed dozens of times per event): this had no
+  // "already done" guard, unlike ensureSizeListener above, and it is called
+  // from scheduleApply() -- which runs on every banner request, which happens
+  // on every game_state push. Five fresh native listeners were registered per
+  // push and never removed, so the count climbed without limit, every event
+  // fanned out across hundreds of duplicate handlers, and the JS-to-native
+  // bridge was being hammered continuously. Registering once is all that was
+  // ever intended.
+  let diagListenersAdded = false;
+
   function ensureDiagListeners() {
+    if (diagListenersAdded) return;
+    diagListenersAdded = true;
     addDiagListener('bannerAdLoaded', () => {
       console.log('[AdMob] BANNER LOADED -- an ad really is on screen now.');
     });
@@ -187,6 +200,12 @@
 
   function ensureInit() {
     if (!initPromise) {
+      // Registered exactly once, here, because initPromise is created once.
+      // Both of these are idempotent on their own too, but keeping them off
+      // the per-request path is the structural fix -- the leak happened
+      // precisely because listener setup was reachable from a hot path.
+      ensureSizeListener();
+      ensureDiagListeners();
       initPromise = AdMob.initialize({ initializeForTesting: false })
         .then((res) => {
           console.log('[AdMob] initialize OK:', JSON.stringify(res));
@@ -247,8 +266,11 @@
     if (applyRunning) return;   // the running loop re-checks desired at the end
     applyRunning = (async () => {
       try {
-        ensureSizeListener();
-        ensureDiagListeners();
+        // Listener registration lives in ensureInit() now, NOT here. This
+        // function runs on every banner request (i.e. every game_state push),
+        // and calling listener setup from a hot path is what allowed the leak
+        // above to reach 400+ registrations. Anything that must happen once
+        // belongs behind the one-shot init promise.
         await ensureInit();
         // Loop until native matches intent -- intent can change while an
         // await is in flight, which is exactly the race that used to let a
