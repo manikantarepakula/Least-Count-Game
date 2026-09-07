@@ -446,18 +446,32 @@
   // ad is positioned to land in that hole, measured fresh each time because
   // the panel's height changes with the number of players.
   // ------------------------------------------------------------------------
-  // Both directions are just intent changes now -- the reconciler above owns
-  // every native call, so the swap can't race a game_state push, and no
-  // failure can leave the slot in a state that nobody restores.
-  function showResultAd(topOffsetPx) {
-    requestBanner(BANNER_RESULT, topOffsetPx);
-  }
-
-  function hideResultAd() {
-    // Back to the bottom banner. Safe to call even if the round-result ad
-    // never actually appeared -- reconciling to "bottom" is always valid.
-    requestBanner(BANNER_BOTTOM, 0);
-  }
+  // ------------------------------------------------------------------------
+  // Round-result ad: DISABLED, deliberately.
+  //
+  // The plugin exposes exactly ONE banner slot. Putting an ad on the
+  // scorecard therefore means taking that slot from the bottom banner and
+  // handing it back afterwards, and every attempt at that swap broke
+  // something that had been working:
+  //   - the swap raced game_state pushes, which stole the slot back;
+  //   - guarding against that with a flag latched and killed every ad in the
+  //     app until a restart;
+  //   - the reconciler that replaced the flag dropped the hide-before-show
+  //     the plugin requires, so the new ad silently never appeared;
+  //   - listener setup on the request path leaked 400+ native listeners and
+  //     degraded the bridge until only an app restart recovered it.
+  // After all that the scorecard ad still never rendered, while the bottom
+  // banner and interstitial -- both previously earning -- were repeatedly
+  // taken down with it.
+  //
+  // The bottom banner and interstitial are worth protecting; this third
+  // placement is not worth what it costs. These stay as no-ops so app.js can
+  // keep calling them unchanged. If the placement is worth revisiting, the
+  // right approach is one that never touches the banner slot at all -- a
+  // rewarded ad, or an app-open ad -- not another swap.
+  // ------------------------------------------------------------------------
+  function showResultAd() { /* intentionally disabled -- see above */ }
+  function hideResultAd() { /* intentionally disabled -- see above */ }
 
   window.LCAds = {
     showBanner, hideBanner,
