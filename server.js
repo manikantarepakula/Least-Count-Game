@@ -555,6 +555,38 @@ const DEAL_FLIGHT_MS = 90; // time per individual card flight (travel + brief pa
 const DECK_INTRO_MS = 3400;
 const REVEAL_MS = 2500; // joker/open-card reveal, held on screen
 const REVEAL_TO_TIMER_MS = 1200; // turn timer quietly starts this far into the reveal
+
+// ---------------------------------------------------------------------------
+// Automatic round advance (Sept 2026).
+//
+// Previously only the host could start the next round, which meant a host who
+// put their phone down froze the entire table on the scorecard with no way
+// out for anyone else -- the most common way a game just died. The round now
+// advances on a server timer, with the host's button kept as a "start early"
+// override rather than a requirement.
+//
+// The delay is split to mirror what the client actually shows, in order:
+//   1. ROUND_REVEAL_HOLD_MS -- everyone's final cards revealed at their seats
+//      on the table (client-side; see REVEAL_HOLD_MS in public/app.js, which
+//      MUST be kept equal to this value).
+//   2. SCORECARD_HOLD_MS   -- the round-result scorecard, with a visible
+//      countdown ticking down to the auto-start.
+// ---------------------------------------------------------------------------
+const ROUND_REVEAL_HOLD_MS = 8000;  // keep in sync with REVEAL_HOLD_MS (public/app.js)
+const SCORECARD_HOLD_MS = 10000;
+const AUTO_NEXT_ROUND_MS = ROUND_REVEAL_HOLD_MS + SCORECARD_HOLD_MS;
+
+// Every 4th completed round (4, 8, 12...) the client plays an interstitial as
+// the NEXT round starts, so the ad overlaps the countdown/deal/reveal
+// sequence instead of interrupting play. Expressed here in terms of the round
+// being STARTED: round 5 follows completed round 4, and so on.
+function isAdRoundNumber(roundNumber) {
+  return roundNumber > 1 && (roundNumber - 1) % 4 === 0;
+}
+// On those rounds the turn timer is held back a few extra seconds, so the
+// player who acts first isn't auto-played while an ad is still on screen.
+// Everything else about the round is unchanged.
+const AD_ROUND_TIMER_GRACE_MS = 6000;
 // Minimum penalty-cards-in-one-go and discard-group-size that count as
 // "big" enough to trigger a seat reaction (items 9/10). The client decides
 // which emoji(s) each reaction type maps to and whether it's shown at the
@@ -746,6 +778,15 @@ function broadcastGameState(room) {
     if (p.connected && p.socketId) {
       const state = room.game.getPublicState(pid);
       state.turnDeadline = room.turnDeadline || null;
+      // Milliseconds left before the round advances on its own, or null when
+      // no countdown is running (mid-round, or on the final scorecard, which
+      // players read at their own pace). Sent as a REMAINING duration rather
+      // than an absolute timestamp deliberately: the client's clock can be
+      // minutes off from the server's, and a countdown that shows "-14" or
+      // jumps is worse than one that drifts by a few hundred milliseconds.
+      state.autoNextRoundInMs = room.autoNextRoundAt
+        ? Math.max(0, room.autoNextRoundAt - Date.now())
+        : null;
       io.to(p.socketId).emit('game_state', state);
     }
   }
@@ -770,6 +811,8 @@ function startMatchedRoom(entries) {
     game: null,
     turnTimer: null,
     turnDeadline: null,
+    autoNextTimer: null,   // auto-advance to the next round (see AUTO_NEXT_ROUND_MS)
+    autoNextRoundAt: null, // epoch ms the above fires, or null when not armed
     dealTimer: null,
     revealTimer: null,
     chatHistory: [],
@@ -863,8 +906,7 @@ function runBotTurn(room) {
   }
 
   if (game.roundOver || game.gameOver) {
-    clearTurnTimer(room);
-    if (game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
+    onRoundEnded(room);
   } else {
     scheduleTurnTimer(room);
   }
@@ -882,6 +924,100 @@ function clearStartSequenceTimers(room) {
   if (room.revealTimer) {
     clearTimeout(room.revealTimer);
     room.revealTimer = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Automatic round advance. See AUTO_NEXT_ROUND_MS above for why this exists.
+// ---------------------------------------------------------------------------
+function clearAutoNextRoundTimer(room) {
+  if (room.autoNextTimer) {
+    clearTimeout(room.autoNextTimer);
+    room.autoNextTimer = null;
+  }
+  room.autoNextRoundAt = null;
+}
+
+// The single code path that begins a new round, used by BOTH the host's
+// "Start now" button and the auto-advance timer. Deliberately one function:
+// when these were separate, any fix to one silently skipped the other.
+// Returns false (rather than throwing) when the round can't legitimately
+// start, so the timer callback doesn't need its own error handling.
+function startNextRound(room, eliminationScore) {
+  if (!room || !room.game) return false;
+  if (!room.game.roundOver || room.game.gameOver) return false;
+  clearAutoNextRoundTimer(room);
+
+  // The host may optionally change the max score before the next round (to
+  // extend or shorten the game). Only touch it if a different value was
+  // actually picked -- setEliminationScore() itself enforces that it's still
+  // above the current highest score on the board.
+  if (eliminationScore !== undefined && eliminationScore !== null) {
+    const n = Number(eliminationScore);
+    if (n !== room.game.eliminationScore) {
+      if (!MAX_SCORE_OPTIONS.includes(n)) throw new Error('Invalid max score option.');
+      room.game.setEliminationScore(n);
+    }
+  }
+
+  // Anyone admitted mid-game (see admit_join_request) sits in room.order and
+  // room.players already, but was deliberately never added to the GAME until
+  // now -- this is the one moment "joins starting next round" actually
+  // happens, right before the deal, at whatever the current max score is.
+  for (const pid of room.order) {
+    if (!room.game.playerIds.includes(pid)) room.game.addPlayer(pid);
+  }
+
+  room.game.startRound();
+  beginStartSequence(room, room.code);
+  return true;
+}
+
+// Arms the auto-advance countdown for a round that has just ended. Safe to
+// call from every round-ending path; it no-ops when the game is over (the
+// final scorecard is read at each player's own pace and leads to the trophy
+// screen instead) or when the round somehow isn't actually over.
+function scheduleAutoNextRound(room) {
+  clearAutoNextRoundTimer(room);
+  if (!room || !room.game) return;
+  if (!room.game.roundOver || room.game.gameOver) return;
+
+  room.autoNextRoundAt = Date.now() + AUTO_NEXT_ROUND_MS;
+  room.autoNextTimer = setTimeout(() => {
+    room.autoNextTimer = null;
+    room.autoNextRoundAt = null;
+    // The room may have been torn down, reset to the lobby, or emptied while
+    // the countdown was running.
+    if (!rooms.has(room.code) || !room.game) return;
+    // Don't deal a fresh round into an abandoned table -- if every human has
+    // gone, leave it for the idle-room sweep to collect instead of keeping it
+    // alive with bot turns forever.
+    let humansPresent = 0;
+    for (const pid of room.order) {
+      const p = room.players.get(pid);
+      if (p && !p.isBot && p.connected) humansPresent += 1;
+    }
+    if (humansPresent === 0) return;
+
+    try {
+      if (!startNextRound(room)) return;
+    } catch (e) {
+      console.error(`Auto next round failed for room ${room.code}:`, e.message);
+    }
+  }, AUTO_NEXT_ROUND_MS);
+}
+
+// Called from every path that can end a round (human declare, turn-timeout
+// auto-play, bot turn). Kept as one helper so a new round-ending path can't
+// forget to arm the countdown and strand the table again.
+function onRoundEnded(room) {
+  clearTurnTimer(room);
+  if (room.game && room.game.gameOver) {
+    room.phase = 'game_over';
+    recordGameResult(room);
+    clearAutoNextRoundTimer(room);
+  } else {
+    scheduleAutoNextRound(room);
   }
 }
 
@@ -917,6 +1053,12 @@ function beginStartSequence(room, roomCode) {
     : room.order;
   const dealMs = DEAL_PASSES * dealOrder.length * DEAL_FLIGHT_MS;
   const deckCount = deckCountForPlayers(dealOrder.length);
+  // Every 4th round the client plays an interstitial over this whole
+  // sequence. Decided here, once, on the server, so all players get it at
+  // the same moment and nobody's local round counter can drift out of step.
+  // Also read by the reveal timer below, which holds the first turn back on
+  // these rounds so an ad can't cost someone their opening move.
+  const adRound = isAdRoundNumber(room.game ? room.game.roundNumber : 0);
   room.currentDealMs = dealMs; // remembered so a mid-sequence rejoin replays with the same timing
   broadcastRoom(room);
   io.to(roomCode).emit('game_starting', {
@@ -926,10 +1068,13 @@ function beginStartSequence(room, roomCode) {
     dealMs,
     dealPasses: DEAL_PASSES,
     revealMs: REVEAL_MS,
+    adRound,
     players: dealOrder.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
   });
 
   clearStartSequenceTimers(room);
+
+  clearAutoNextRoundTimer(room); // never leave an auto-advance armed on a torn-down/reset room
   room.dealTimer = setTimeout(() => {
     room.dealTimer = null;
     // Guard against the room having been torn down or reset mid-sequence
@@ -943,7 +1088,11 @@ function beginStartSequence(room, roomCode) {
       if (!room.game || room.game.roundOver || room.game.gameOver) return;
       scheduleTurnTimer(room); // real turn timer quietly starts here, mid-reveal
       broadcastGameState(room);
-    }, REVEAL_TO_TIMER_MS);
+      // On ad rounds the first player may still have an interstitial covering
+      // their screen when the sequence ends. Holding the turn timer back a
+      // few extra seconds means they aren't auto-played out of their own
+      // first move by an ad we chose to show them.
+    }, REVEAL_TO_TIMER_MS + (adRound ? AD_ROUND_TIMER_GRACE_MS : 0));
   }, COUNTDOWN_MS + DECK_INTRO_MS + dealMs);
 }
 
@@ -1002,8 +1151,7 @@ function handleTurnTimeout(room) {
   }
 
   if (game.roundOver || game.gameOver) {
-    clearTurnTimer(room);
-    if (game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
+    onRoundEnded(room);
   } else {
     scheduleTurnTimer(room);
   }
@@ -1030,6 +1178,8 @@ io.on('connection', (socket) => {
         game: null,
         turnTimer: null,
         turnDeadline: null,
+        autoNextTimer: null,   // auto-advance to the next round (see AUTO_NEXT_ROUND_MS)
+        autoNextRoundAt: null, // epoch ms the above fires, or null when not armed
         dealTimer: null,
         revealTimer: null,
         chatHistory: [],
@@ -1072,6 +1222,8 @@ io.on('connection', (socket) => {
         game: null,
         turnTimer: null,
         turnDeadline: null,
+        autoNextTimer: null,   // auto-advance to the next round (see AUTO_NEXT_ROUND_MS)
+        autoNextRoundAt: null, // epoch ms the above fires, or null when not armed
         dealTimer: null,
         revealTimer: null,
         chatHistory: [],
@@ -1459,8 +1611,8 @@ io.on('connection', (socket) => {
       const entry = socketIndex.get(socket.id);
       if (!entry) throw new Error('Not in a room.');
       room.game.declare(entry.playerId);
-      clearTurnTimer(room);
-      if (room.game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
+      onRoundEnded(room); // stops the turn timer, then either records the
+                          // finished game or arms the auto-advance countdown
       const newlyEliminated = (room.game.lastRoundResult && room.game.lastRoundResult.newlyEliminated) || [];
       for (const id of newlyEliminated) emitSeatReaction(roomCode, 'eliminated', id);
       broadcastRoom(room);
@@ -1480,30 +1632,13 @@ io.on('connection', (socket) => {
       if (!room.game.roundOver) throw new Error('Round is still in progress.');
       if (room.game.gameOver) throw new Error('Game is already over.');
 
-      // The host may optionally change the max score before starting the
-      // next round (to extend or shorten the game). Only touch it if a
-      // different value was actually picked -- setEliminationScore() itself
-      // enforces that it's still above the current highest score on the board.
-      if (eliminationScore !== undefined && eliminationScore !== null) {
-        const n = Number(eliminationScore);
-        if (n !== room.game.eliminationScore) {
-          if (!MAX_SCORE_OPTIONS.includes(n)) throw new Error('Invalid max score option.');
-          room.game.setEliminationScore(n);
-        }
-      }
-
-      // Anyone admitted mid-game (see admit_join_request above) sits in
-      // room.order/room.players already, but was deliberately never added to
-      // the GAME itself until now -- this is the one moment "joins starting
-      // next round" actually happens, right before the deal, at whatever the
-      // current max score is (addPlayer() sets their starting score to the
-      // current highest on the board).
-      for (const pid of room.order) {
-        if (!room.game.playerIds.includes(pid)) room.game.addPlayer(pid);
-      }
-
-      room.game.startRound();
-      beginStartSequence(room, roomCode);
+      // This is now the host's "Start now" override, not the only way a round
+      // can begin -- the auto-advance countdown (scheduleAutoNextRound) starts
+      // it on a timer regardless. startNextRound() cancels that timer as its
+      // first act, so a host tapping just as the countdown expires can't deal
+      // two rounds. Whichever fires first wins; the loser no-ops because
+      // roundOver is already false by then.
+      if (!startNextRound(room, eliminationScore)) throw new Error('Round is no longer waiting to start.');
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -1518,6 +1653,7 @@ io.on('connection', (socket) => {
       if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can start a new game.');
       clearTurnTimer(room);
       clearStartSequenceTimers(room);
+      clearAutoNextRoundTimer(room); // never leave an auto-advance armed on a torn-down/reset room
       room.game = null;
       room.phase = 'lobby';
       broadcastRoom(room);
@@ -1563,6 +1699,7 @@ io.on('connection', (socket) => {
       if (room.order.length === 0 || noHumansLeft) {
         clearTurnTimer(room);
         clearStartSequenceTimers(room);
+        clearAutoNextRoundTimer(room); // never leave an auto-advance armed on a torn-down/reset room
         rooms.delete(roomCode);
         ack && ack({ ok: true });
         return;
@@ -1782,6 +1919,7 @@ setInterval(() => {
     if (room.allHumansDisconnectedAt != null && now - room.allHumansDisconnectedAt > ROOM_ABANDONED_GRACE_MS) {
       clearTurnTimer(room);
       clearStartSequenceTimers(room);
+      clearAutoNextRoundTimer(room); // never leave an auto-advance armed on a torn-down/reset room
       rooms.delete(code);
       console.log(`[Cleanup] Deleted abandoned room ${code} (no human connected for 10+ minutes).`);
     }
