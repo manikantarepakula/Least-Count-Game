@@ -218,7 +218,7 @@
     forceAdsForTesting = localStorage.getItem('lc_force_ads') === '1';
   } catch (e) { /* storage blocked -- behave normally */ }
   if (forceAdsForTesting) {
-    console.log('[Ads] lc_force_ads is ON -- ads shown even though Remove Ads may be purchased.');
+    console.log('[AdMob] lc_force_ads is ON -- ads shown even though Remove Ads may be purchased.');
   }
 
   async function refreshRemoveAdsUI() {
@@ -2389,9 +2389,9 @@
   // when this runs and an element that's still display:none measures as 0.
   function showRoundResultAd() {
     const slot = document.getElementById('round-result-ad');
-    if (!slot) { console.warn('[Ads] round-result: slot element missing'); return; }
+    if (!slot) { console.warn('[AdMob] round-result: slot element missing'); return; }
     if (adsRemoved || !window.LCAds) {
-      console.log('[Ads] round-result: skipped (adsRemoved=' + adsRemoved + ', LCAds=' + !!window.LCAds + ')');
+      console.log('[AdMob] round-result: skipped (adsRemoved=' + adsRemoved + ', LCAds=' + !!window.LCAds + ')');
       slot.classList.add('hidden');
       return;
     }
@@ -2404,15 +2404,15 @@
     // rendering for even a moment, the callback never runs and the ad is
     // silently never requested, with no error anywhere to explain it.
     const rect = slot.getBoundingClientRect();
-    console.log('[Ads] round-result: slot top=' + Math.round(rect.top)
+    console.log('[AdMob] round-result: slot top=' + Math.round(rect.top)
       + ' height=' + Math.round(rect.height)
       + ' hasShowResultAd=' + (typeof (window.LCAds || {}).showResultAd));
     if (rect.height <= 0) {
-      console.warn('[Ads] round-result: slot has no height -- ad not requested');
+      console.warn('[AdMob] round-result: slot has no height -- ad not requested');
       return;
     }
     if (typeof window.LCAds.showResultAd !== 'function') {
-      console.warn('[Ads] round-result: LCAds.showResultAd missing -- stale admob-init.js?');
+      console.warn('[AdMob] round-result: LCAds.showResultAd missing -- stale admob-init.js?');
       return;
     }
     window.LCAds.showResultAd(rect.top);
