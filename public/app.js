@@ -744,6 +744,9 @@
         chatPanelEl.style.maxHeight = '';
       }
       chatSheetTopPx = null;
+      // No round can be counting down once we're off the game screen (left
+      // the room, game reset to lobby) -- don't leave the ticker running.
+      setAutoNextRoundDeadline(null);
     }
   }
 
@@ -2435,6 +2438,36 @@
   // got eliminated and left (handing host to someone else), the remaining
   // players' already-open popup never found out they were now the host and
   // the Next Round button stayed hidden for everyone.
+  // ---------------- auto-advance countdown ----------------
+  // The next round now starts on a server timer (see AUTO_NEXT_ROUND_MS in
+  // server.js) instead of waiting on the host, who could previously freeze
+  // the whole table indefinitely just by putting their phone down. The server
+  // sends the REMAINING milliseconds with every game_state; we convert that
+  // to a local deadline each time rather than trusting one reading, so a
+  // player who reconnects, unbackgrounds, or joins mid-countdown still sees
+  // the correct number instead of a stale one.
+  let autoNextRoundDeadline = null;
+  let autoNextRoundTicker = null;
+
+  function setAutoNextRoundDeadline(ms) {
+    if (ms === null || ms === undefined) {
+      autoNextRoundDeadline = null;
+      if (autoNextRoundTicker) { clearInterval(autoNextRoundTicker); autoNextRoundTicker = null; }
+      return;
+    }
+    autoNextRoundDeadline = Date.now() + ms;
+    // 250ms rather than 1000ms so the displayed second changes promptly after
+    // the deadline is re-synced, instead of lagging up to a full second.
+    if (!autoNextRoundTicker) {
+      autoNextRoundTicker = setInterval(updateRoundResultHostControls, 250);
+    }
+  }
+
+  function autoNextRoundSecondsLeft() {
+    if (autoNextRoundDeadline === null) return null;
+    return Math.max(0, Math.ceil((autoNextRoundDeadline - Date.now()) / 1000));
+  }
+
   function updateRoundResultHostControls() {
     const overlay = document.getElementById('overlay-round-result');
     if (!latestGame || overlay.classList.contains('hidden')) return;
@@ -2448,7 +2481,24 @@
     // the separate celebratory trophy screen, at their own pace rather than
     // an automatic timer.
     document.getElementById('btn-see-final-result').classList.toggle('hidden', !game.gameOver);
-    document.getElementById('round-result-hint').textContent = (isHost || game.gameOver) ? '' : 'Waiting for host to start next round...';
+
+    // Everyone now sees the same countdown, host included -- previously
+    // non-hosts got "Waiting for host to start next round..." with no idea
+    // whether that would ever happen. The host's button is a "start early"
+    // override on top of the countdown, not the only way forward.
+    const hintEl = document.getElementById('round-result-hint');
+    const secs = autoNextRoundSecondsLeft();
+    if (game.gameOver) {
+      hintEl.textContent = ''; // final scorecard is read at each player's own pace
+    } else if (secs !== null) {
+      hintEl.textContent = secs > 0
+        ? `Next round in ${secs}s...`
+        : 'Starting next round...';
+    } else {
+      // No countdown reported (older server, or a state we didn't expect) --
+      // fall back to the previous wording rather than showing nothing.
+      hintEl.textContent = isHost ? '' : 'Waiting for host to start next round...';
+    }
 
     const maxScoreRow = document.getElementById('round-maxscore-row');
     if (isHost && !game.gameOver) {
@@ -2554,7 +2604,11 @@
     const eliminationScore = !maxScoreRow.classList.contains('hidden') && sel.value
       ? Number(sel.value) : undefined;
     socket.emit('next_round', { roomCode: myRoomCode, eliminationScore }, (res) => {
-      if (!res.ok) setGameError(res.error);
+      // Losing the race with the auto-advance countdown is a normal outcome,
+      // not an error worth showing: the host tapped Start Now at the same
+      // instant the timer fired, and the round is starting either way.
+      // Anything else (not host, game already over) still surfaces.
+      if (!res.ok && res.error !== 'Round is no longer waiting to start.') setGameError(res.error);
     });
   };
 
@@ -3462,8 +3516,27 @@
   let lastStartRevealMs = 5000;
   socket.on('game_starting', (data) => {
     lastStartRevealMs = data.revealMs || 5000;
+    // The countdown that led here is finished the moment the round starts.
+    setAutoNextRoundDeadline(null);
     showScreen('screen-game');
     runStartSequence(data);
+    // Third ad format: an interstitial every 4th round (after rounds 4, 8,
+    // 12...), decided server-side so every player at the table gets it at the
+    // same moment -- data.adRound. It deliberately plays OVER the countdown ->
+    // deal -> joker-reveal sequence that runStartSequence() just kicked off,
+    // which is ~8-10 seconds of screen nobody can interact with anyway, so
+    // the ad occupies dead time instead of interrupting play. The server
+    // separately holds the first turn timer back on these rounds (see
+    // AD_ROUND_TIMER_GRACE_MS) so the opening player can't be auto-played
+    // while an ad we chose to show them is still on screen.
+    //
+    // Everything else is deliberately left to LCAds: it no-ops when the
+    // player has bought Remove Ads, when nothing is loaded yet, and when the
+    // shared 3-minute interstitial cap hasn't elapsed -- which is what stops
+    // this colliding with the leave-game interstitial.
+    if (data.adRound && window.LCAds && !adsRemoved) {
+      window.LCAds.showInterstitial();
+    }
   });
 
   socket.on('game_state', (game) => {
@@ -3477,6 +3550,9 @@
     }
     updateMyTurnPulseTimer(prev, game);
     latestGame = game;
+    // Re-sync the auto-advance countdown from every state push (null clears
+    // it), so it can't drift or survive past the round it belongs to.
+    setAutoNextRoundDeadline(game.autoNextRoundInMs);
     // Once the turn (or round) has actually moved on, any error message or
     // card selection left over from a previous failed attempt is stale --
     // clear both so they don't linger on screen through later turns.
