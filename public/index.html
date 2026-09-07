@@ -350,7 +350,10 @@
       <select id="round-maxscore-select"></select>
     </div>
 
-    <button id="btn-next-round" class="primary hidden">Next Round</button>
+    <!-- "Start Now" rather than "Next Round" since Sept 2026: the round
+         advances on its own after a countdown, so this button is the host's
+         skip-the-wait override, not the only way forward. -->
+    <button id="btn-next-round" class="primary hidden">Start Now</button>
     <button id="btn-see-final-result" class="primary hidden">See Final Result <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 3h10v2h3a1 1 0 0 1 1 1c0 3-2 5-4.5 5.3A5.5 5.5 0 0 1 13 15.9V18h3v2H8v-2h3v-2.1A5.5 5.5 0 0 1 7.5 11.3C5 11 3 9 3 6a1 1 0 0 1 1-1h3V3Zm0 4H5c.2 1.5 1.2 2.6 2 3V7Zm10 0v3c.8-.4 1.8-1.5 2-3h-2Z"/></svg></button>
     <button id="btn-leave-round-result" class="secondary leave-btn">Leave Game</button>
     <p id="round-result-hint" class="hint"></p>
