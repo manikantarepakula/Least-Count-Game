@@ -734,9 +734,16 @@
       if (screenGameEl) screenGameEl.style.height = '';
       const chatPanelEl = document.getElementById('chat-panel');
       if (chatPanelEl) {
+        // Hand every edge back to CSS. `top` matters as much as `bottom`
+        // now that both are set inline on the game screen -- leaving a
+        // stale pixel top behind would strand the lobby's sheet at a
+        // game-screen position.
+        chatPanelEl.style.top = '';
         chatPanelEl.style.bottom = '';
+        chatPanelEl.style.height = '';
         chatPanelEl.style.maxHeight = '';
       }
+      chatSheetTopPx = null;
     }
   }
 
@@ -796,84 +803,156 @@
     const screenGameEl = document.getElementById('screen-game');
     if (screenGameEl) screenGameEl.style.height = maxViewportHeight + 'px';
   }
-  // Chat panel's keyboard-avoidance is deliberately SEPARATE from
-  // applyKeyboardSafeLayout() above (found via screen recording, Sept
-  // 2026: it used to live in that same function, which showScreen() calls
-  // on EVERY 'game_state' push -- i.e. constantly during play, not just on
-  // real keyboard events). With chat + keyboard open while bots kept
-  // playing in the background, one of those unrelated re-renders ended up
-  // recomputing the panel's bottom/max-height from a bad visualViewport
-  // reading and corrupting its position again, well after it had opened
-  // correctly. This function is now only ever called from the actual
-  // visualViewport 'resize' listener below (a genuine keyboard open/close)
-  // and once when the chat panel itself is opened -- never from routine
-  // game-state re-renders that have nothing to do with the keyboard.
-  function applyChatPanelKeyboardOffset() {
-    if (!window.visualViewport || !document.body.classList.contains('game-active')) return;
-    const vv = window.visualViewport;
-    const keyboardHeight = Math.max(0, Math.round(maxViewportHeight - vv.height));
-    const chatPanelEl = document.getElementById('chat-panel');
-    if (chatPanelEl) {
-      // This inline style wins over the CSS default (which already adds
-      // --ad-safe-bottom -- see style.css), so the same reservation has to
-      // be repeated here manually, or the chat sheet would sit right at the
-      // true bottom of the WebView on the game screen, underneath the
-      // native banner, whenever the keyboard is closed (keyboardHeight: 0).
-      const adSafeBottom = parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--ad-safe-bottom')
-      ) || 0;
-      chatPanelEl.style.bottom = (keyboardHeight + adSafeBottom) + 'px';
-      // BUG (found via screen recording, Sept 2026): the sheet's height was
-      // a flat 60vh/480px measured against the FULL screen, never
-      // shrinking for the keyboard. bottom:fixed is anchored relative to
-      // the un-shrunk layout viewport (that's the whole point of
-      // overlays-content -- see the meta tag in index.html), so once the
-      // keyboard ate a big chunk of the actually-visible area, a
-      // still-480px-tall sheet no longer fit: its top edge (header, drag
-      // handle) got pushed above the visible screen entirely, leaving only
-      // the input row on screen. Capping max-height to whatever vertical
-      // space is actually free above the sheet's own bottom-anchor point
-      // keeps the whole sheet on-screen no matter how much room the
-      // keyboard takes. 16px top margin so it never touches the very edge;
-      // 480px ceiling keeps the original design size when there's no
-      // keyboard at all.
-      //
-      // BUG #2 (found via a later device test, Sept 2026): this used to
-      // floor availableForPanel at 160px ("never make the sheet uselessly
-      // tiny"). But that floor can force the sheet TALLER than the space
-      // that's actually free above the keyboard -- on a device/keyboard
-      // combo where less than 160px is left (a tall Gboard/SwiftKey with a
-      // suggestion or emoji row, plus the ad safe-zone, easily eats more
-      // than that), the sheet got pushed up regardless, and its top portion
-      // (header, drag handle, close button) landed above y=0 and off
-      // screen -- the exact "chat opens at the top, header missing,
-      // scrolling stuck at the bottom" symptom this whole block exists to
-      // prevent, just re-introduced by the floor itself. Staying fully
-      // on-screen has to win over a minimum size: no floor here means the
-      // sheet can shrink all the way down to whatever room genuinely
-      // exists (even just enough for the input row) rather than ever
-      // spilling past the top edge.
-      const availableForPanel = Math.max(0, vv.height - adSafeBottom - 16);
-      chatPanelEl.style.maxHeight = Math.min(480, availableForPanel) + 'px';
-    }
+  // --------------------------------------------------------------------
+  // Chat sheet positioning -- REWRITTEN Sept 2026 (see style.css for the
+  // matching CSS rationale). This replaces applyChatPanelKeyboardOffset(),
+  // which had two defects that between them produced every symptom in the
+  // user's screen recording ("once I start typing it breaks down and goes
+  // up and I can't see what I'm typing"):
+  //
+  //   DEFECT 1 -- DOUBLE LIFT. The old code did:
+  //       bottom = (maxViewportHeight - visualViewport.height) + adSafe
+  //   i.e. it manually pushed the sheet up by the keyboard's height. That
+  //   is only correct if the browser leaves the LAYOUT viewport at full
+  //   size when the keyboard opens (interactive-widget=overlays-content).
+  //   On the actual device it does NOT -- the layout viewport shrinks,
+  //   which was already established earlier when window.innerHeight was
+  //   observed shrinking along with the keyboard. And when the layout
+  //   viewport shrinks, a position:fixed element with bottom:0 is ALREADY
+  //   resting on top of the keyboard, because the initial containing block
+  //   for fixed positioning IS the layout viewport. So the manual offset
+  //   was a second lift on top of the browser's own, launching the sheet
+  //   a full keyboard-height off the top of the screen -- header, close
+  //   button and message list all above y=0, only the input row left, and
+  //   the caret sitting somewhere invisible.
+  //
+  //   The fix is to stop *assuming* which mode the browser is in and
+  //   instead MEASURE the discrepancy:
+  //       anchorBottom  = document.documentElement.clientHeight
+  //                       (layout viewport height == where the browser
+  //                        actually places `bottom: 0`)
+  //       visibleBottom = visualViewport.offsetTop + visualViewport.height
+  //                       (where the genuinely visible area ends)
+  //       lift          = max(0, anchorBottom - visibleBottom)
+  //   In resizes-content behaviour those two are equal, so lift is 0 and
+  //   we add nothing -- no double lift. In overlays-content behaviour
+  //   anchorBottom stays full-height, so lift comes out as exactly the
+  //   keyboard height and we lift by precisely that much. One expression,
+  //   correct in both worlds, and self-correcting if a future WebView
+  //   update changes which one this device uses. Nothing here depends on
+  //   maxViewportHeight, which is a heuristic (tallest height ever seen)
+  //   and was the thing quietly going stale.
+  //
+  //   DEFECT 2 -- THE TOP EDGE WAS AN OUTPUT, NOT AN INPUT. The sheet was
+  //   anchored only at the bottom with a height/max-height, so its top
+  //   edge landed wherever `bottom + height` happened to fall. Every
+  //   earlier attempt at this bug was an attempt to keep that derived
+  //   number inside the screen (a 480px ceiling, then a 160px floor, then
+  //   removing the floor again). It cannot be made safe, because height
+  //   and bottom are computed from different, occasionally-disagreeing
+  //   sources. Now BOTH edges are set explicitly and each is independently
+  //   clamped into the visible area, so the sheet physically cannot spill
+  //   past the top: its height is a *consequence* of two known-good
+  //   points. The flex column then does the rest -- .chat-messages has
+  //   flex:1/min-height:0 so it, and only it, absorbs the squeeze, exactly
+  //   like Instagram's comment sheet shrinking its list while the composer
+  //   stays glued above the keyboard.
+  // --------------------------------------------------------------------
+
+  // Fraction of the visible screen the sheet covers with no keyboard up.
+  // 0.60 keeps the oval table, seats, turn indicator and timer readable
+  // above it -- the whole reason the backdrop is no longer dimmed.
+  const CHAT_SHEET_FRACTION = 0.60;
+  // Below this the sheet is useless (header + composer alone are ~110px),
+  // so we start moving the TOP edge up rather than squeezing further.
+  const CHAT_SHEET_MIN_HEIGHT = 210;
+  // Absolute floor: never leave less than the composer + a sliver of list.
+  const CHAT_SHEET_HARD_MIN = 120;
+  // Captured when the sheet is opened -- at that instant the keyboard is
+  // guaranteed closed (we deliberately don't autofocus the input), so it's
+  // the one moment a clean full-height reading is available. Keeping the
+  // top edge pinned to this value is what makes the keyboard squeeze the
+  // list instead of sliding the whole sheet around under your thumb.
+  let chatSheetTopPx = null;
+
+  function chatAdSafeBottom() {
+    return parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--ad-safe-bottom')
+    ) || 0;
   }
+
+  function positionChatSheet() {
+    const panel = document.getElementById('chat-panel');
+    if (!panel || panel.classList.contains('hidden')) return;
+
+    const vv = window.visualViewport;
+    const adSafe = chatAdSafeBottom();
+    // Layout viewport == the containing block for position:fixed. In
+    // standards mode documentElement.clientHeight is exactly that.
+    const anchorBottom = document.documentElement.clientHeight;
+    const visibleTop = vv ? vv.offsetTop : 0;
+    const visibleH = vv ? vv.height : window.innerHeight;
+    const lift = Math.max(0, Math.round(anchorBottom - (visibleTop + visibleH)));
+
+    const bottom = lift + adSafe;
+    const bottomEdge = anchorBottom - bottom; // y of the sheet's bottom, in fixed coords
+
+    if (chatSheetTopPx === null) {
+      chatSheetTopPx = Math.round(visibleTop + visibleH * (1 - CHAT_SHEET_FRACTION));
+    }
+    let top = chatSheetTopPx;
+    // Keyboard ate the room: raise the top edge rather than clip the sheet.
+    top = Math.min(top, bottomEdge - CHAT_SHEET_MIN_HEIGHT);
+    // ...but never above the visible area (this is the clamp the old code
+    // had no way to express, because it never knew where its top was).
+    top = Math.max(visibleTop + 8, top);
+    // Degenerate case (absurdly tall keyboard on a short screen): give up
+    // height before giving up being on-screen.
+    if (bottomEdge - top < CHAT_SHEET_HARD_MIN) {
+      top = Math.max(visibleTop, bottomEdge - CHAT_SHEET_HARD_MIN);
+    }
+
+    panel.style.top = Math.round(top) + 'px';
+    panel.style.bottom = Math.round(bottom) + 'px';
+    // Explicitly cleared: any leftover from the old implementation would
+    // silently override the top/bottom pair and reintroduce defect 2.
+    panel.style.height = '';
+    panel.style.maxHeight = '';
+  }
+
+  // Keeps the newest message in view when the keyboard steals list height
+  // -- otherwise opening the keyboard scrolls the conversation "away".
+  function scrollChatToLatest() {
+    const container = document.getElementById('chat-messages');
+    if (container) container.scrollTop = container.scrollHeight;
+  }
+
   if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => {
+    // 'resize' fires on keyboard open/close; 'scroll' fires when the
+    // browser pans the visual viewport to reveal a focused input (which
+    // changes offsetTop and therefore where "visible" actually is).
+    const onViewportChange = () => {
       applyKeyboardSafeLayout();
-      applyChatPanelKeyboardOffset();
-    });
+      positionChatSheet();
+    };
+    window.visualViewport.addEventListener('resize', onViewportChange);
+    window.visualViewport.addEventListener('scroll', onViewportChange);
   }
   // A genuine device rotation (not just the keyboard) should get a fresh
   // baseline instead of staying pinned to the previous orientation's height
   // -- re-read immediately (best-effort) and again after a short delay,
   // since visualViewport doesn't always settle to the new orientation's
-  // real value instantly.
+  // real value instantly. The sheet's own top anchor is dropped too, so it
+  // re-derives from the new orientation rather than keeping a portrait
+  // percentage on a landscape screen.
   window.addEventListener('orientationchange', () => {
     maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    chatSheetTopPx = null;
     setTimeout(() => {
       maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+      chatSheetTopPx = null;
       applyKeyboardSafeLayout();
-      applyChatPanelKeyboardOffset();
+      positionChatSheet();
     }, 300);
   });
 
@@ -2764,24 +2843,71 @@
     }
   }
 
+  // Stable per-player avatar colour: same name/id always gets the same hue,
+  // for everyone in the room, with no server round-trip. A plain string hash
+  // is enough -- this only needs to be consistent, not unpredictable.
+  function chatAvatarHue(seed) {
+    let h = 0;
+    const s = String(seed || '');
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+    return h;
+  }
+
+  // "22:24"-style short clock, matching the reference comment sheet's
+  // relative-time column. Falls back to nothing if the server didn't stamp
+  // the message (older history entries).
+  function chatShortTime(ts) {
+    if (!ts) return '';
+    const diff = Date.now() - ts;
+    if (diff < 60000) return 'now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm';
+    return Math.floor(diff / 3600000) + 'h';
+  }
+
   function appendChatMessage(msg, opts) {
     opts = opts || {};
     const container = document.getElementById('chat-messages');
     const emptyEl = container.querySelector('.chat-empty');
     if (emptyEl) emptyEl.remove();
+
+    // Comment-sheet row: avatar | (name + text on one wrapped paragraph).
+    // Replaces the old flat "Name: text" line -- with 4-6 people talking at
+    // once during a round, the avatar column is what makes it scannable
+    // without reading every line.
+    const isMine = msg.playerId === myPlayerId;
     const div = document.createElement('div');
-    div.className = 'chat-msg' + (msg.playerId === myPlayerId ? ' me' : '');
+    div.className = 'chat-msg' + (isMine ? ' me' : '');
     div.dataset.playerId = msg.playerId || '';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'chat-avatar';
+    const hue = chatAvatarHue(msg.playerId || msg.name);
+    avatar.style.background = `linear-gradient(135deg, hsl(${hue} 55% 42%), hsl(${(hue + 40) % 360} 55% 30%))`;
+    avatar.textContent = (msg.name || '?').trim().charAt(0) || '?';
+    div.appendChild(avatar);
+
+    const body = document.createElement('div');
+    body.className = 'chat-body';
     if (msg.type === 'gif' && msg.gifUrl) {
-      div.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}:</span>`;
+      body.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}</span>`;
       const img = document.createElement('img');
       img.src = msg.gifUrl;
       img.className = 'chat-gif';
       img.alt = 'GIF';
-      div.appendChild(img);
+      body.appendChild(img);
     } else {
-      div.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}:</span> <span class="chat-text">${escapeHtml(msg.text)}</span>`;
+      body.innerHTML =
+        `<span class="chat-name">${escapeHtml(msg.name)}</span> ` +
+        `<span class="chat-text">${escapeHtml(msg.text)}</span>`;
     }
+    const time = chatShortTime(msg.ts);
+    if (time) {
+      const timeEl = document.createElement('span');
+      timeEl.className = 'chat-time';
+      timeEl.textContent = time;
+      body.appendChild(timeEl);
+    }
+    div.appendChild(body);
 
     // Report/mute used to live here as icons on every message -- moved to a
     // tap-on-their-seat/lobby-row popover instead (see the player action
@@ -2965,9 +3091,11 @@
   function minimizeChatPanel() {
     const panel = document.getElementById('chat-panel');
     if (panel.classList.contains('hidden')) return;
+    document.getElementById('chat-input').blur();
     panel.classList.add('hidden');
     document.getElementById('chat-backdrop').classList.add('hidden');
     document.getElementById('chat-fab').classList.remove('hidden');
+    chatSheetTopPx = null;
   }
 
   // Timestamp of the last time the player actually touched the chat panel
@@ -2983,15 +3111,25 @@
   document.querySelector('.chat-messages').addEventListener('touchstart', markChatInteraction, { passive: true });
   document.getElementById('chat-input').addEventListener('input', markChatInteraction);
   document.getElementById('chat-input').addEventListener('focus', markChatInteraction);
-  // Belt-and-suspenders alongside the visualViewport 'resize' listener:
-  // recompute the sheet's keyboard offset right when the input is actually
-  // focused (the moment the keyboard starts opening from a real tap), and
-  // again shortly after once the keyboard animation has settled -- in case
-  // this device's resize events land late or get missed during the
-  // transition. Harmless if the resize listener already handled it by then.
+  // Belt-and-suspenders alongside the visualViewport listeners: reposition
+  // right when the input is actually focused (the moment the keyboard
+  // starts opening from a real tap), and again as it settles -- Android
+  // WebView's resize events during the keyboard animation are late and
+  // sometimes report an intermediate height. Cheap and idempotent, so
+  // running it a few extra times costs nothing. Each pass also re-pins the
+  // list to the newest message, since a shrinking list would otherwise
+  // leave you looking at older messages the instant you tap to type.
   document.getElementById('chat-input').addEventListener('focus', () => {
-    applyChatPanelKeyboardOffset();
-    setTimeout(applyChatPanelKeyboardOffset, 350);
+    const settle = () => { positionChatSheet(); scrollChatToLatest(); };
+    settle();
+    setTimeout(settle, 120);
+    setTimeout(settle, 350);
+    setTimeout(settle, 600);
+  });
+  // Keyboard dismissed via the system back gesture rather than by closing
+  // the sheet: resize usually covers it, but blur is the reliable signal.
+  document.getElementById('chat-input').addEventListener('blur', () => {
+    setTimeout(positionChatSheet, 120);
   });
 
   document.getElementById('chat-fab').onclick = () => {
@@ -3000,16 +3138,16 @@
     document.getElementById('chat-fab').classList.add('hidden');
     chatUnread = 0;
     updateChatBadge();
-    // Fresh, correct read at the moment the sheet opens (keyboard is
-    // always closed right here, since we no longer auto-focus the input --
-    // see below), independent of whatever routine game-state re-render
-    // last touched the panel while it was hidden.
-    applyChatPanelKeyboardOffset();
+    // Re-derive the sheet's top anchor from scratch on every open. This is
+    // the one moment a clean reading is guaranteed: the sheet is being
+    // opened by a tap on the FAB, so the keyboard is definitionally closed
+    // (we deliberately don't autofocus the input -- see below).
+    chatSheetTopPx = null;
+    positionChatSheet();
     // Same fix as loadChatHistory() above -- land on the newest message
     // every time the sheet opens, not wherever it happened to be scrolled
     // last time it was closed.
-    const container = document.getElementById('chat-messages');
-    container.scrollTop = container.scrollHeight;
+    scrollChatToLatest();
     // Deliberately NOT auto-focusing the input here anymore (removed Sept
     // 2026). Focusing it immediately forces the on-screen keyboard open the
     // instant the sheet appears, and on the actual Android WebView that
@@ -3022,13 +3160,21 @@
     // separate action.
   };
   document.getElementById('btn-chat-close').onclick = () => {
+    // Drop focus FIRST so the on-screen keyboard closes with the sheet.
+    // Without this the keyboard lingers over the table after the sheet is
+    // gone, and the next visualViewport resize arrives with no sheet to
+    // position -- which is how the old code could end up applying a
+    // keyboard offset that outlived the keyboard.
+    document.getElementById('chat-input').blur();
     document.getElementById('chat-panel').classList.add('hidden');
     document.getElementById('chat-backdrop').classList.add('hidden');
     document.getElementById('chat-fab').classList.remove('hidden');
+    chatSheetTopPx = null;
   };
-  // Tapping the dimmed area behind the sheet closes it too -- standard
+  // Tapping the table behind the sheet closes it too -- standard
   // bottom-sheet behavior (same as tapping outside an Instagram/WhatsApp
-  // comment or chat sheet).
+  // comment or chat sheet). The layer is invisible now (see .chat-backdrop
+  // in style.css) but still catches the tap.
   document.getElementById('chat-backdrop').onclick = () => {
     document.getElementById('btn-chat-close').click();
   };
@@ -3045,6 +3191,58 @@
   document.getElementById('chat-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendChat();
   });
+
+  // Swipe-down-to-dismiss on the grab handle / header. The handle has been
+  // drawn on this sheet for a while but never actually did anything, which
+  // is worse than not drawing it -- people try it, nothing happens, and the
+  // sheet reads as broken. Scoped deliberately to the handle and header
+  // only: putting it on the whole sheet would fight .chat-messages' own
+  // vertical scrolling, which is the single most-used gesture in here.
+  (function enableChatSheetDrag() {
+    const panel = document.getElementById('chat-panel');
+    const grip = document.querySelector('.chat-drag-handle');
+    const header = document.querySelector('.chat-header');
+    if (!panel || !grip || !header) return;
+    const DISMISS_PX = 80;
+    let startY = null;
+    let dy = 0;
+
+    const onStart = (e) => {
+      if (!e.touches || e.touches.length !== 1) return;
+      startY = e.touches[0].clientY;
+      dy = 0;
+      panel.style.transition = 'none';
+    };
+    const onMove = (e) => {
+      if (startY === null || !e.touches || !e.touches.length) return;
+      // Downward only -- dragging up must not detach the sheet from the
+      // top anchor that positionChatSheet() just clamped on-screen.
+      dy = Math.max(0, e.touches[0].clientY - startY);
+      panel.style.transform = 'translateY(' + dy + 'px)';
+    };
+    const onEnd = () => {
+      if (startY === null) return;
+      const shouldClose = dy > DISMISS_PX;
+      startY = null;
+      if (shouldClose) {
+        panel.style.transition = '';
+        panel.style.transform = '';
+        document.getElementById('btn-chat-close').click();
+        return;
+      }
+      // Snap back.
+      panel.style.transition = 'transform 0.18s ease-out';
+      panel.style.transform = 'translateY(0)';
+      setTimeout(() => { panel.style.transition = ''; panel.style.transform = ''; }, 200);
+    };
+
+    [grip, header].forEach((el) => {
+      el.addEventListener('touchstart', onStart, { passive: true });
+      el.addEventListener('touchmove', onMove, { passive: true });
+      el.addEventListener('touchend', onEnd);
+      el.addEventListener('touchcancel', onEnd);
+    });
+  })();
   socket.on('chat_message', (msg) => {
     if (isMuted(msg.playerId)) return; // muted -- skip both the panel message and the seat bubble
     appendChatMessage(msg);
