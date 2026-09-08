@@ -1357,22 +1357,164 @@
     renderGroupsBlock();
   }
 
+  function groupInviteLinkFor(slug) {
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.hash = '';
+    url.searchParams.set('g', slug);
+    return url.toString();
+  }
+
+  function groupInviteTextFor(slug, name) {
+    const who = (localStorage.getItem(NAME_STORAGE_KEY) || '').trim();
+    const lead = who ? `${who} invited you` : 'You are invited';
+    return `${lead} to play Least Count with "${name}".\n${groupInviteLinkFor(slug)}`;
+  }
+
   function renderGroupsBlock() {
-    const block = document.getElementById('groups-block');
     const list = document.getElementById('groups-list');
-    if (!block || !list) return;
+    const empty = document.getElementById('groups-empty');
+    if (!list) return;
     const groups = readRememberedGroups();
-    block.classList.toggle('hidden', groups.length === 0);
+    if (empty) empty.classList.toggle('hidden', groups.length > 0);
     list.innerHTML = '';
     groups.forEach((g) => {
       const li = document.createElement('li');
       li.className = 'group-row';
+      // Tapping the row PLAYS. Managing the group (share, rename, remove,
+      // delete) lives behind the "..." -- creating and managing a group are
+      // deliberately separate from sitting down at it.
       li.innerHTML = `<span class="group-row-name">${escapeHtml(g.name)}</span>
-        <span class="group-row-go">Open</span>`;
+        <button class="group-row-menu" type="button" aria-label="Group options">⋯</button>`;
       li.onclick = () => joinRoomByKey(g.slug);
+      li.querySelector('.group-row-menu').onclick = (e) => {
+        e.stopPropagation(); // don't also open the table
+        openGroupMenu(g.slug, g.name);
+      };
       list.appendChild(li);
     });
   }
+
+  // ---------------- group management menu ----------------
+  let groupMenuSlug = null;
+  let groupMenuName = '';
+
+  function setGroupMenuError(msg) {
+    const el = document.getElementById('group-menu-error');
+    if (el) el.textContent = msg || '';
+  }
+
+  function closeGroupMenu() {
+    groupMenuSlug = null;
+    document.getElementById('group-menu-overlay').classList.add('hidden');
+    document.getElementById('group-rename-row').classList.add('hidden');
+    setGroupMenuError('');
+  }
+
+  async function openGroupMenu(slug, name) {
+    groupMenuSlug = slug;
+    groupMenuName = name;
+    document.getElementById('group-menu-title').textContent = name;
+    document.getElementById('group-rename-row').classList.add('hidden');
+    document.getElementById('input-group-rename').value = name;
+    setGroupMenuError('');
+    // Rename/Delete are admin-only. Hidden until the server confirms who we
+    // are -- the server enforces it too, this only avoids offering a button
+    // that would fail.
+    document.getElementById('btn-group-rename').classList.add('hidden');
+    document.getElementById('btn-group-delete').classList.add('hidden');
+    document.getElementById('group-menu-overlay').classList.remove('hidden');
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('get_group', { slug, firebaseIdToken }, (res) => {
+      if (!res || !res.ok || groupMenuSlug !== slug) return;
+      groupMenuName = res.name;
+      document.getElementById('group-menu-title').textContent = res.name;
+      document.getElementById('input-group-rename').value = res.name;
+      document.getElementById('btn-group-rename').classList.toggle('hidden', !res.isAdmin);
+      document.getElementById('btn-group-delete').classList.toggle('hidden', !res.isAdmin);
+    });
+  }
+
+  document.getElementById('btn-group-menu-close').onclick = closeGroupMenu;
+  document.getElementById('group-menu-overlay').onclick = (e) => {
+    if (e.target.id === 'group-menu-overlay') closeGroupMenu();
+  };
+
+  document.getElementById('btn-group-share').onclick = () => {
+    if (!groupMenuSlug) return;
+    logAnalytics('invite_shared_whatsapp');
+    openWhatsAppShare(groupInviteTextFor(groupMenuSlug, groupMenuName));
+  };
+
+  document.getElementById('btn-group-copy').onclick = async () => {
+    if (!groupMenuSlug) return;
+    try {
+      await navigator.clipboard.writeText(groupInviteTextFor(groupMenuSlug, groupMenuName));
+      setGroupMenuError('Invite link copied.');
+    } catch (e) {
+      setGroupMenuError('Could not copy — link is ' + groupInviteLinkFor(groupMenuSlug));
+    }
+  };
+
+  document.getElementById('btn-group-rename').onclick = () => {
+    document.getElementById('group-rename-row').classList.remove('hidden');
+    try { document.getElementById('input-group-rename').focus(); } catch (e) {}
+  };
+
+  document.getElementById('btn-group-rename-save').onclick = async () => {
+    const slug = groupMenuSlug;
+    const newName = document.getElementById('input-group-rename').value.trim();
+    if (!slug || !newName) return setGroupMenuError('Enter a name.');
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('rename_group', { slug, groupName: newName, firebaseIdToken }, (res) => {
+      if (!res || !res.ok) return setGroupMenuError((res && res.error) || 'Could not rename.');
+      rememberGroup(slug, res.name);
+      closeGroupMenu();
+    });
+  };
+
+  // Local only -- membership is "whoever holds the link", so leaving is just
+  // forgetting the shortcut on this device. Nobody else is affected, and the
+  // link still works if they change their mind.
+  document.getElementById('btn-group-remove').onclick = () => {
+    if (!groupMenuSlug) return;
+    try {
+      const list = readRememberedGroups().filter((g) => g.slug !== groupMenuSlug);
+      localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list));
+    } catch (e) { /* storage blocked */ }
+    renderGroupsBlock();
+    closeGroupMenu();
+  };
+
+  // Destructive and irreversible for everyone in the group, so it asks
+  // twice: the button turns into a confirm before it does anything.
+  let groupDeleteArmed = false;
+  document.getElementById('btn-group-delete').onclick = async () => {
+    const btn = document.getElementById('btn-group-delete');
+    if (!groupDeleteArmed) {
+      groupDeleteArmed = true;
+      btn.textContent = 'Tap again to delete permanently';
+      setGroupMenuError('This removes the group and its leaderboard for everyone.');
+      setTimeout(() => {
+        groupDeleteArmed = false;
+        btn.textContent = 'Delete group for everyone';
+      }, 5000);
+      return;
+    }
+    groupDeleteArmed = false;
+    btn.textContent = 'Delete group for everyone';
+    const slug = groupMenuSlug;
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('delete_group', { slug, firebaseIdToken }, (res) => {
+      if (!res || !res.ok) return setGroupMenuError((res && res.error) || 'Could not delete.');
+      try {
+        const list = readRememberedGroups().filter((g) => g.slug !== slug);
+        localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list));
+      } catch (e) {}
+      renderGroupsBlock();
+      closeGroupMenu();
+    });
+  };
 
   // Single entry point for joining ANY table -- a 4-letter ad-hoc code, a
   // permanent group slug, from a typed code, a saved group row, or an invite
@@ -1402,6 +1544,12 @@
       saveSession(res.roomCode, res.playerId);
       loadChatHistory(res.chatHistory);
       showChatFab();
+      // Invite mode has done its job. Without this the invite card (and the
+      // pre-filled room code) is still sitting on the landing screen
+      // underneath, so leaving the game drops you back onto an invitation to
+      // rejoin the room you just left.
+      exitInviteMode();
+      document.getElementById('input-roomcode').value = '';
       showScreen('screen-lobby');
     });
   }
@@ -1505,12 +1653,32 @@
       nameInput.value = '';
       rememberGroup(res.slug, res.name);
       logAnalytics('group_created');
-      // The server deliberately doesn't put us in a room -- joining by slug
-      // spins one up and makes us host, through the same single join path
-      // everything else uses.
-      joinRoomByKey(res.slug);
+      // Creating a group does NOT drop you into a game (Sept 2026, per
+      // feedback). Making a group and playing at it are separate acts: the
+      // group appears in the list above, and you open it when people are
+      // actually around. The menu opens straight away so the obvious next
+      // step -- sharing the link -- is one tap, without having sat down at
+      // an empty table first.
+      openGroupMenu(res.slug, res.name);
     });
   };
+
+  // Quick Play toggle: Play Online and Play with Bots ask the same question
+  // ("how many?") so they now share one block. Both sub-blocks stay in the
+  // DOM with their original ids -- only visibility switches -- so the
+  // existing matchmaking and solo handlers are untouched.
+  (function wireQuickPlayToggle() {
+    const toggle = document.getElementById('quickplay-toggle');
+    if (!toggle) return;
+    toggle.querySelectorAll('.seg').forEach((seg) => {
+      seg.onclick = () => {
+        const mode = seg.dataset.mode;
+        toggle.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s === seg));
+        document.getElementById('quickplay-online').classList.toggle('hidden', mode !== 'online');
+        document.getElementById('quickplay-bots').classList.toggle('hidden', mode !== 'bots');
+      };
+    });
+  })();
 
   renderGroupsBlock();
   function getPlayerName() {
@@ -1946,9 +2114,13 @@
       list.appendChild(li);
     });
     reopenPlayerActionPopoverIfNeeded(list);
-    const isHost = room.hostPlayerId === myPlayerId;
+    // Start Game is available to EVERYONE at the table (Sept 2026), not just
+    // the host: six people in a group, four free tonight, and those four
+    // shouldn't be blocked by whoever happens to hold the host flag -- who
+    // might not even be playing. The max-score selector moves with it, since
+    // whoever starts the game is the one choosing how long it runs.
     const btn = document.getElementById('btn-start');
-    btn.classList.toggle('hidden', !isHost);
+    btn.classList.remove('hidden');
     btn.disabled = room.players.length < 2;
     // While you're the only one here, Start Game is dead weight and inviting
     // is the only thing worth doing -- so it visually steps back and the
@@ -1957,18 +2129,17 @@
     const alone = room.players.length < 2;
     btn.classList.toggle('primary', !alone);
     btn.classList.toggle('secondary', alone);
-    document.getElementById('lobby-maxscore-row').classList.toggle('hidden', !isHost);
-    document.getElementById('lobby-hint').textContent = isHost
-      ? (alone ? 'Invite someone to get started' : `Ready with ${room.players.length} players`)
-      : 'Waiting for host to start';
+    document.getElementById('lobby-maxscore-row').classList.remove('hidden');
+    document.getElementById('lobby-hint').textContent = alone
+      ? 'Invite someone to get started'
+      : `Ready with ${room.players.length} players — anyone can start`;
 
     // ---- persistent group extras ----
-    const groupNameEl = document.getElementById('lobby-group-name');
     const isGroup = !!room.groupSlug;
-    if (groupNameEl) {
-      groupNameEl.textContent = room.groupName || '';
-      groupNameEl.classList.toggle('hidden', !isGroup);
-    }
+    const groupHeader = document.getElementById('lobby-group-header');
+    const groupNameEl = document.getElementById('lobby-group-name');
+    if (groupNameEl) groupNameEl.textContent = room.groupName || '';
+    if (groupHeader) groupHeader.classList.toggle('hidden', !isGroup);
     // A group's slug is long and never typed by hand -- the room-code box is
     // 4 characters and uppercases what you type, so copying a slug into it
     // could never work. For a group the whole code row is hidden and the
@@ -1981,25 +2152,18 @@
     if (codeRow) codeRow.classList.toggle('hidden', isGroup);
     if (codeHint) codeHint.classList.toggle('hidden', isGroup);
 
-    if (isGroup) {
-      rememberGroup(room.groupSlug, room.groupName);
-      loadGroupStandings(room.groupSlug);
-    } else {
-      document.getElementById('lobby-standings-block').classList.add('hidden');
-    }
+    if (isGroup) rememberGroup(room.groupSlug, room.groupName);
   }
 
-  // Running leaderboard for a permanent group. Fetched fresh each time the
-  // lobby renders for a group, so a game that just finished shows up without
-  // anyone having to reload.
+  // Running leaderboard for a permanent group, shown in an overlay from the
+  // trophy icon rather than inline -- as a block in the page flow it pushed
+  // Start Game and Leave Table below the fold on a phone.
   function loadGroupStandings(slug) {
-    const block = document.getElementById('lobby-standings-block');
     const list = document.getElementById('lobby-standings');
     const empty = document.getElementById('lobby-standings-empty');
-    if (!block || !list) return;
-    block.classList.remove('hidden');
+    if (!list) return;
     socket.emit('get_group', { slug }, (res) => {
-      if (!res || !res.ok) { block.classList.add('hidden'); return; }
+      if (!res || !res.ok) return;
       const rows = res.standings || [];
       list.innerHTML = '';
       empty.classList.toggle('hidden', rows.length > 0);
@@ -2017,6 +2181,18 @@
       });
     });
   }
+
+  document.getElementById('btn-group-leaderboard').onclick = () => {
+    if (!latestRoom || !latestRoom.groupSlug) return;
+    loadGroupStandings(latestRoom.groupSlug);
+    document.getElementById('overlay-standings').classList.remove('hidden');
+  };
+  document.getElementById('btn-close-standings').onclick = () => {
+    document.getElementById('overlay-standings').classList.add('hidden');
+  };
+  document.getElementById('overlay-standings').onclick = (e) => {
+    if (e.target.id === 'overlay-standings') e.currentTarget.classList.add('hidden');
+  };
 
   // ---------------- realistic card rendering ----------------
   function cardEl(card, opts) {
@@ -2794,10 +2970,11 @@
     const overlay = document.getElementById('overlay-round-result');
     if (!latestGame || overlay.classList.contains('hidden')) return;
     const game = latestGame;
-    const isHost = latestRoom && latestRoom.hostPlayerId === myPlayerId;
-
+    // Anyone at the table can move the round on, not just the host -- same
+    // reasoning as Start Game in the lobby. The countdown starts it anyway;
+    // this is only the "we're all ready, skip the wait" shortcut.
     const nextBtn = document.getElementById('btn-next-round');
-    nextBtn.classList.toggle('hidden', !isHost || game.gameOver);
+    nextBtn.classList.toggle('hidden', game.gameOver);
     // On the final round there's no next round to start -- instead everyone
     // (not just the host) gets a "See Final Result" button that leads into
     // the separate celebratory trophy screen, at their own pace rather than
@@ -2819,11 +2996,11 @@
     } else {
       // No countdown reported (older server, or a state we didn't expect) --
       // fall back to the previous wording rather than showing nothing.
-      hintEl.textContent = isHost ? '' : 'Waiting for host to start next round...';
+      hintEl.textContent = '';
     }
 
     const maxScoreRow = document.getElementById('round-maxscore-row');
-    if (isHost && !game.gameOver) {
+    if (!game.gameOver) {
       const maxCurrentScore = Math.max(0, ...Object.values(game.scores));
       populateMaxScoreSelect(document.getElementById('round-maxscore-select'), game.eliminationScore, maxCurrentScore);
       maxScoreRow.classList.remove('hidden');
