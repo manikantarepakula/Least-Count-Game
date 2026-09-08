@@ -431,6 +431,11 @@ async function recordGameResult(room) {
   } catch (e) {
     console.error(`[Firebase] Failed to record game result for room ${room.code}:`, e.message);
   }
+  // Separately from the per-player lifetime stats above, a game played in a
+  // persistent group also feeds that group's own leaderboard. Awaited last
+  // and with its own error handling inside, so a standings failure can never
+  // stop the individual stats from being written.
+  await updateGroupStandings(room, winnerId);
 }
 
 // --------------------------------------------------------------------------
@@ -611,6 +616,8 @@ const RATE_LIMITS = {
   declare: { max: 5, windowMs: 5000 },
   request_hint: { max: 10, windowMs: 10000 },
   create_room: { max: 5, windowMs: 60000 },
+  create_group: { max: 3, windowMs: 60000 },        // groups are permanent -- much tighter than rooms
+  get_group: { max: 20, windowMs: 30000 },
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
   report_player: { max: 5, windowMs: 60000 },
@@ -687,11 +694,183 @@ function makePlayerId() {
   return crypto.randomUUID();
 }
 
+// ===========================================================================
+// Persistent groups (Sept 2026)
+// ===========================================================================
+// A "group" is a named, permanent table -- Family, Office Gang, Cousins --
+// that replaces the create-a-room-and-share-a-new-code ritual every single
+// time. The link never changes, so one pinned WhatsApp message works forever.
+//
+// Deliberate split of responsibilities:
+//   - The GROUP is a Firestore document. It outlives every game and holds
+//     the name, its admin, and the running leaderboard.
+//   - The live ROOM stays exactly what it always was: ephemeral, in server
+//     memory, discarded when everyone leaves. Nothing about the game engine
+//     or the room lifecycle changes. A room is simply *bound* to a group
+//     (room.groupSlug) when it was opened from one.
+//
+// That split is what keeps this cheap: opening a group for the tenth time
+// creates a fresh ordinary room, exactly as before, and only the standings
+// survive in Firestore.
+//
+// Slugs vs room codes -- how the two never collide:
+//   Ad-hoc rooms use 4 UPPERCASE letters (ABCD). Group slugs are lowercase
+//   and ALWAYS contain a hyphen, because a 3-character random discriminator
+//   is appended (sharma-family-k2p). So "does it contain a hyphen" is a
+//   complete, unambiguous test for which kind of key we're looking at, and
+//   the two namespaces can share the same `rooms` map and the same
+//   join_room handler with no special-casing anywhere else.
+// ===========================================================================
+const GROUP_NAME_MAX = 30;
+const GROUP_SLUG_BASE_MAX = 32;
+
+function slugifyGroupName(name) {
+  const base = String(name || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, GROUP_SLUG_BASE_MAX)
+    .replace(/-+$/g, '');
+  return base || 'table';
+}
+
+// The 3-char suffix does double duty: it makes slugs unique without a
+// read-check-retry loop, and it guarantees the hyphen that the "is this a
+// group?" test depends on (a single-word group name like "Family" would
+// otherwise slugify to "family", with no hyphen at all).
+function makeGroupSlug(name) {
+  const suffix = Math.random().toString(36).slice(2, 5).replace(/[^a-z0-9]/g, '0').padEnd(3, '0');
+  return `${slugifyGroupName(name)}-${suffix}`;
+}
+
+function looksLikeGroupSlug(key) {
+  return typeof key === 'string' && key.includes('-');
+}
+
+async function readGroup(slug) {
+  if (!db || !looksLikeGroupSlug(slug)) return null;
+  const doc = await db.collection('groups').doc(slug).get();
+  return doc.exists ? doc.data() : null;
+}
+
+// Builds the in-memory room for a group that doesn't currently have one --
+// i.e. the first person to open the group since the last game ended. Returns
+// null when there's no such group, so join_room can fall through to its
+// normal "Room not found" error for a mistyped code.
+//
+// hostPlayerId is deliberately left null: nobody is in the room yet. The
+// join_room lobby path promotes whoever arrives first, which is the same
+// person who just tapped the group.
+async function createRoomForGroup(slug) {
+  const group = await readGroup(slug);
+  if (!group) return null;
+  const room = {
+    code: slug,
+    groupSlug: slug,
+    groupName: group.name || slug,
+    groupAdminUid: group.adminUid || null,
+    hostPlayerId: null,
+    players: new Map(),
+    order: [],
+    phase: 'lobby',
+    game: null,
+    turnTimer: null,
+    turnDeadline: null,
+    autoNextTimer: null,
+    autoNextRoundAt: null,
+    dealTimer: null,
+    revealTimer: null,
+    chatHistory: [],
+    statsRecorded: false,
+    pendingJoins: new Map(),
+    allHumansDisconnectedAt: null,
+  };
+  rooms.set(slug, room);
+  return room;
+}
+
+// Running leaderboard for a group, updated once per finished game.
+//
+// The standings are a MAP INSIDE the group document rather than one document
+// per player, and that's a deliberate cost decision: per-player documents
+// would mean 4-6 extra Firestore writes per game, which at ~1,500 games/day
+// would push total writes past the 20,000/day free-tier ceiling. As a single
+// map it's one write per game regardless of table size.
+//
+// Runs in a transaction because several games in the same group can finish
+// close together, and a read-modify-write without one would silently lose
+// whichever result landed second.
+async function updateGroupStandings(room, winnerId) {
+  if (!db || !room.groupSlug || !room.game) return;
+  const ref = db.collection('groups').doc(room.groupSlug);
+  const finishedAt = new Date().toISOString();
+
+  // Snapshot what we need before the transaction -- the room can change
+  // underneath us while the transaction retries.
+  const results = [];
+  for (const pid of room.game.playerIds) {
+    const player = room.players.get(pid);
+    if (!player || player.isBot || !player.firebaseUid) continue;
+    results.push({
+      uid: player.firebaseUid,
+      name: player.name,
+      won: pid === winnerId,
+      score: Number(room.game.scores[pid]) || 0,
+    });
+  }
+  if (!results.length) return;
+
+  try {
+    await db.runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return; // group deleted mid-game -- nothing to update
+      const data = doc.data() || {};
+      const standings = data.standings || {};
+      for (const r of results) {
+        const prev = standings[r.uid] || { games: 0, wins: 0, totalScore: 0 };
+        standings[r.uid] = {
+          // Name is refreshed every game so the board follows a rename
+          // rather than showing whatever they were called the first time.
+          name: r.name,
+          games: (prev.games || 0) + 1,
+          wins: (prev.wins || 0) + (r.won ? 1 : 0),
+          totalScore: (prev.totalScore || 0) + r.score,
+        };
+      }
+      tx.set(ref, { standings, lastPlayedAt: finishedAt }, { merge: true });
+    });
+  } catch (e) {
+    // Never let a leaderboard write break the end of a game.
+    console.error(`[Groups] standings update failed for ${room.groupSlug}:`, e.message);
+  }
+}
+
+// Shapes the standings map into the sorted array the client renders.
+// Average score is per game and lower is better in Least Count, so it's a
+// genuine skill measure rather than just "who played most".
+function standingsToList(standings) {
+  return Object.entries(standings || {})
+    .map(([uid, s]) => ({
+      uid,
+      name: s.name || 'Player',
+      games: s.games || 0,
+      wins: s.wins || 0,
+      avgScore: s.games ? Math.round((s.totalScore || 0) / s.games) : 0,
+    }))
+    .sort((a, b) => (b.wins - a.wins) || (a.avgScore - b.avgScore) || (b.games - a.games));
+}
+
 function publicRoomInfo(room) {
   return {
     roomCode: room.code,
     hostPlayerId: room.hostPlayerId,
     phase: room.phase,
+    // Set only for rooms bound to a persistent group (see the groups section
+    // above). null for ordinary one-off rooms, which is what the client keys
+    // off to decide whether to show the group name and leaderboard.
+    groupSlug: room.groupSlug || null,
+    groupName: room.groupName || null,
     players: room.order.map((pid) => ({
       playerId: pid,
       name: room.players.get(pid).name,
@@ -1341,8 +1520,19 @@ io.on('connection', (socket) => {
   socket.on('join_room', async ({ roomCode, name, firebaseIdToken, platform }, ack) => {
     try {
       if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
-      const code = (roomCode || '').trim().toUpperCase();
-      const room = rooms.get(code);
+      // Two kinds of key arrive here (see the groups section above): a
+      // 4-letter ad-hoc room code, which is case-insensitive and uppercased
+      // as it always was, and a permanent group slug, which is lowercase and
+      // always contains a hyphen. The hyphen is the whole test.
+      const rawCode = (roomCode || '').trim();
+      const code = looksLikeGroupSlug(rawCode) ? rawCode.toLowerCase() : rawCode.toUpperCase();
+      let room = rooms.get(code);
+      // A group whose room isn't currently live -- i.e. the first person to
+      // open it since the last game finished. Spin the room up on demand
+      // rather than keeping empty rooms alive between sessions.
+      if (!room && looksLikeGroupSlug(code)) {
+        room = await createRoomForGroup(code);
+      }
       if (!room) throw new Error('Room not found. Check the code.');
       if (room.order.length >= 10) throw new Error('Room is full (max 10 players).');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
@@ -1354,6 +1544,11 @@ io.on('connection', (socket) => {
         const playerId = makePlayerId();
         room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
         room.order.push(playerId);
+        // A freshly-spun-up group room has no host yet (createRoomForGroup
+        // leaves it null, since nobody was in it). Whoever opens the group
+        // first takes the chair. Ordinary rooms always have a host already,
+        // set by create_room, so this is a no-op for them.
+        if (!room.hostPlayerId) room.hostPlayerId = playerId;
         socketIndex.set(socket.id, { roomCode: code, playerId });
         socket.join(code);
         ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
@@ -1382,6 +1577,63 @@ io.on('connection', (socket) => {
       socket.join(code);
       ack && ack({ ok: true, pending: true, roomCode: code, playerId });
       notifyHostOfJoinRequest(room);
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Creates a permanent named group and returns its slug. Deliberately does
+  // NOT create or join a room -- the client follows up with an ordinary
+  // join_room using the slug, which spins the room up via
+  // createRoomForGroup() and promotes them to host. Keeping it that way
+  // means there is exactly ONE join path in this file, so the mid-game
+  // approval flow, room-full checks and host handover all keep working for
+  // groups without a line of duplicated logic.
+  socket.on('create_group', async ({ groupName, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'create_group')) throw new Error('Too many groups created too quickly. Please wait a moment.');
+      if (isIpRateLimited(socket, 'create_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
+      if (!db) throw new Error('Groups are unavailable right now. Please create a normal room instead.');
+      const cleanName = (groupName || '').trim().slice(0, GROUP_NAME_MAX);
+      if (cleanName.length < 2) throw new Error('Give your group a name (at least 2 characters).');
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+
+      // The random suffix makes collisions vanishingly unlikely, but check
+      // anyway and re-roll -- a silent collision would drop two families
+      // into the same table and the same leaderboard.
+      let slug = makeGroupSlug(cleanName);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const existing = await db.collection('groups').doc(slug).get();
+        if (!existing.exists) break;
+        slug = makeGroupSlug(cleanName);
+      }
+
+      await db.collection('groups').doc(slug).set({
+        name: cleanName,
+        slug,
+        // Recorded for future use (rename, removing a member). Membership is
+        // deliberately open -- anyone holding the link is in -- so this does
+        // not currently gate anything.
+        adminUid: verifiedUid || null,
+        createdAt: new Date().toISOString(),
+        standings: {},
+      });
+      console.log(`[Groups] Created "${cleanName}" -> ${slug}`);
+      ack && ack({ ok: true, slug, name: cleanName });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Read-only lookup used by the invite card (to show which group you've
+  // been invited to before you commit a name) and by the lobby leaderboard.
+  socket.on('get_group', async ({ slug }, ack) => {
+    try {
+      if (isRateLimited(socket, 'get_group')) throw new Error('Too many requests too quickly. Please wait a moment.');
+      const clean = (slug || '').trim().toLowerCase();
+      const group = await readGroup(clean);
+      if (!group) throw new Error('Group not found.');
+      ack && ack({ ok: true, slug: clean, name: group.name || clean, standings: standingsToList(group.standings) });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
