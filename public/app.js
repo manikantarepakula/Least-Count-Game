@@ -1622,6 +1622,48 @@
     }
   })();
 
+  // --------------------------------------------------------------------
+  // Deep link arriving while the app is already open (Android App Links).
+  //
+  // The IIFE above only runs at page load, which covers the browser and a
+  // cold app start. But once App Links are verified, tapping an invite in
+  // WhatsApp with the app already running hands the URL to the app instead
+  // of reloading the page -- Capacitor fires appUrlOpen and nothing else
+  // happens unless we listen for it.
+  //
+  // Registered now even though the manifest side isn't built yet: it's inert
+  // without it (the event simply never fires), and it means the native build
+  // is a manifest change only, with no matching web deploy to remember.
+  // --------------------------------------------------------------------
+  (function listenForDeepLinks() {
+    const CapApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+    if (!CapApp || !CapApp.addListener) return;
+    CapApp.addListener('appUrlOpen', (event) => {
+      try {
+        const url = new URL(event.url);
+        const slug = (url.searchParams.get('g') || '').trim().toLowerCase();
+        const room = (url.searchParams.get('room') || '').trim().toUpperCase();
+        if (!slug && !room) return;
+        // Already sitting in that exact table? Don't yank them out of it.
+        if (myRoomCode && (myRoomCode === slug || myRoomCode === room)) return;
+        if (slug) {
+          enterInviteMode(slug, 'You’ve been invited to play');
+          socket.emit('get_group', { slug }, (res) => {
+            if (!res || !res.ok) return;
+            document.getElementById('invite-headline').textContent = `You’ve been invited to ${res.name}`;
+            document.getElementById('invite-roomcode').textContent = res.name;
+          });
+        } else {
+          document.getElementById('input-roomcode').value = room;
+          enterInviteMode(room, 'You’ve been invited to a game');
+        }
+        showScreen('screen-landing');
+      } catch (e) {
+        console.warn('[DeepLink] could not handle', event && event.url, e && e.message);
+      }
+    });
+  })();
+
   document.getElementById('btn-invite-join').onclick = () => {
     const nameInput = document.getElementById('input-invite-name');
     const name = nameInput.value.trim();
