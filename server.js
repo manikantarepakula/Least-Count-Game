@@ -887,6 +887,55 @@ function publicRoomInfo(room) {
 // hand hosting to some other eliminated spectator instead of an active player.
 // Falls back progressively (any connected human, then anyone at all) so a
 // host handoff never simply fails.
+// ---------------------------------------------------------------------------
+// Seat reuse on re-join (Sept 2026 -- fixes "I appear three times").
+//
+// join_room used to mint a brand-new playerId on every single join, while
+// disconnect deliberately KEEPS the old seat (marked offline) so a page
+// refresh can reconnect to it. For a throwaway room that's invisible, because
+// the room dies with the session. For a permanent group you open on Monday,
+// Tuesday and Wednesday, it means three of you sitting at the table.
+//
+// Worse, it broke hosting: the first person in becomes host, and when they
+// closed the page pickNextHost() found nobody else connected and left
+// hostPlayerId pointing at that now-offline seat. Coming back created a NEW
+// player, and the "promote the joiner" rule only fires when the room has no
+// host at all -- so the room stayed owned by a ghost, and every host-gated
+// control (Start Game, max score) silently vanished for everyone.
+//
+// Matching on Firebase uid is what makes this reliable: it's stable per
+// device even for anonymous players. Name is only used as a fallback for the
+// rare case where there's no uid at all, and then only to reclaim a seat
+// that's already disconnected -- never to take one from someone active.
+// ---------------------------------------------------------------------------
+function findExistingSeat(room, firebaseUid, cleanName) {
+  for (const pid of room.order) {
+    const p = room.players.get(pid);
+    if (!p || p.isBot) continue;
+    // Same account/device: take the seat over even if it still looks
+    // connected -- that's the "opened it in a second tab" case, and one
+    // person should occupy one chair.
+    if (firebaseUid && p.firebaseUid === firebaseUid) return pid;
+  }
+  if (!firebaseUid) {
+    for (const pid of room.order) {
+      const p = room.players.get(pid);
+      if (p && !p.isBot && !p.connected && p.name === cleanName) return pid;
+    }
+  }
+  return null;
+}
+
+// Ensures hostPlayerId points at somebody who can actually act. Called
+// whenever the room's membership changes, so a host who left can never
+// strand the controls again.
+function repairHost(room) {
+  const current = room.players.get(room.hostPlayerId);
+  if (current && current.connected && !current.isBot) return;
+  const next = pickNextHost(room, null);
+  if (next) room.hostPlayerId = next;
+}
+
 function pickNextHost(room, excludePlayerId) {
   const eliminated = room.game ? room.game.eliminated : null;
   const quit = room.game ? room.game.quit : null;
@@ -1534,9 +1583,31 @@ io.on('connection', (socket) => {
         room = await createRoomForGroup(code);
       }
       if (!room) throw new Error('Room not found. Check the code.');
-      if (room.order.length >= 10) throw new Error('Room is full (max 10 players).');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+
+      // Already have a chair at this table? Sit back down in it rather than
+      // pulling up another one. See findExistingSeat() for why this matters
+      // so much for permanent groups. Works in every phase, so it doubles as
+      // a clean reconnect path mid-game.
+      const existingId = findExistingSeat(room, verifiedUid, cleanName);
+      if (existingId) {
+        const p = room.players.get(existingId);
+        p.socketId = socket.id;
+        p.connected = true;
+        p.name = cleanName;
+        p.platform = cleanPlatform(platform);
+        room.allHumansDisconnectedAt = null; // a human is back
+        socketIndex.set(socket.id, { roomCode: code, playerId: existingId });
+        socket.join(code);
+        repairHost(room);
+        ack && ack({ ok: true, roomCode: code, playerId: existingId, chatHistory: room.chatHistory });
+        broadcastRoom(room);
+        if (room.game) broadcastGameState(room);
+        return;
+      }
+
+      if (room.order.length >= 10) throw new Error('Room is full (max 10 players).');
 
       // Room hasn't started yet -- exactly the original behavior, join
       // straight into the lobby, no approval needed.
@@ -1545,10 +1616,10 @@ io.on('connection', (socket) => {
         room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
         room.order.push(playerId);
         // A freshly-spun-up group room has no host yet (createRoomForGroup
-        // leaves it null, since nobody was in it). Whoever opens the group
-        // first takes the chair. Ordinary rooms always have a host already,
-        // set by create_room, so this is a no-op for them.
-        if (!room.hostPlayerId) room.hostPlayerId = playerId;
+        // leaves it null, since nobody was in it). repairHost also rescues
+        // the case where the recorded host is an offline ghost, which is how
+        // group rooms used to end up with nobody able to start a game.
+        repairHost(room);
         socketIndex.set(socket.id, { roomCode: code, playerId });
         socket.join(code);
         ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
@@ -1558,6 +1629,27 @@ io.on('connection', (socket) => {
 
       if (room.phase === 'starting') throw new Error('Game is starting -- try again in a few seconds.');
       if (room.phase === 'game_over') throw new Error('This game has already ended.');
+
+      // Inside a permanent group, everybody holding the link is already a
+      // member -- making them wait for someone to tap Admit is friction with
+      // no benefit, and it's exactly the "6 in the group, 4 playing, other 2
+      // want in" case. They're seated straight away and dealt in at the
+      // start of the next round, the same way an admitted player is (see
+      // startNextRound, which is the single place addPlayer happens).
+      // Approval still applies to ad-hoc rooms, where a code could have
+      // reached a stranger.
+      if (room.groupSlug) {
+        const playerId = makePlayerId();
+        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
+        room.order.push(playerId);
+        repairHost(room);
+        socketIndex.set(socket.id, { roomCode: code, playerId });
+        socket.join(code);
+        ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+        broadcastRoom(room);
+        broadcastGameState(room);
+        return;
+      }
 
       // Mid-game join request: the room is actively 'playing'. Rather than
       // dropping straight in, this holds as a pending request the host has
@@ -1625,15 +1717,74 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Rename a group. Admin (its creator) only -- membership is open to anyone
+  // with the link, so without this restriction any passer-by could rename
+  // somebody's family table. Updates the live room too, so anyone currently
+  // sitting in it sees the new name without reloading.
+  socket.on('rename_group', async ({ slug, groupName, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'create_group')) throw new Error('Too many changes too quickly. Please wait a moment.');
+      if (!db) throw new Error('Groups are unavailable right now.');
+      const clean = (slug || '').trim().toLowerCase();
+      const newName = (groupName || '').trim().slice(0, GROUP_NAME_MAX);
+      if (newName.length < 2) throw new Error('Give your group a name (at least 2 characters).');
+      const group = await readGroup(clean);
+      if (!group) throw new Error('Group not found.');
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      if (!verifiedUid || group.adminUid !== verifiedUid) throw new Error('Only the person who created this group can rename it.');
+
+      await db.collection('groups').doc(clean).set({ name: newName }, { merge: true });
+      const room = rooms.get(clean);
+      if (room) { room.groupName = newName; broadcastRoom(room); }
+      ack && ack({ ok: true, name: newName });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Delete a group and its leaderboard for everyone. Admin only, and
+  // deliberately does NOT tear down a live room -- anyone mid-game keeps
+  // playing to the end; the record just stops existing afterwards.
+  socket.on('delete_group', async ({ slug, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'create_group')) throw new Error('Too many changes too quickly. Please wait a moment.');
+      if (!db) throw new Error('Groups are unavailable right now.');
+      const clean = (slug || '').trim().toLowerCase();
+      const group = await readGroup(clean);
+      if (!group) throw new Error('Group not found.');
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      if (!verifiedUid || group.adminUid !== verifiedUid) throw new Error('Only the person who created this group can delete it.');
+
+      await db.collection('groups').doc(clean).delete();
+      const room = rooms.get(clean);
+      // Unbind the live room so a finishing game can't resurrect standings
+      // for a group that no longer exists (updateGroupStandings no-ops
+      // without a slug).
+      if (room) { room.groupSlug = null; room.groupName = null; broadcastRoom(room); }
+      console.log(`[Groups] Deleted ${clean}`);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
   // Read-only lookup used by the invite card (to show which group you've
   // been invited to before you commit a name) and by the lobby leaderboard.
-  socket.on('get_group', async ({ slug }, ack) => {
+  socket.on('get_group', async ({ slug, firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'get_group')) throw new Error('Too many requests too quickly. Please wait a moment.');
       const clean = (slug || '').trim().toLowerCase();
       const group = await readGroup(clean);
       if (!group) throw new Error('Group not found.');
-      ack && ack({ ok: true, slug: clean, name: group.name || clean, standings: standingsToList(group.standings) });
+      // Resolved to a BOOLEAN here rather than sending adminUid back -- this
+      // file's standing rule is that a firebaseUid never crosses to the
+      // browser, not even your own.
+      let isAdmin = false;
+      if (firebaseIdToken && group.adminUid) {
+        const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+        isAdmin = !!verifiedUid && verifiedUid === group.adminUid;
+      }
+      ack && ack({ ok: true, slug: clean, name: group.name || clean, isAdmin, standings: standingsToList(group.standings) });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
@@ -1758,8 +1909,15 @@ io.on('connection', (socket) => {
     try {
       const room = rooms.get(roomCode);
       if (!room) throw new Error('Room not found.');
+      // ANY player at the table can start the game (Sept 2026), not just the
+      // host. The case that forced this: six people in a group, four of them
+      // free right now -- those four shouldn't have to wait on whoever
+      // happens to hold the host flag, especially since that person might
+      // not even be playing tonight. Whoever taps Start also picks the max
+      // score, for the same reason: binding it to a host who isn't at the
+      // table would just move the deadlock somewhere else.
       const entry = socketIndex.get(socket.id);
-      if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can start the game.');
+      if (!entry || !room.players.has(entry.playerId)) throw new Error('You are not in this room.');
       if (room.order.length < 2) throw new Error('Need at least 2 players.');
       if (room.order.length > 10) throw new Error('Maximum 10 players.');
 
@@ -1880,7 +2038,11 @@ io.on('connection', (socket) => {
       const room = rooms.get(roomCode);
       if (!room || !room.game) throw new Error('Game not active.');
       const entry = socketIndex.get(socket.id);
-      if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can start the next round.');
+      // Anyone seated can start the next round (Sept 2026) -- consistent
+      // with start_game, and largely moot now that the round advances on a
+      // timer anyway. This is the "everyone's ready, skip the countdown"
+      // path, so gating it on one person only ever caused waiting.
+      if (!entry || !room.players.has(entry.playerId)) throw new Error('You are not in this room.');
       if (!room.game.roundOver) throw new Error('Round is still in progress.');
       if (room.game.gameOver) throw new Error('Game is already over.');
 
