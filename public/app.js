@@ -1324,16 +1324,195 @@
   // The param is stripped from the URL afterwards so it doesn't linger in
   // the address bar or get shared again by accident (e.g. a browser
   // "share this page" on the landing screen itself).
-  (function prefillRoomCodeFromLink() {
+  // ====================================================================
+  // Persistent groups (client side)
+  // ====================================================================
+  // A group is a named, permanent table. Its slug and link never change,
+  // so one pinned WhatsApp message keeps working, and it carries a running
+  // leaderboard across every session.
+  //
+  // Membership is deliberately just "whoever holds the link" -- there is no
+  // account, no member list, nothing to sign into. The only thing stored on
+  // this device is the list of groups you've opened, so the landing screen
+  // can offer them as one tap. Lose that list (new phone, cleared storage)
+  // and the WhatsApp link puts you straight back in.
+  // ====================================================================
+  const GROUPS_STORAGE_KEY = 'leastcount_groups';
+  const GROUPS_MAX_REMEMBERED = 8;
+
+  function readRememberedGroups() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(GROUPS_STORAGE_KEY) || '[]');
+      return Array.isArray(raw) ? raw.filter((g) => g && g.slug) : [];
+    } catch (e) { return []; }
+  }
+
+  function rememberGroup(slug, name) {
+    if (!slug) return;
+    try {
+      const list = readRememberedGroups().filter((g) => g.slug !== slug);
+      list.unshift({ slug, name: name || slug, lastOpenedAt: Date.now() });
+      localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list.slice(0, GROUPS_MAX_REMEMBERED)));
+    } catch (e) { /* storage blocked -- the link still works, just no shortcut */ }
+    renderGroupsBlock();
+  }
+
+  function renderGroupsBlock() {
+    const block = document.getElementById('groups-block');
+    const list = document.getElementById('groups-list');
+    if (!block || !list) return;
+    const groups = readRememberedGroups();
+    block.classList.toggle('hidden', groups.length === 0);
+    list.innerHTML = '';
+    groups.forEach((g) => {
+      const li = document.createElement('li');
+      li.className = 'group-row';
+      li.innerHTML = `<span class="group-row-name">${escapeHtml(g.name)}</span>
+        <span class="group-row-go">Open</span>`;
+      li.onclick = () => joinRoomByKey(g.slug);
+      list.appendChild(li);
+    });
+  }
+
+  // Single entry point for joining ANY table -- a 4-letter ad-hoc code, a
+  // permanent group slug, from a typed code, a saved group row, or an invite
+  // link. Previously this logic lived inline in the Join button's handler,
+  // which meant every new way of arriving at a room needed its own copy of
+  // the pending-approval and session-saving branches.
+  async function joinRoomByKey(key) {
+    const name = getPlayerName();
+    const roomCode = (key || '').trim();
+    if (!name) return setLandingError('Enter your name');
+    if (!roomCode) return setLandingError('Enter room code');
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+      if (!res.ok) return setLandingError(res.error);
+      // room.phase was already 'playing' when the request landed -- the
+      // server held it as a pending request instead of joining outright
+      // (see server.js' join_room). Show the waiting screen and stop here;
+      // join_admitted/join_denied take it from there.
+      if (res.pending) {
+        pendingJoinRoomCode = res.roomCode;
+        pendingJoinPlayerId = res.playerId;
+        document.getElementById('waiting-host-name').textContent = 'the host';
+        showScreen('screen-waiting-host');
+        return;
+      }
+      logAnalytics('room_joined');
+      saveSession(res.roomCode, res.playerId);
+      loadChatHistory(res.chatHistory);
+      showChatFab();
+      showScreen('screen-lobby');
+    });
+  }
+
+  // --------------------------------------------------------------------
+  // Invite mode: what someone sees after tapping a shared link.
+  //
+  // Before this existed they landed on the full three-mode menu, and the
+  // name field lived only inside the profile modal behind a small avatar
+  // icon -- so a first-time visitor went: tap Join -> "Enter your name"
+  // error -> hunt for the hidden field -> type -> close -> tap Join again.
+  // Five steps and an error message, on the exact path every new player
+  // arrives through. Now everything needed is on one card.
+  // --------------------------------------------------------------------
+  let inviteJoinKey = null;
+
+  function enterInviteMode(key, headline) {
+    inviteJoinKey = key;
+    const card = document.getElementById('invite-card');
+    const blocks = document.querySelector('.mode-blocks');
+    if (!card || !blocks) return;
+    blocks.classList.add('hidden');
+    card.classList.remove('hidden');
+    document.getElementById('invite-headline').textContent = headline;
+    document.getElementById('invite-roomcode').textContent = key;
+    const nameInput = document.getElementById('input-invite-name');
+    // Returning players never retype -- same stored name the rest of the app
+    // uses, so this is usually already filled and it's a single tap to play.
+    nameInput.value = localStorage.getItem(NAME_STORAGE_KEY) || '';
+    setTimeout(() => { try { nameInput.focus(); } catch (e) {} }, 60);
+  }
+
+  function exitInviteMode() {
+    inviteJoinKey = null;
+    const card = document.getElementById('invite-card');
+    const blocks = document.querySelector('.mode-blocks');
+    if (card) card.classList.add('hidden');
+    if (blocks) blocks.classList.remove('hidden');
+  }
+
+  (function handleInviteLink() {
     const params = new URLSearchParams(window.location.search);
+    const groupSlug = (params.get('g') || '').trim().toLowerCase();
+    // Ad-hoc room codes are case-insensitive; group slugs are not, which is
+    // exactly why they travel in different params.
     const roomFromLink = (params.get('room') || '').trim().toUpperCase();
-    if (roomFromLink) {
+
+    if (groupSlug) {
+      enterInviteMode(groupSlug, 'You’ve been invited to play');
+      // Ask the server what this group is actually called, so the card says
+      // "Sharma Family" rather than the raw slug. Purely cosmetic -- if the
+      // lookup fails the card still works and they can still join.
+      socket.emit('get_group', { slug: groupSlug }, (res) => {
+        if (!res || !res.ok) return;
+        document.getElementById('invite-headline').textContent = `You’ve been invited to ${res.name}`;
+        document.getElementById('invite-roomcode').textContent = res.name;
+      });
+    } else if (roomFromLink) {
       document.getElementById('input-roomcode').value = roomFromLink;
+      enterInviteMode(roomFromLink, 'You’ve been invited to a game');
+    }
+
+    if (groupSlug || roomFromLink) {
+      // Strip the param so it can't linger in the address bar or get shared
+      // onward by accident (e.g. a browser "share this page").
       const url = new URL(window.location.href);
+      url.searchParams.delete('g');
       url.searchParams.delete('room');
       window.history.replaceState({}, '', url.pathname + url.search + url.hash);
     }
   })();
+
+  document.getElementById('btn-invite-join').onclick = () => {
+    const nameInput = document.getElementById('input-invite-name');
+    const name = nameInput.value.trim();
+    if (!name) {
+      setLandingError('Enter your name');
+      try { nameInput.focus(); } catch (e) {}
+      return;
+    }
+    // Mirror into the canonical name field/storage that the rest of the app
+    // (and getPlayerName) reads, so this card doesn't become a second source
+    // of truth for who you are.
+    localStorage.setItem(NAME_STORAGE_KEY, name);
+    document.getElementById('input-name').value = name;
+    joinRoomByKey(inviteJoinKey);
+  };
+  document.getElementById('btn-invite-dismiss').onclick = exitInviteMode;
+
+  document.getElementById('btn-create-group').onclick = async () => {
+    const nameInput = document.getElementById('input-group-name');
+    const groupName = nameInput.value.trim();
+    if (!groupName) return setLandingError('Name your group first');
+    if (!getPlayerName()) return setLandingError('Enter your name');
+    const btn = document.getElementById('btn-create-group');
+    btn.disabled = true;
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('create_group', { groupName, firebaseIdToken }, (res) => {
+      btn.disabled = false;
+      if (!res || !res.ok) return setLandingError((res && res.error) || 'Could not create the group.');
+      nameInput.value = '';
+      rememberGroup(res.slug, res.name);
+      logAnalytics('group_created');
+      // The server deliberately doesn't put us in a room -- joining by slug
+      // spins one up and makes us host, through the same single join path
+      // everything else uses.
+      joinRoomByKey(res.slug);
+    });
+  };
+
+  renderGroupsBlock();
   function getPlayerName() {
     const name = document.getElementById('input-name').value.trim();
     if (name) localStorage.setItem(NAME_STORAGE_KEY, name);
@@ -1354,31 +1533,11 @@
     });
   };
 
-  document.getElementById('btn-join').onclick = async () => {
-    const name = getPlayerName();
-    const roomCode = document.getElementById('input-roomcode').value.trim().toUpperCase();
-    if (!name) return setLandingError('Enter your name');
-    if (!roomCode) return setLandingError('Enter room code');
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
-      if (!res.ok) return setLandingError(res.error);
-      // room.phase was already 'playing' when the request landed -- the
-      // server held it as a pending request instead of joining outright
-      // (see server.js' join_room). Show the waiting screen and stop here;
-      // join_admitted/join_denied (registered further down) take it from here.
-      if (res.pending) {
-        pendingJoinRoomCode = res.roomCode;
-        pendingJoinPlayerId = res.playerId;
-        document.getElementById('waiting-host-name').textContent = 'the host';
-        showScreen('screen-waiting-host');
-        return;
-      }
-      logAnalytics('room_joined');
-      saveSession(res.roomCode, res.playerId);
-      loadChatHistory(res.chatHistory);
-      showChatFab();
-      showScreen('screen-lobby');
-    });
+  // Thin wrapper now -- the actual join lives in joinRoomByKey() above, so
+  // typing a code, tapping a saved group and following an invite link all
+  // go through exactly the same path.
+  document.getElementById('btn-join').onclick = () => {
+    joinRoomByKey(document.getElementById('input-roomcode').value.trim().toUpperCase());
   };
 
   // Copy just the code, or share a full join-link that pre-fills the room
@@ -1392,12 +1551,34 @@
     if (roomcodeFeedbackTimer) clearTimeout(roomcodeFeedbackTimer);
     roomcodeFeedbackTimer = setTimeout(() => { el.textContent = ''; }, 2500);
   }
+  // Two link shapes, because there are two kinds of table:
+  //   ?g=sharma-family-k2p  -- a permanent group. This link never expires,
+  //                            so it can be pinned in a WhatsApp group once
+  //                            and keep working for years.
+  //   ?room=ABCD            -- a one-off room, good only for this session.
+  // Separate params rather than one, because the room-code path uppercases
+  // its value (codes are case-insensitive) and that would mangle a slug.
   function roomInviteLink() {
     const url = new URL(window.location.href);
     url.search = '';
     url.hash = '';
-    url.searchParams.set('room', myRoomCode || '');
+    const slug = latestRoom && latestRoom.groupSlug;
+    if (slug) url.searchParams.set('g', slug);
+    else url.searchParams.set('room', myRoomCode || '');
     return url.toString();
+  }
+
+  // "Ravi invited you..." rather than "Join my Least Count game!" -- an
+  // invitation with a person's name attached reads as a message from someone
+  // you know, which is the whole point of it landing in a family group chat.
+  function inviteShareText() {
+    const link = roomInviteLink();
+    const who = (localStorage.getItem(NAME_STORAGE_KEY) || '').trim();
+    const groupName = latestRoom && latestRoom.groupName;
+    const lead = who ? `${who} invited you` : 'You are invited';
+    return groupName
+      ? `${lead} to play Least Count with "${groupName}".\n${link}`
+      : `${lead} to a game of Least Count. Room code: ${myRoomCode}\n${link}`;
   }
   document.getElementById('btn-copy-roomcode').onclick = async () => {
     if (!myRoomCode) return;
@@ -1411,10 +1592,10 @@
   document.getElementById('btn-share-room').onclick = async () => {
     if (!myRoomCode) return;
     const link = roomInviteLink();
-    const shareText = `Join my Least Count game! Room code: ${myRoomCode}\n${link}`;
+    const shareText = inviteShareText();
     if (navigator.share) {
       try {
-        await navigator.share({ title: 'Least Count', text: `Join my Least Count game! Room code: ${myRoomCode}`, url: link });
+        await navigator.share({ title: 'Least Count', text: shareText.split('\n')[0], url: link });
         return; // native share sheet handles its own confirmation
       } catch (e) {
         if (e && e.name === 'AbortError') return; // user cancelled the share sheet -- not an error
@@ -1428,6 +1609,42 @@
       showRoomcodeFeedback('Could not copy -- code is ' + myRoomCode);
     }
   };
+
+  // --------------------------------------------------------------------
+  // Share straight to WhatsApp.
+  //
+  // Why this exists alongside the generic share button above: navigator.share
+  // is a Chrome API that Android WebView does not implement, so inside the
+  // Capacitor-wrapped app the button above silently falls through to
+  // "copied to clipboard" -- leaving the user to open WhatsApp and find the
+  // contact themselves, which is exactly the friction the invite loop can't
+  // afford. A wa.me URL is just a link, so it works in the WebView with no
+  // native plugin and no rebuild, and lands the user on WhatsApp's own
+  // contact picker with the message already written.
+  //
+  // TODO (next native build): install @capacitor/share and prefer it when
+  // window.Capacitor.Plugins.Share exists, which restores the full app
+  // chooser (WhatsApp / Instagram / Messages) instead of WhatsApp only.
+  // Deliberately not done now because it needs an AAB upload and a Play
+  // review cycle, and this fix shouldn't wait for that.
+  // --------------------------------------------------------------------
+  function openWhatsAppShare(text) {
+    const url = 'https://wa.me/?text=' + encodeURIComponent(text);
+    // _blank so Android hands the https link off to whatever claims it --
+    // WhatsApp registers wa.me as an App Link, so it opens the app directly
+    // when installed and falls back to the web version when it isn't.
+    const win = window.open(url, '_blank');
+    if (!win) window.location.href = url; // popup blocked -- navigate instead
+  }
+
+  const shareWhatsAppBtn = document.getElementById('btn-share-whatsapp');
+  if (shareWhatsAppBtn) {
+    shareWhatsAppBtn.onclick = () => {
+      if (!myRoomCode) return;
+      logAnalytics('invite_shared_whatsapp');
+      openWhatsAppShare(inviteShareText());
+    };
+  }
 
   // Only set while genuinely waiting on a mid-game join request -- distinct
   // from myRoomCode/myPlayerId (which mean "I'm an actual member of this
@@ -1733,10 +1950,72 @@
     const btn = document.getElementById('btn-start');
     btn.classList.toggle('hidden', !isHost);
     btn.disabled = room.players.length < 2;
+    // While you're the only one here, Start Game is dead weight and inviting
+    // is the only thing worth doing -- so it visually steps back and the
+    // WhatsApp invite button above is the loudest thing on screen. It becomes
+    // primary again the moment there's someone to play with.
+    const alone = room.players.length < 2;
+    btn.classList.toggle('primary', !alone);
+    btn.classList.toggle('secondary', alone);
     document.getElementById('lobby-maxscore-row').classList.toggle('hidden', !isHost);
     document.getElementById('lobby-hint').textContent = isHost
-      ? (room.players.length < 2 ? 'Need at least 2 players' : `Ready with ${room.players.length} players`)
+      ? (alone ? 'Invite someone to get started' : `Ready with ${room.players.length} players`)
       : 'Waiting for host to start';
+
+    // ---- persistent group extras ----
+    const groupNameEl = document.getElementById('lobby-group-name');
+    const isGroup = !!room.groupSlug;
+    if (groupNameEl) {
+      groupNameEl.textContent = room.groupName || '';
+      groupNameEl.classList.toggle('hidden', !isGroup);
+    }
+    // A group's slug is long and never typed by hand -- the room-code box is
+    // 4 characters and uppercases what you type, so copying a slug into it
+    // could never work. For a group the whole code row is hidden and the
+    // invite link (the WhatsApp button below) is the only way in, which is
+    // also the only way anyone actually uses.
+    const codeLabel = document.getElementById('lobby-roomcode-label');
+    const codeRow = document.getElementById('lobby-roomcode-row');
+    const codeHint = document.getElementById('lobby-code-hint');
+    if (codeLabel) codeLabel.classList.toggle('hidden', isGroup);
+    if (codeRow) codeRow.classList.toggle('hidden', isGroup);
+    if (codeHint) codeHint.classList.toggle('hidden', isGroup);
+
+    if (isGroup) {
+      rememberGroup(room.groupSlug, room.groupName);
+      loadGroupStandings(room.groupSlug);
+    } else {
+      document.getElementById('lobby-standings-block').classList.add('hidden');
+    }
+  }
+
+  // Running leaderboard for a permanent group. Fetched fresh each time the
+  // lobby renders for a group, so a game that just finished shows up without
+  // anyone having to reload.
+  function loadGroupStandings(slug) {
+    const block = document.getElementById('lobby-standings-block');
+    const list = document.getElementById('lobby-standings');
+    const empty = document.getElementById('lobby-standings-empty');
+    if (!block || !list) return;
+    block.classList.remove('hidden');
+    socket.emit('get_group', { slug }, (res) => {
+      if (!res || !res.ok) { block.classList.add('hidden'); return; }
+      const rows = res.standings || [];
+      list.innerHTML = '';
+      empty.classList.toggle('hidden', rows.length > 0);
+      rows.forEach((s, i) => {
+        const li = document.createElement('li');
+        li.className = 'standings-row';
+        // Average score is per game and LOWER is better in Least Count, so
+        // it's labelled explicitly rather than left to be guessed at.
+        li.innerHTML =
+          `<span class="st-rank">${i + 1}</span>` +
+          `<span class="st-name">${escapeHtml(s.name)}</span>` +
+          `<span class="st-wins">${s.wins}W</span>` +
+          `<span class="st-meta">${s.games} games · avg ${s.avgScore}</span>`;
+        list.appendChild(li);
+      });
+    });
   }
 
   // ---------------- realistic card rendering ----------------
