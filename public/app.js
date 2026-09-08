@@ -2306,6 +2306,7 @@
   function renderOvalTable(game, orderOverride) {
     const oval = document.getElementById('oval-table');
     oval.querySelectorAll('.seat').forEach((el) => el.remove());
+    renderRevealBanner(game);
     if (!latestRoom) return;
 
     const dealing = !!orderOverride;
@@ -2672,30 +2673,100 @@
   let revealTimer = null;
   let revealPendingGame = null;
 
+  // States the outcome in the middle of the table while the cards are on
+  // show. Without this the reveal was all evidence and no verdict -- you
+  // could see everyone's hands but had to work out for yourself who'd won,
+  // and a penalty looked identical to a clean declare.
+  function renderRevealBanner(game) {
+    const el = document.getElementById('reveal-banner');
+    if (!el) return;
+    const r = game && game.lastRoundResult;
+    if (!revealPhaseActive || !r) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+      return;
+    }
+    const declarer = playerName(r.declaredBy);
+    const myScore = (r.roundScores || {})[myPlayerId];
+    const parts = [];
+    parts.push(`<div class="reveal-banner-title${r.correct ? '' : ' wrong'}">` +
+      (r.correct
+        ? `${escapeHtml(declarer)} got Least Count`
+        : `${escapeHtml(declarer)} called wrong`) +
+      '</div>');
+    if (!r.correct) {
+      const penalty = (r.roundScores || {})[r.declaredBy];
+      if (penalty !== undefined) {
+        parts.push(`<div class="reveal-banner-sub penalty">+${penalty} penalty</div>`);
+      }
+    }
+    // Your own seat gets no reveal box (your cards are already face-up in
+    // the tray), so this is the only place your result appears during the
+    // reveal.
+    if (myScore !== undefined) {
+      parts.push(`<div class="reveal-banner-sub">You ${myScore === 0 ? 'scored 0' : '+' + myScore}</div>`);
+    }
+    el.innerHTML = parts.join('');
+    el.classList.remove('hidden');
+  }
+
+  // Who came out of this round best. On a correct declare that's the
+  // declarer (they score 0); on a wrong one it's whoever actually held the
+  // lowest hand, which is exactly what makes a bad declare sting. Returns a
+  // Set because ties are possible and both should be marked.
+  function roundWinnerIds(game) {
+    const scores = (game && game.lastRoundResult && game.lastRoundResult.roundScores) || {};
+    const ids = Object.keys(scores);
+    if (!ids.length) return new Set();
+    const best = Math.min(...ids.map((id) => scores[id]));
+    return new Set(ids.filter((id) => scores[id] === best));
+  }
+
   function buildSeatRevealBox(game, playerId, topPercent) {
     const hand = (game.finalHands || {})[playerId];
     if (!hand) return null;
     const r = game.lastRoundResult;
     const wildRank = game.roundJokerRank;
     const value = (game.finalHandValues || {})[playerId];
+    const roundScore = (r && r.roundScores) ? r.roundScores[playerId] : undefined;
+    const isDeclarer = !!(r && r.declaredBy === playerId);
+    // A wrong declare is the one genuinely punitive outcome in this game, so
+    // it gets its own treatment rather than sharing the declarer's gold.
+    const isPenalty = isDeclarer && r && !r.correct;
+    const isWinner = roundWinnerIds(game).has(playerId);
 
     const box = document.createElement('div');
     // Bottom-half seats flip the box above the chip so it never runs off
     // the lower edge of the table into the hand tray.
     box.className = 'seat-reveal-box'
       + (topPercent > 62 ? ' above' : '')
-      + (r && r.declaredBy === playerId ? ' declared' : '');
+      + (isDeclarer ? ' declared' : '')
+      + (isPenalty ? ' penalty' : '')
+      + (isWinner && !isPenalty ? ' winner' : '');
 
-    if (r && r.declaredBy === playerId) {
+    if (isDeclarer || isWinner) {
       const tag = document.createElement('div');
       tag.className = 'seat-reveal-tag';
-      tag.textContent = 'DECLARED';
+      // Says what HAPPENED, not just that they acted -- "DECLARED" alone
+      // left you reading cards to work out whether it had gone their way.
+      tag.textContent = isPenalty ? 'WRONG CALL'
+        : isDeclarer ? 'DECLARED ✓'
+        : 'LOWEST';
       box.appendChild(tag);
     }
 
     const valEl = document.createElement('div');
     valEl.className = 'seat-reveal-value';
-    valEl.textContent = value !== undefined ? value : '';
+    // Hand value, plus what the round actually cost them. The score is the
+    // number people care about; the hand value alone doesn't tell you that
+    // a wrong declarer just took +40.
+    valEl.textContent = value !== undefined ? String(value) : '';
+    if (roundScore !== undefined) {
+      const scoreEl = document.createElement('span');
+      scoreEl.className = 'seat-reveal-score' + (roundScore === 0 ? ' zero' : '') + (isPenalty ? ' penalty' : '');
+      scoreEl.textContent = roundScore === 0 ? '+0' : '+' + roundScore;
+      valEl.appendChild(scoreEl);
+    }
     box.appendChild(valEl);
 
     // Same grouping + ordering as the hand tray and the old scorecard rows:
