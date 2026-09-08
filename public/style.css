@@ -1707,3 +1707,85 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .gif-results img { width: 100%; height: 72px; object-fit: cover; border-radius: 6px; cursor: pointer; }
 .gif-results-hint { grid-column: 1 / -1; text-align: center; color: var(--text-muted); font-size: 12px; padding: 24px 0; }
+
+/* ==========================================================================
+   Persistent groups + invite funnel (Sept 2026)
+   ==========================================================================
+   Everything here serves one flow: someone shares a link into a WhatsApp
+   family group, a person taps it, and they're playing within seconds. See
+   the comments in index.html and app.js for why each piece exists.
+   ========================================================================== */
+
+/* ---- Your Groups list on the landing screen ---- */
+.group-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.group-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 14px; border-radius: var(--radius-md);
+  background: var(--jade-panel-alt); border: 1px solid var(--jade-border);
+  cursor: pointer; transition: border-color 0.15s ease, transform 0.05s ease;
+}
+.group-row:active { transform: scale(0.99); }
+.group-row:hover { border-color: rgba(255,255,255,0.28); }
+.group-row-name {
+  font-weight: 700; font-size: 15px; color: var(--text-light);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.group-row-go { flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--gold-bright); }
+
+/* Separator between the one-off room controls and the permanent-group
+   controls inside the same "Play with Friends" block. */
+.mode-block-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 14px 0 10px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+}
+.mode-block-divider::before, .mode-block-divider::after {
+  content: ''; flex: 1; height: 1px; background: var(--jade-border);
+}
+
+/* ---- Invite card (shown instead of the mode menu for ?g= / ?room= links) ---- */
+.invite-card {
+  background: var(--jade-panel); border: 1px solid var(--jade-border);
+  border-radius: var(--radius-lg); padding: 20px 18px; box-shadow: var(--shadow-md);
+  display: flex; flex-direction: column; gap: 12px; text-align: center;
+}
+.invite-card.hidden { display: none; }
+.invite-headline { margin: 0; font-size: 18px; font-weight: 700; color: var(--text-light); }
+.invite-room-line { font-size: 13px; color: var(--text-muted); }
+.invite-room-line span { color: var(--gold-bright); font-weight: 700; }
+.invite-card label { text-align: left; font-size: 12px; color: var(--text-muted); margin-bottom: -6px; }
+.invite-card input {
+  padding: 12px 14px; border-radius: var(--radius-md); border: 1px solid var(--jade-border);
+  background: var(--jade-panel-alt); color: var(--text-light);
+  /* 16px minimum, or Android zooms the page in when the field is focused. */
+  font-size: 16px;
+}
+
+/* ---- WhatsApp invite button (the lobby's primary action while alone) ---- */
+.invite-btn {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin-top: 4px;
+}
+.invite-btn .icon { width: 18px; height: 18px; margin: 0; }
+
+/* ---- Group name + leaderboard in the lobby ---- */
+.lobby-group-name {
+  font-size: 20px; font-weight: 700; color: var(--gold-bright);
+  margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lobby-group-name.hidden { display: none; }
+
+.standings-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.standings-row {
+  display: grid;
+  /* rank | name | wins, with the meta line wrapping underneath the name */
+  grid-template-columns: 22px 1fr auto;
+  align-items: center; gap: 4px 10px;
+  padding: 10px 12px; border-radius: var(--radius-md);
+  background: var(--jade-panel-alt); border: 1px solid var(--jade-border);
+  font-size: 14px;
+}
+.standings-row:first-child { border-color: rgba(242,193,78,0.45); }
+.st-rank { color: var(--text-muted); font-weight: 700; font-size: 12px; }
+.st-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-wins { color: var(--gold-bright); font-weight: 700; }
+.st-meta { grid-column: 2 / -1; font-size: 11px; color: var(--text-muted); }
