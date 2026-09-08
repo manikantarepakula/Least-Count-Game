@@ -369,6 +369,13 @@
         <div id="joker-indicator">-</div>
       </div>
     </div>
+    <!-- Round outcome, shown in the middle of the table during the card
+         reveal. The reveal used to show everyone's hands with no statement
+         of what actually happened -- you could see the cards but not who
+         won, or that anyone had been penalised. This occupies the space the
+         open card / joker vacate (see #screen-game.reveal-phase in
+         style.css), so it costs no extra room. -->
+    <div id="reveal-banner" class="reveal-banner hidden"></div>
     <!-- .seat elements injected by app.js -->
     <div id="deal-flyer" class="deal-flyer hidden"></div>
     <!-- Pre-deal intro: shows the actual number of decks in play, then a
