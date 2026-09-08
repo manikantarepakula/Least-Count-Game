@@ -13,6 +13,34 @@
       ? 'android-app'
       : 'web';
 
+  // --------------------------------------------------------------------
+  // Feature flags (Sept 2026). Both of these are FINISHED, WORKING features
+  // that are deliberately hidden for launch -- flip either to true to bring
+  // it back, no other change needed. Nothing else in the app is gated on
+  // them, which is exactly why they can be hidden safely:
+  //
+  //   googleSignIn -- Firebase signs EVERY player in anonymously on load
+  //     (see firebase-init.js), and that anonymous uid is what stats, the
+  //     activity log, the tester-activity report, opponent stats and
+  //     RevenueCat all key off. Google is only an upgrade path, so that the
+  //     same uid can follow someone to a new device. Hidden for now because
+  //     native Google Sign-In returns "no credentials available" on phones
+  //     other than the dev device, and a visibly failing button on the
+  //     Profile screen is worse than no button at all. The only thing lost
+  //     while it's off: a reinstall or a new phone starts a fresh uid, so
+  //     that player's win count resets.
+  //
+  //   removeAdsPurchase -- hides the BUY button only. The entitlement check
+  //     below still runs in full, so anyone who already purchased keeps
+  //     their ad-free experience; they simply can't be sold it again, and
+  //     nobody new is offered it. Deliberate: monetisation waits until
+  //     people are playing regularly.
+  // --------------------------------------------------------------------
+  const FEATURES = {
+    googleSignIn: false,
+    removeAdsPurchase: false,
+  };
+
   const SUIT_SYMBOL = { S: '♠', H: '♥', D: '♦', C: '♣' };
   const RED_SUITS = new Set(['H', 'D']);
   const RANK_ORDER = ['A','2','3','4','5','6','7','8','9','10','J','Q','K','JOKER'];
@@ -110,7 +138,15 @@
   const googleSigninBtn = document.getElementById('btn-google-signin');
   const signinStatusEl = document.getElementById('signin-status');
 
+  // Hides the whole signin row (status text AND button) rather than just the
+  // button, so the Profile panel doesn't keep a stranded "Playing as Guest"
+  // label with nothing to do about it -- and so the failed-sign-in error
+  // that was rendering into this row can't appear either.
+  const signinRowEl = document.querySelector('.signin-row');
+  if (!FEATURES.googleSignIn && signinRowEl) signinRowEl.classList.add('hidden');
+
   function updateSigninUI(user) {
+    if (!FEATURES.googleSignIn) return;
     if (!googleSigninBtn || !signinStatusEl) return;
     if (user && !user.isAnonymous) {
       const label = user.displayName || user.email || 'Google account';
@@ -247,8 +283,15 @@
     if (adsRemoved) {
       removeAdsBtn.classList.add('hidden');
       if (window.LCAds) window.LCAds.hideBanner();
-    } else {
+    } else if (FEATURES.removeAdsPurchase) {
       removeAdsBtn.classList.remove('hidden');
+    } else {
+      // Purchase hidden for launch. Note this branch is reached only when
+      // adsRemoved is FALSE -- the entitlement check above still ran, and an
+      // existing purchaser took the branch before this one and kept their
+      // ad-free experience. Hiding the button sells to nobody new; it takes
+      // nothing away from anyone who already paid.
+      removeAdsBtn.classList.add('hidden');
     }
   }
 
