@@ -1789,3 +1789,33 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 .st-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-wins { color: var(--gold-bright); font-weight: 700; }
 .st-meta { grid-column: 2 / -1; font-size: 11px; color: var(--text-muted); }
+
+/* ---- Landing: Quick Play segmented toggle (Online / vs Bots) ---- */
+.segmented { display: flex; gap: 6px; margin-bottom: 10px; }
+.segmented .seg {
+  flex: 1; padding: 9px 8px; border-radius: var(--radius-md);
+  border: 1px solid var(--jade-border); background: var(--jade-panel-alt);
+  color: var(--text-muted); font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.segmented .seg.active {
+  background: rgba(229,37,44,0.16); border-color: rgba(229,37,44,0.5); color: var(--text-light);
+}
+
+/* Cap the groups list at roughly two rows and scroll the rest, so someone in
+   eight groups can't push Quick Room and Quick Play off the screen. */
+.group-list { max-height: 132px; overflow-y: auto; overscroll-behavior: contain; }
+.group-row-menu {
+  flex-shrink: 0; width: 32px; height: 32px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--jade-border);
+  background: transparent; color: var(--text-muted);
+  font-size: 18px; line-height: 1; cursor: pointer;
+}
+.group-row-menu:hover { color: var(--text-light); border-color: rgba(255,255,255,0.3); }
+
+/* ---- Lobby: group name with the leaderboard icon pinned top-right ---- */
+.lobby-group-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 8px;
+}
+.lobby-group-header.hidden { display: none; }
+.lobby-group-header .lobby-group-name { margin-bottom: 0; flex: 1; min-width: 0; text-align: left; }
