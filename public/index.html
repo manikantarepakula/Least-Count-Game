@@ -149,46 +149,24 @@
       <button id="btn-invite-dismiss" class="secondary" type="button">Other ways to play</button>
     </div>
 
+    <!-- ================================================================
+         Landing sections, in deliberate priority order (Sept 2026):
+           1. Your Groups   -- permanent tables; what a regular player wants
+           2. Quick Room    -- one-off room, create or join by code
+           3. Quick Play    -- online matchmaking and bots, merged because
+                               they ask the same question ("how many?") and
+                               two near-identical blocks wasted the screen
+         All three fit one phone screen without scrolling, which is why the
+         groups list caps its visible height (see .group-list) rather than
+         growing with every group you join.
+         ================================================================ -->
     <div class="mode-blocks">
-      <!-- Your groups: permanent named tables (Family, Cousins, Office...).
-           Rendered from localStorage, so it costs no network call and works
-           before Firebase has even finished signing in. Hidden entirely
-           until you belong to at least one, so a brand-new user doesn't see
-           an empty box. This block is deliberately FIRST -- for anyone who
-           plays regularly it's the only thing on this screen they need. -->
-      <div class="mode-block hidden" id="groups-block">
-        <h3>👨‍👩‍👧 Your Groups</h3>
+      <div class="mode-block" id="groups-block">
+        <h3>👪 Your Groups</h3>
+        <!-- Scrolls internally after ~2 rows so a player with eight groups
+             can't push everything else off the screen. -->
         <ul id="groups-list" class="group-list"></ul>
-      </div>
-
-      <div class="mode-block">
-        <h3>🌐 Play Online</h3>
-        <p class="mode-block-sub">Get matched with strangers</p>
-        <label for="input-online-playercount">No. of players</label>
-        <select id="input-online-playercount">
-          <option value="3">3</option>
-          <option value="4">4</option>
-          <option value="5">5</option>
-          <option value="6">6</option>
-        </select>
-        <div class="row">
-          <button id="btn-play-online" class="primary">Find Match</button>
-        </div>
-      </div>
-
-      <div class="mode-block">
-        <h3>👥 Play with Friends</h3>
-        <div class="row">
-          <button id="btn-create" class="secondary">Create Room</button>
-        </div>
-        <div class="mode-block-join-row">
-          <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
-          <button id="btn-join" class="secondary">Join</button>
-        </div>
-        <!-- Permanent group. Unlike "Create Room" above, the code and link
-             never change, so one pinned WhatsApp message keeps working and
-             the group keeps a running leaderboard across every session. -->
-        <div class="mode-block-divider"><span>or make it permanent</span></div>
+        <p id="groups-empty" class="hint">A permanent table your family can come back to — same link every time.</p>
         <div class="mode-block-join-row">
           <input id="input-group-name" type="text" maxlength="30" placeholder="Name a group, e.g. Family" />
           <button id="btn-create-group" class="secondary">Create</button>
@@ -196,11 +174,42 @@
       </div>
 
       <div class="mode-block">
-        <h3>🤖 Play with Bots</h3>
-        <label for="input-bot-count">No. of bots</label>
-        <select id="input-bot-count"></select>
-        <div class="row">
-          <button id="btn-solo-start" class="secondary">Start</button>
+        <h3>👥 Quick Room</h3>
+        <p class="mode-block-sub">One-off game, code expires with the session</p>
+        <div class="mode-block-join-row">
+          <button id="btn-create" class="secondary">Create Room</button>
+          <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
+          <button id="btn-join" class="secondary">Join</button>
+        </div>
+      </div>
+
+      <!-- Play Online and Play with Bots merged behind one toggle. Both
+           blocks stay in the DOM with their original ids so app.js's
+           existing handlers are untouched -- only visibility switches. -->
+      <div class="mode-block">
+        <h3>⚡ Quick Play</h3>
+        <div class="segmented" id="quickplay-toggle">
+          <button type="button" class="seg active" data-mode="online">🌐 Online</button>
+          <button type="button" class="seg" data-mode="bots">🤖 vs Bots</button>
+        </div>
+        <div id="quickplay-online">
+          <label for="input-online-playercount">No. of players</label>
+          <select id="input-online-playercount">
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+          </select>
+          <div class="row">
+            <button id="btn-play-online" class="primary">Find Match</button>
+          </div>
+        </div>
+        <div id="quickplay-bots" class="hidden">
+          <label for="input-bot-count">No. of bots</label>
+          <select id="input-bot-count"></select>
+          <div class="row">
+            <button id="btn-solo-start" class="primary">Start</button>
+          </div>
         </div>
       </div>
     </div>
@@ -242,8 +251,16 @@
     <div class="mode-block">
       <!-- Only shown for a room opened from a permanent group -- for an
            ordinary one-off room this stays hidden and the screen looks
-           exactly as it always did. -->
-      <div id="lobby-group-name" class="lobby-group-name hidden"></div>
+           exactly as it always did. The leaderboard is a top-right icon
+           opening an overlay, rather than a block in the page flow: as a
+           block it pushed Start Game and Leave below the fold on a phone,
+           which is what made the group lobby feel like it had no exit. -->
+      <div id="lobby-group-header" class="lobby-group-header hidden">
+        <div id="lobby-group-name" class="lobby-group-name"></div>
+        <button id="btn-group-leaderboard" class="icon-btn" type="button" aria-label="Leaderboard" title="Leaderboard">
+          <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 3h10v2h3a1 1 0 0 1 1 1c0 3-2 5-4.5 5.3A5.5 5.5 0 0 1 13 15.9V18h3v2H8v-2h3v-2.1A5.5 5.5 0 0 1 7.5 11.3C5 11 3 9 3 6a1 1 0 0 1 1-1h3V3Zm0 4H5c.2 1.5 1.2 2.6 2 3V7Zm10 0v3c.8-.4 1.8-1.5 2-3h-2Z"/></svg>
+        </button>
+      </div>
       <div class="room-code-label" id="lobby-roomcode-label">Room Code</div>
       <!-- Copy just the 4-letter code (for saying it out loud / typing it
            elsewhere) and Share the full join-link (for pasting straight into
@@ -289,15 +306,6 @@
       <ul id="lobby-players" class="player-list"></ul>
     </div>
 
-    <!-- Running leaderboard for a permanent group -- wins, games played and
-         average score across every session this group has ever played. This
-         is the reason to come back: without it each game evaporates, with it
-         they add up to something. Hidden for one-off rooms. -->
-    <div class="mode-block hidden" id="lobby-standings-block">
-      <h3>🏆 Leaderboard</h3>
-      <ul id="lobby-standings" class="standings-list"></ul>
-      <p id="lobby-standings-empty" class="hint hidden">No games yet — the first result lands here.</p>
-    </div>
 
     <div class="mode-block">
       <div id="lobby-maxscore-row" class="lobby-maxscore-row hidden">
@@ -307,7 +315,12 @@
 
       <button id="btn-start" class="primary" disabled>Start Game</button>
       <p id="lobby-hint" class="hint"></p>
-      <button id="btn-leave-lobby" class="secondary leave-btn">Leave Room</button>
+      <!-- "Leave Table" not "Leave Room": leaving the TABLE ends your session
+           here, while leaving the GROUP (removing it from your list) is a
+           separate action in the group menu on the landing screen. Naming
+           them the same thing made it unclear which one you were about to
+           do. -->
+      <button id="btn-leave-lobby" class="secondary leave-btn">Leave Table</button>
       <p id="lobby-error" class="error"></p>
     </div>
   </div>
@@ -590,6 +603,42 @@
     <input id="chat-input" type="text" maxlength="300" placeholder="Say something..."
            enterkeyhint="send" autocomplete="off" autocapitalize="sentences" />
     <button id="btn-chat-send" class="tiny primary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg></button>
+  </div>
+</div>
+
+<!-- Group leaderboard, opened from the trophy icon in a group lobby.
+     Wins first, then better (lower) average score -- see standingsToList in
+     server.js for the exact ordering. -->
+<div id="overlay-standings" class="overlay hidden">
+  <div class="card-panel">
+    <h2>🏆 Leaderboard</h2>
+    <ul id="lobby-standings" class="standings-list"></ul>
+    <p id="lobby-standings-empty" class="hint hidden">No games yet — the first result lands here.</p>
+    <button id="btn-close-standings" class="secondary">Close</button>
+  </div>
+</div>
+
+<!-- Group management, opened from the "..." on a group row on the LANDING
+     screen. Deliberately separate from playing: creating, renaming and
+     deleting a group are things you do to the group, not things you do at
+     the table. Rename/Delete are shown only to the group's creator. -->
+<div id="group-menu-overlay" class="overlay hidden">
+  <div class="card-panel">
+    <h2 id="group-menu-title">Group</h2>
+    <button id="btn-group-share" class="primary" type="button">Share invite on WhatsApp</button>
+    <button id="btn-group-copy" class="secondary" type="button">Copy invite link</button>
+    <button id="btn-group-rename" class="secondary hidden" type="button">Rename group</button>
+    <!-- Inline rather than a browser prompt() -- prompt support inside an
+         Android WebView is inconsistent, and a native dialog would look
+         nothing like the rest of the app. -->
+    <div id="group-rename-row" class="mode-block-join-row hidden">
+      <input id="input-group-rename" type="text" maxlength="30" placeholder="New name" />
+      <button id="btn-group-rename-save" class="secondary" type="button">Save</button>
+    </div>
+    <button id="btn-group-remove" class="secondary" type="button">Remove from my list</button>
+    <button id="btn-group-delete" class="secondary hidden" type="button">Delete group for everyone</button>
+    <p id="group-menu-error" class="error"></p>
+    <button id="btn-group-menu-close" class="secondary" type="button">Close</button>
   </div>
 </div>
 
