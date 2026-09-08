@@ -15,6 +15,43 @@
      browser to shrink the page to reveal it. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=overlays-content" />
 <title>Least Count</title>
+
+<!-- ------------------------------------------------------------------
+     Link preview (Open Graph) -- added Sept 2026.
+
+     This app's entire acquisition loop is one person pasting a room link
+     into a family WhatsApp group. Before these tags existed, that link
+     rendered as a bare blue URL with no title, image or description -- in
+     a group already full of forwards, that reads as spam and doesn't get
+     tapped. These tags are what turn it into a card with the wordmark and
+     an invitation, on the single flow that has to carry every new user.
+
+     Notes for anyone editing this:
+       - og:image MUST be an absolute URL. WhatsApp/Facebook crawlers do
+         not resolve relative paths, and a broken image silently degrades
+         to the same bare link this exists to fix.
+       - The image must be a raster format (PNG/JPEG). SVG is not rendered
+         by any of these crawlers.
+       - Previews are cached hard by WhatsApp. After changing anything
+         here, test with a URL that has a fresh query string (e.g.
+         ?v=2) or the old preview will keep showing.
+     ------------------------------------------------------------------ -->
+<meta name="description" content="Create a room, share the link, and play Least Count together." />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Least Count" />
+<meta property="og:title" content="Least Count" />
+<meta property="og:description" content="Create a room, share the link, and play together." />
+<meta property="og:url" content="https://least-count-game.onrender.com/" />
+<meta property="og:image" content="https://least-count-game.onrender.com/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="Least Count card game" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Least Count" />
+<meta name="twitter:description" content="Create a room, share the link, and play together." />
+<meta name="twitter:image" content="https://least-count-game.onrender.com/og-image.png" />
+<meta name="theme-color" content="#123d30" />
+
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <!-- Regal display face for the landing screen's wordmark only -- everything
@@ -78,14 +115,52 @@
   </div>
 
   <div class="landing-body">
-    <p class="landing-tagline">Real cards. Real family. One link.</p>
+    <!-- Tagline removed (Sept 2026) -- the landing screen goes straight from
+         the wordmark to the three ways to play, with nothing to read first.
+         .landing-tagline is left in style.css in case copy comes back here. -->
     <!-- Inline, always-in-view error banner -- shows the SAME message as
          landing-error inside the profile dropdown, but here it can't be
          missed just because the dropdown happens to be closed. Tapping it
          opens the dropdown and jumps straight to the name field. -->
     <p id="landing-toast-error" class="landing-toast-error hidden" role="alert"></p>
 
+    <!-- ----------------------------------------------------------------
+         Invite mode (Sept 2026). Shown INSTEAD of .mode-blocks below when
+         the URL carries ?room=CODE -- i.e. someone tapped a shared invite.
+
+         Why this exists: an invited person doesn't want a menu, they were
+         sent to one specific room. Worse, the name field lives only inside
+         the profile modal behind a small avatar icon, so a first-time
+         visitor used to go: tap Join -> "Enter your name" error -> hunt for
+         the hidden field -> type -> close modal -> tap Join again. Five
+         steps and an error message as their first experience of the game,
+         on the exact path every new user arrives through.
+
+         Everything needed is on this one card instead: who invited them,
+         which room, a focused name box, one button.
+         ---------------------------------------------------------------- -->
+    <div id="invite-card" class="invite-card hidden">
+      <p id="invite-headline" class="invite-headline">You've been invited to play</p>
+      <div class="invite-room-line">Room <span id="invite-roomcode">----</span></div>
+      <label for="input-invite-name">Your name</label>
+      <input id="input-invite-name" type="text" maxlength="20" placeholder="e.g. Manikanta"
+             autocomplete="name" enterkeyhint="go" />
+      <button id="btn-invite-join" class="primary" type="button">Join Game</button>
+      <button id="btn-invite-dismiss" class="secondary" type="button">Other ways to play</button>
+    </div>
+
     <div class="mode-blocks">
+      <!-- Your groups: permanent named tables (Family, Cousins, Office...).
+           Rendered from localStorage, so it costs no network call and works
+           before Firebase has even finished signing in. Hidden entirely
+           until you belong to at least one, so a brand-new user doesn't see
+           an empty box. This block is deliberately FIRST -- for anyone who
+           plays regularly it's the only thing on this screen they need. -->
+      <div class="mode-block hidden" id="groups-block">
+        <h3>👨‍👩‍👧 Your Groups</h3>
+        <ul id="groups-list" class="group-list"></ul>
+      </div>
+
       <div class="mode-block">
         <h3>🌐 Play Online</h3>
         <p class="mode-block-sub">Get matched with strangers</p>
@@ -109,6 +184,14 @@
         <div class="mode-block-join-row">
           <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
           <button id="btn-join" class="secondary">Join</button>
+        </div>
+        <!-- Permanent group. Unlike "Create Room" above, the code and link
+             never change, so one pinned WhatsApp message keeps working and
+             the group keeps a running leaderboard across every session. -->
+        <div class="mode-block-divider"><span>or make it permanent</span></div>
+        <div class="mode-block-join-row">
+          <input id="input-group-name" type="text" maxlength="30" placeholder="Name a group, e.g. Family" />
+          <button id="btn-create-group" class="secondary">Create</button>
         </div>
       </div>
 
@@ -157,7 +240,11 @@
   </div>
   <div class="landing-body">
     <div class="mode-block">
-      <div class="room-code-label">Room Code</div>
+      <!-- Only shown for a room opened from a permanent group -- for an
+           ordinary one-off room this stays hidden and the screen looks
+           exactly as it always did. -->
+      <div id="lobby-group-name" class="lobby-group-name hidden"></div>
+      <div class="room-code-label" id="lobby-roomcode-label">Room Code</div>
       <!-- Copy just the 4-letter code (for saying it out loud / typing it
            elsewhere) and Share the full join-link (for pasting straight into
            WhatsApp etc. -- opening it pre-fills the room code automatically,
@@ -167,7 +254,7 @@
            #roomcode-action-feedback so there's always visible feedback, even
            on desktop where no native share sheet appears and it silently
            falls back to clipboard-copy. -->
-      <div class="room-code-row">
+      <div class="room-code-row" id="lobby-roomcode-row">
         <div class="room-code-display" id="lobby-roomcode">----</div>
         <button id="btn-copy-roomcode" class="icon-btn" type="button" aria-label="Copy room code" title="Copy code">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="13" height="14" rx="2"/><path d="M8 7V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-3"/></svg>
@@ -177,13 +264,39 @@
         </button>
       </div>
       <p id="roomcode-action-feedback" class="hint roomcode-feedback"></p>
-      <p class="hint">Send this code to your family/friends</p>
+      <!-- The single most important button in the app (Sept 2026). An empty
+           lobby is useless, so inviting someone is the only action that
+           matters here -- previously it was a 24px icon above, while a
+           DISABLED "Start Game" was the loudest thing on screen.
+           WhatsApp specifically, rather than a generic share sheet, because
+           navigator.share() does not exist in Android WebView (it's a Chrome
+           API), so inside the wrapped app the generic button silently fell
+           back to "copied to clipboard" -- leaving people to open WhatsApp
+           and find the contact themselves. A wa.me link is just a URL, so it
+           works in the WebView today with no native plugin and no rebuild.
+           See btn-share-whatsapp in app.js for the @capacitor/share upgrade
+           planned for the next native build. -->
+      <button id="btn-share-whatsapp" class="primary invite-btn" type="button">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2Zm0 18.15h-.01a8.2 8.2 0 0 1-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.2 8.2 0 0 1-1.26-4.38c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.83 2.42a8.19 8.19 0 0 1 2.41 5.83c0 4.54-3.7 8.23-8.24 8.23Zm4.52-6.17c-.25-.12-1.47-.72-1.69-.81-.23-.08-.39-.12-.56.13-.16.24-.64.8-.78.97-.15.16-.29.18-.53.06-.25-.13-1.05-.39-1.99-1.23-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.01-.38.11-.5.11-.11.25-.29.37-.44.13-.15.17-.25.25-.42.08-.16.04-.31-.02-.43-.06-.12-.56-1.34-.76-1.84-.2-.48-.4-.42-.56-.43h-.48c-.16 0-.43.06-.65.31-.22.25-.85.84-.85 2.03 0 1.2.87 2.35.99 2.51.12.16 1.71 2.62 4.15 3.67.58.25 1.03.4 1.39.51.58.19 1.11.16 1.53.1.47-.07 1.47-.6 1.67-1.18.21-.58.21-1.07.15-1.18-.06-.11-.22-.17-.47-.29Z"/></svg>
+        Invite on WhatsApp
+      </button>
+      <p class="hint" id="lobby-code-hint">Or read out the code above</p>
       <button id="btn-game-rules" class="secondary rules-btn" type="button">Game Rules</button>
     </div>
 
     <div class="mode-block">
       <h3>Players</h3>
       <ul id="lobby-players" class="player-list"></ul>
+    </div>
+
+    <!-- Running leaderboard for a permanent group -- wins, games played and
+         average score across every session this group has ever played. This
+         is the reason to come back: without it each game evaporates, with it
+         they add up to something. Hidden for one-off rooms. -->
+    <div class="mode-block hidden" id="lobby-standings-block">
+      <h3>🏆 Leaderboard</h3>
+      <ul id="lobby-standings" class="standings-list"></ul>
+      <p id="lobby-standings-empty" class="hint hidden">No games yet — the first result lands here.</p>
     </div>
 
     <div class="mode-block">
