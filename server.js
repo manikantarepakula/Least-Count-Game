@@ -72,6 +72,52 @@ app.use('/memes', express.static(path.join(__dirname, 'public', 'memes'), {
   maxAge: '30d',
   immutable: true,
 }));
+// ---------------------------------------------------------------------------
+// Android App Links verification (Digital Asset Links).
+//
+// This is what lets an invite link open the APP instead of the browser on a
+// phone that has it installed. Android fetches this file over https and
+// checks that the site vouches for the app's signing certificate.
+//
+// Served from an EXPLICIT route on purpose, NOT as a file in public/. Two
+// separate traps make the file approach fail silently:
+//   1. express.static defaults to dotfiles: 'ignore', so anything under a
+//      ".well-known" directory 404s -- and Google's verifier just reports
+//      "not verified" with no reason, which is hours of confused debugging.
+//   2. Windows Explorer won't let you create a folder whose name starts with
+//      a dot without a trailing-dot trick, so the directory tends not to
+//      survive a manual copy into the repo in the first place.
+//
+// The fingerprint below is the SHA-256 of the PLAY APP SIGNING key (Play
+// Console -> Setup -> App integrity), not the upload key -- Play re-signs
+// every build, so the upload key's fingerprint would never match what's
+// actually installed on a phone.
+//
+// Still to do for links to actually open the app (both need a native build):
+//   - AndroidManifest.xml: an intent-filter with android:autoVerify="true"
+//     for host least-count-game.onrender.com, scheme https.
+//   - Handle the incoming URL in the app (see the appUrlOpen listener in
+//     public/app.js) so ?g=slug lands on the invite card.
+// ---------------------------------------------------------------------------
+const ASSET_LINKS = [{
+  relation: ['delegate_permission/common.handle_all_urls'],
+  target: {
+    namespace: 'android_app',
+    package_name: 'com.manikanta.leastcount',
+    sha256_cert_fingerprints: [
+      'B9:7A:CD:63:08:60:E6:0B:FC:B6:90:B6:08:CA:E5:57:51:8C:C0:5B:55:CD:29:30:6C:FD:35:30:56:8D:CA:56',
+    ],
+  },
+}];
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  // Explicit content-type: Android's verifier requires application/json and
+  // will reject text/plain. No redirects are permitted on this URL either,
+  // which is another reason to answer it directly here.
+  res.set('Content-Type', 'application/json');
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.send(JSON.stringify(ASSET_LINKS, null, 2));
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
   maxAge: '10m',
 }));
