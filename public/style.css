@@ -1819,3 +1819,37 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .lobby-group-header.hidden { display: none; }
 .lobby-group-header .lobby-group-name { margin-bottom: 0; flex: 1; min-width: 0; text-align: left; }
+
+/* ---- Round outcome during the card reveal (Sept 2026) ----
+   The reveal showed everyone's hands but never said what had happened --
+   no winner, and a penalty looked the same as a clean declare. These are
+   the verdict. */
+.reveal-banner {
+  position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
+  z-index: 6; text-align: center; pointer-events: none;
+  max-width: 74%;
+}
+.reveal-banner.hidden { display: none; }
+.reveal-banner-title {
+  font-size: 17px; font-weight: 700; color: var(--gold-bright);
+  text-shadow: 0 2px 8px rgba(0,0,0,0.7); line-height: 1.25;
+}
+.reveal-banner-title.wrong { color: #ff6b6b; }
+.reveal-banner-sub {
+  margin-top: 4px; font-size: 13px; font-weight: 700; color: var(--text-light);
+  text-shadow: 0 2px 6px rgba(0,0,0,0.7);
+}
+.reveal-banner-sub.penalty { color: #ff6b6b; }
+
+/* Outcome states on the seat boxes. .declared (gold) already existed for
+   "this person called it"; these say whether it worked. */
+.seat-reveal-box.winner  { border: 2px solid #4ade80; }
+.seat-reveal-box.penalty { border: 2px solid #ff6b6b; }
+.seat-reveal-box.penalty .seat-reveal-tag { color: #ff6b6b; }
+.seat-reveal-box.winner  .seat-reveal-tag { color: #4ade80; }
+
+/* Round score sits next to the hand value -- the hand value alone never
+   told you what the round actually cost. */
+.seat-reveal-score { margin-left: 5px; font-weight: 700; color: var(--text-muted); }
+.seat-reveal-score.zero { color: #4ade80; }
+.seat-reveal-score.penalty { color: #ff6b6b; }
