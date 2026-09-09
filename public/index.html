@@ -178,7 +178,11 @@
         <p class="mode-block-sub">One-off game, code expires with the session</p>
         <div class="mode-block-join-row">
           <button id="btn-create" class="secondary">Create Room</button>
-          <input id="input-roomcode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
+          <!-- Takes EITHER kind of code: 4 letters for a one-off room, 5 for a
+               permanent group. Whoever is typing doesn't know or care which
+               they were given, so one box accepts both and the server works
+               it out from the length. -->
+          <input id="input-roomcode" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
           <button id="btn-join" class="secondary">Join</button>
         </div>
       </div>
@@ -239,6 +243,77 @@
       <p class="hint">Still looking -- what would you like to do?</p>
       <button id="btn-queue-keep-waiting" class="secondary" type="button">Keep Waiting</button>
       <button id="btn-queue-fill-bots" class="secondary" type="button">Fill with Bots</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================================================================
+     Group screen (Sept 2026 rebuild -- see group-spec.md)
+
+     Tapping a group opens THIS, not a game lobby. That single change is
+     why the first version felt dead: tap a group, land alone in an empty
+     lobby, leave. This screen has substance whether or not anyone is
+     playing, so the group becomes somewhere you visit rather than a
+     shortcut you regret pressing.
+     ================================================================== -->
+<div id="screen-group" class="screen">
+  <div class="landing-topbar">
+    <div class="landing-topbar-left">
+      <button id="btn-group-back" class="icon-btn" type="button" aria-label="Back">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18 9 12l6-6"/></svg>
+      </button>
+    </div>
+    <h1 id="group-title" class="landing-wordmark landing-wordmark-sm">Group</h1>
+    <div class="landing-topbar-right">
+      <button id="btn-group-settings" class="icon-btn" type="button" aria-label="Group settings" title="Group settings">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="landing-body">
+    <!-- Live strip: the state of play right now. This is the section that
+         fixes "the group is dead when I open it" -- it always says
+         something, even when nobody is around. -->
+    <div class="mode-block group-live">
+      <div id="group-live-text" class="group-live-text">No one at the table</div>
+      <div id="group-live-names" class="group-live-names"></div>
+      <button id="btn-group-bell" class="primary invite-btn" type="button">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22a2.5 2.5 0 0 0 2.5-2.5h-5A2.5 2.5 0 0 0 12 22Zm7-5v-5a7 7 0 0 0-5.5-6.8V4a1.5 1.5 0 1 0-3 0v1.2A7 7 0 0 0 5 12v5l-1.6 1.6a.8.8 0 0 0 .6 1.4h16a.8.8 0 0 0 .6-1.4L19 17Z"/></svg>
+        <span id="btn-group-bell-label">I want to play</span>
+      </button>
+      <button id="btn-group-play" class="primary hidden" type="button">Start Game</button>
+      <button id="btn-group-standdown" class="secondary hidden" type="button">Leave the table</button>
+      <p id="group-bell-hint" class="hint"></p>
+    </div>
+
+    <div class="mode-block">
+      <h3>Members <span id="group-member-count" class="group-count"></span></h3>
+      <ul id="group-members" class="group-member-list"></ul>
+      <div class="group-invite-row">
+        <button id="btn-group-invite" class="secondary" type="button">Invite</button>
+        <!-- Small on purpose: the code only matters at the moment somebody
+             joins. After that nobody needs to see it again. -->
+        <span class="group-code-inline">Code <b id="group-code-text">-----</b></span>
+      </div>
+    </div>
+
+    <div class="mode-block" id="group-recent-block">
+      <h3>Recent</h3>
+      <ul id="group-recent" class="group-recent-list"></ul>
+      <p id="group-recent-empty" class="hint hidden">No games yet.</p>
+    </div>
+
+    <div class="mode-block">
+      <h3>🏆 Marathon</h3>
+      <div class="segmented" id="group-board-tabs">
+        <button type="button" class="seg active" data-board="month">This month</button>
+        <button type="button" class="seg" data-board="today">Today</button>
+        <button type="button" class="seg" data-board="champions">Champions</button>
+      </div>
+      <ul id="group-board" class="standings-list"></ul>
+      <p id="group-board-empty" class="hint hidden">Nothing here yet.</p>
+      <p class="hint group-scoring-note">One point for every player you finish ahead of, plus one for turning up.</p>
     </div>
   </div>
 </div>
