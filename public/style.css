@@ -1853,3 +1853,59 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 .seat-reveal-score { margin-left: 5px; font-weight: 700; color: var(--text-muted); }
 .seat-reveal-score.zero { color: #4ade80; }
 .seat-reveal-score.penalty { color: #ff6b6b; }
+
+/* ==========================================================================
+   Group screen (Sept 2026 rebuild -- see group-spec.md)
+   ==========================================================================
+   Tapping a group opens this, not a game lobby. Everything here exists to
+   make the group say SOMETHING when you open it, whether or not anyone is
+   playing -- which is what the first version failed to do.
+   ========================================================================== */
+
+/* ---- live strip: the state of play right now ---- */
+.group-live { text-align: center; }
+.group-live-text { font-size: 16px; font-weight: 700; color: var(--text-light); }
+.group-live-names { font-size: 13px; color: var(--text-muted); margin-top: 2px; min-height: 16px; }
+.group-live .invite-btn, .group-live button.primary, .group-live button.secondary { margin-top: 10px; }
+.group-scoring-note { margin-top: 10px; font-size: 11px; line-height: 1.5; }
+
+/* ---- members ---- */
+.group-member-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.group-member {
+  display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 9px;
+  padding: 8px 2px; font-size: 14px;
+}
+/* Faded, not hidden -- a member who isn't around still belongs to the group,
+   and "played yesterday" is what keeps the list from reading as empty. */
+.group-member.away { opacity: 0.62; }
+.gm-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+.gm-dot.playing { background: var(--red); box-shadow: 0 0 0 3px rgba(229,37,44,0.22); }
+.gm-dot.table   { background: var(--gold-bright); box-shadow: 0 0 0 3px rgba(242,193,78,0.20); }
+.gm-dot.online  { background: #4ade80; }
+.gm-dot.away    { background: rgba(255,255,255,0.22); }
+.gm-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-host {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.06em; color: var(--gold-bright);
+  border: 1px solid rgba(242,193,78,0.5); border-radius: 4px; padding: 1px 4px; margin-left: 4px;
+}
+.gm-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+
+/* ---- invite row: the code is deliberately small ---- */
+.group-invite-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.group-invite-row button { flex-shrink: 0; }
+/* Small on purpose. The code only matters at the moment somebody joins;
+   after that nobody needs to see it again, so it must not compete with the
+   group's name for attention. */
+.group-code-inline { font-size: 11px; color: var(--text-muted); }
+.group-code-inline b { color: var(--text-light); letter-spacing: 0.12em; font-size: 13px; }
+.group-count { font-size: 12px; font-weight: 400; color: var(--text-muted); }
+
+/* ---- recent games ---- */
+.group-recent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.group-recent-row {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: baseline;
+  font-size: 13px; padding: 5px 0;
+}
+.gr-when { color: var(--text-muted); font-size: 11px; min-width: 62px; }
+.gr-who { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-n { color: var(--text-muted); font-size: 11px; }
