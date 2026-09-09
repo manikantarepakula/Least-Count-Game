@@ -97,7 +97,7 @@ app.use('/memes', express.static(path.join(__dirname, 'public', 'memes'), {
 //   - AndroidManifest.xml: an intent-filter with android:autoVerify="true"
 //     for host least-count-game.onrender.com, scheme https.
 //   - Handle the incoming URL in the app (see the appUrlOpen listener in
-//     public/app.js) so ?g=slug lands on the invite card.
+//     public/app.js) so ?g=CODE lands on the invite card.
 // ---------------------------------------------------------------------------
 const ASSET_LINKS = [{
   relation: ['delegate_permission/common.handle_all_urls'],
@@ -481,7 +481,7 @@ async function recordGameResult(room) {
   // persistent group also feeds that group's own leaderboard. Awaited last
   // and with its own error handling inside, so a standings failure can never
   // stop the individual stats from being written.
-  await updateGroupStandings(room, winnerId);
+  await recordGroupGame(room);
 }
 
 // --------------------------------------------------------------------------
@@ -664,6 +664,7 @@ const RATE_LIMITS = {
   create_room: { max: 5, windowMs: 60000 },
   create_group: { max: 3, windowMs: 60000 },        // groups are permanent -- much tighter than rooms
   get_group: { max: 20, windowMs: 30000 },
+  ring_bell: { max: 6, windowMs: 60000 },
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
   report_player: { max: 5, windowMs: 60000 },
@@ -741,80 +742,81 @@ function makePlayerId() {
 }
 
 // ===========================================================================
-// Persistent groups (Sept 2026)
+// Permanent groups (rebuilt Sept 2026 -- see group-spec.md)
 // ===========================================================================
-// A "group" is a named, permanent table -- Family, Office Gang, Cousins --
-// that replaces the create-a-room-and-share-a-new-code ritual every single
-// time. The link never changes, so one pinned WhatsApp message works forever.
+// A "group" is a named, permanent table -- Family, Cousins, Office. Unlike an
+// ad-hoc room it outlives every game, carries a members list and a monthly
+// marathon, and is joined by a code that never changes.
 //
-// Deliberate split of responsibilities:
-//   - The GROUP is a Firestore document. It outlives every game and holds
-//     the name, its admin, and the running leaderboard.
-//   - The live ROOM stays exactly what it always was: ephemeral, in server
-//     memory, discarded when everyone leaves. Nothing about the game engine
-//     or the room lifecycle changes. A room is simply *bound* to a group
-//     (room.groupSlug) when it was opened from one.
+// Split of responsibilities, kept from the first version because it's what
+// makes this cheap:
+//   - The GROUP is a Firestore document: name, members, marathon, champions.
+//   - The live ROOM stays ephemeral and in server memory, discarded when
+//     everyone leaves. It is simply BOUND to a group (room.groupCode).
+//   - Presence and the "at the table" set are ALSO in memory. They describe
+//     right now, so persisting them would only create stale state to clean
+//     up after a restart.
 //
-// That split is what keeps this cheap: opening a group for the tenth time
-// creates a fresh ordinary room, exactly as before, and only the standings
-// survive in Firestore.
-//
-// Slugs vs room codes -- how the two never collide:
-//   Ad-hoc rooms use 4 UPPERCASE letters (ABCD). Group slugs are lowercase
-//   and ALWAYS contain a hyphen, because a 3-character random discriminator
-//   is appended (sharma-family-k2p). So "does it contain a hyphen" is a
-//   complete, unambiguous test for which kind of key we're looking at, and
-//   the two namespaces can share the same `rooms` map and the same
-//   join_room handler with no special-casing anywhere else.
+// Codes vs room codes -- how the two never collide:
+//   Ad-hoc rooms use 4 letters, groups use 5. Length alone disambiguates, so
+//   both share the same `rooms` map and the same join_room handler with no
+//   special-casing, and one input box accepts either without the person
+//   typing needing to know which kind of code they were given.
 // ===========================================================================
 const GROUP_NAME_MAX = 30;
-const GROUP_SLUG_BASE_MAX = 32;
+const GROUP_CODE_LEN = 5;
+// I and O are omitted deliberately: these codes get read out down a phone,
+// and "is that a one or an I" is the commonest way a shared code fails.
+const GROUP_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const GROUP_CODE_RE = /^[A-Z]{5}$/;
 
-function slugifyGroupName(name) {
-  const base = String(name || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, GROUP_SLUG_BASE_MAX)
-    .replace(/-+$/g, '');
-  return base || 'table';
+function makeGroupCode() {
+  let out = '';
+  for (let i = 0; i < GROUP_CODE_LEN; i++) {
+    out += GROUP_CODE_ALPHABET[Math.floor(Math.random() * GROUP_CODE_ALPHABET.length)];
+  }
+  return out;
 }
 
-// The 3-char suffix does double duty: it makes slugs unique without a
-// read-check-retry loop, and it guarantees the hyphen that the "is this a
-// group?" test depends on (a single-word group name like "Family" would
-// otherwise slugify to "family", with no hyphen at all).
-function makeGroupSlug(name) {
-  const suffix = Math.random().toString(36).slice(2, 5).replace(/[^a-z0-9]/g, '0').padEnd(3, '0');
-  return `${slugifyGroupName(name)}-${suffix}`;
+function looksLikeGroupCode(key) {
+  return typeof key === 'string' && GROUP_CODE_RE.test(key);
 }
 
-function looksLikeGroupSlug(key) {
-  return typeof key === 'string' && key.includes('-');
+// ---------------------------------------------------------------------------
+// Date keys, in INDIA time, not UTC.
+//
+// The marathon runs on calendar months and the daily board on calendar days,
+// both read by people in IST. On UTC boundaries a month would end at 5:30am
+// IST, so a late game on the 31st would land in the following month -- which
+// is exactly the sort of thing that causes an argument when there's a crown
+// riding on the result.
+// ---------------------------------------------------------------------------
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+function istKey(ts, len) {
+  return new Date((ts || Date.now()) + IST_OFFSET_MS).toISOString().slice(0, len);
 }
+function istDayKey(ts) { return istKey(ts, 10); }   // YYYY-MM-DD
+function istMonthKey(ts) { return istKey(ts, 7); }  // YYYY-MM
 
-async function readGroup(slug) {
-  if (!db || !looksLikeGroupSlug(slug)) return null;
-  const doc = await db.collection('groups').doc(slug).get();
+async function readGroup(code) {
+  if (!db || !looksLikeGroupCode(code)) return null;
+  const doc = await db.collection('groups').doc(code).get();
   return doc.exists ? doc.data() : null;
 }
 
 // Builds the in-memory room for a group that doesn't currently have one --
-// i.e. the first person to open the group since the last game ended. Returns
-// null when there's no such group, so join_room can fall through to its
-// normal "Room not found" error for a mistyped code.
+// the first person to start a game since the last one ended. Returns null for
+// an unknown code so join_room falls through to its normal "not found" error.
 //
-// hostPlayerId is deliberately left null: nobody is in the room yet. The
-// join_room lobby path promotes whoever arrives first, which is the same
-// person who just tapped the group.
-async function createRoomForGroup(slug) {
-  const group = await readGroup(slug);
+// hostPlayerId is left null: nobody is seated yet. join_room's lobby path
+// promotes whoever arrives first.
+async function createRoomForGroup(code) {
+  const group = await readGroup(code);
   if (!group) return null;
   const room = {
-    code: slug,
-    groupSlug: slug,
-    groupName: group.name || slug,
+    code,
+    groupCode: code,
+    groupName: group.name || code,
     groupAdminUid: group.adminUid || null,
     hostPlayerId: null,
     players: new Map(),
@@ -832,79 +834,383 @@ async function createRoomForGroup(slug) {
     pendingJoins: new Map(),
     allHumansDisconnectedAt: null,
   };
-  rooms.set(slug, room);
+  rooms.set(code, room);
   return room;
 }
 
-// Running leaderboard for a group, updated once per finished game.
+// ---------------------------------------------------------------------------
+// Presence -- who is looking at a group right now.
 //
-// The standings are a MAP INSIDE the group document rather than one document
-// per player, and that's a deliberate cost decision: per-player documents
-// would mean 4-6 extra Firestore writes per game, which at ~1,500 games/day
-// would push total writes past the 20,000/day free-tier ceiling. As a single
-// map it's one write per game regardless of table size.
-//
-// Runs in a transaction because several games in the same group can finish
-// close together, and a read-modify-write without one would silently lose
-// whichever result landed second.
-async function updateGroupStandings(room, winnerId) {
-  if (!db || !room.groupSlug || !room.game) return;
-  const ref = db.collection('groups').doc(room.groupSlug);
-  const finishedAt = new Date().toISOString();
+// Deliberately in memory and socket-scoped. A client tells us which groups it
+// cares about (watch_groups); we keep a socket SET per member, so the same
+// person on two devices counts once and only drops off when the last one
+// goes.
+// ---------------------------------------------------------------------------
+const groupPresence = new Map(); // code -> Map(uid -> { name, sockets:Set })
 
-  // Snapshot what we need before the transaction -- the room can change
-  // underneath us while the transaction retries.
-  const results = [];
-  for (const pid of room.game.playerIds) {
-    const player = room.players.get(pid);
-    if (!player || player.isBot || !player.firebaseUid) continue;
-    results.push({
-      uid: player.firebaseUid,
-      name: player.name,
-      won: pid === winnerId,
-      score: Number(room.game.scores[pid]) || 0,
-    });
+function addPresence(code, uid, name, socketId) {
+  if (!code || !uid) return;
+  if (!groupPresence.has(code)) groupPresence.set(code, new Map());
+  const members = groupPresence.get(code);
+  const entry = members.get(uid) || { name, sockets: new Set() };
+  entry.name = name || entry.name;
+  entry.sockets.add(socketId);
+  members.set(uid, entry);
+}
+
+// Returns the group codes whose presence actually changed, so the caller only
+// re-broadcasts where something moved.
+function removePresenceForSocket(socketId) {
+  const touched = [];
+  for (const [code, members] of groupPresence) {
+    for (const [uid, entry] of members) {
+      if (!entry.sockets.delete(socketId)) continue;
+      if (entry.sockets.size === 0) members.delete(uid);
+      touched.push(code);
+    }
+    if (members.size === 0) groupPresence.delete(code);
   }
-  if (!results.length) return;
+  return [...new Set(touched)];
+}
+
+function onlineMembers(code) {
+  return groupPresence.get(code) || new Map();
+}
+
+// ---------------------------------------------------------------------------
+// The bell -- "I want to play".
+//
+// The mechanic the whole group design rests on: it separates WANTING to play
+// from BEING in a game, so people don't have to be online at the same moment
+// to arrange something. C raises a hand and walks away; D sees it five
+// minutes later and joins.
+// ---------------------------------------------------------------------------
+const TABLE_EXPIRY_MS = 10 * 60 * 1000;
+const BELL_COOLDOWN_MS = 10 * 60 * 1000;
+const groupTables = new Map(); // code -> { seats:[{uid,name,at}], lastBellAt, timer }
+
+function getTable(code) {
+  return groupTables.get(code) || null;
+}
+
+function clearTable(code) {
+  const t = groupTables.get(code);
+  if (t && t.timer) clearTimeout(t.timer);
+  groupTables.delete(code);
+}
+
+// Expiry is refreshed whenever ANYONE joins the table -- otherwise C raises a
+// hand, D arrives at minute nine, and C drops off at minute ten just as they
+// were about to start.
+function scheduleTableExpiry(code, onExpire) {
+  const t = groupTables.get(code);
+  if (!t) return;
+  if (t.timer) clearTimeout(t.timer);
+  t.timer = setTimeout(() => {
+    clearTable(code);
+    if (onExpire) onExpire(code);
+  }, TABLE_EXPIRY_MS);
+}
+
+// Returns { seated, rang }. `rang` is false when the cooldown swallowed the
+// ping -- the person still takes their seat, it just doesn't re-notify.
+//
+// The cooldown is per GROUP, not per person: four members each tapping once
+// would otherwise fire four pings in a minute, which is how a family mutes
+// the app and the feature dies.
+function raiseHand(code, uid, name, onExpire) {
+  if (!code || !uid) return { seated: false, rang: false };
+  let t = groupTables.get(code);
+  if (!t) {
+    t = { seats: [], lastBellAt: 0, timer: null };
+    groupTables.set(code, t);
+  }
+  const already = t.seats.some((s) => s.uid === uid);
+  if (!already) t.seats.push({ uid, name, at: Date.now() });
+  scheduleTableExpiry(code, onExpire);
+
+  const now = Date.now();
+  const rang = !already && (now - t.lastBellAt > BELL_COOLDOWN_MS);
+  if (rang) t.lastBellAt = now;
+  return { seated: true, rang };
+}
+
+function standDown(code, uid, onExpire) {
+  const t = groupTables.get(code);
+  if (!t) return;
+  t.seats = t.seats.filter((s) => s.uid !== uid);
+  if (t.seats.length === 0) clearTable(code);
+  else scheduleTableExpiry(code, onExpire);
+}
+
+// The host is whoever raised their hand FIRST -- they called the game, so
+// they get Start Game and the max-score selector once a second person joins.
+function tableHostUid(code) {
+  const t = groupTables.get(code);
+  return t && t.seats.length ? t.seats[0].uid : null;
+}
+
+// ---------------------------------------------------------------------------
+// Marathon scoring.
+//
+//   "One point for every player you finish ahead of, plus one for turning up."
+//
+// A 6-player game pays the winner 6 and last place 1; a 2-player game pays 2
+// and 1. That one rule does three jobs: bigger tables are worth more, so
+// grinding quick two-player games is a WORSE use of an evening than one real
+// six-player game; everyone who plays scores something, so nobody drops out
+// of the race by week two; and no anti-farming rules are needed anywhere.
+//
+// Ties share the better score. With a crown riding on the month, two people
+// on identical totals must not be separated by whatever order a map happened
+// to iterate in.
+// ---------------------------------------------------------------------------
+function marathonPoints(finalScores) {
+  const entries = Object.entries(finalScores || {});
+  const n = entries.length;
+  if (!n) return {};
+  // Lower total is better in Least Count.
+  const sorted = entries.slice().sort((a, b) => a[1] - b[1]);
+  const out = {};
+  let i = 0;
+  while (i < n) {
+    let j = i;
+    while (j + 1 < n && sorted[j + 1][1] === sorted[i][1]) j++;
+    const points = n - i; // every player in a tied block takes the best position
+    for (let k = i; k <= j; k++) out[sorted[k][0]] = points;
+    i = j + 1;
+  }
+  return out;
+}
+
+// Shapes a points map into the sorted list the client renders.
+function pointsToList(points, members) {
+  return Object.entries(points || {})
+    .map(([uid, pts]) => ({
+      uid,
+      name: (members && members[uid] && members[uid].name) || 'Player',
+      points: pts,
+    }))
+    .sort((a, b) => (b.points - a.points) || a.name.localeCompare(b.name));
+}
+
+// ---------------------------------------------------------------------------
+// Records a finished group game: marathon points, the daily board, the
+// members list, and the recent-games strip -- all in ONE document write.
+//
+// It also handles month rollover. Rather than a scheduled job (which would
+// need somewhere reliable to run and would fire for dormant groups), the
+// rollover happens lazily: whenever a game lands and the stored month is no
+// longer the current IST month, the previous month is archived to the
+// champions list and the table resets. A group that doesn't play for two
+// months simply archives on its next game.
+// ---------------------------------------------------------------------------
+async function recordGroupGame(room) {
+  if (!db || !room.groupCode || !room.game) return;
+  const ref = db.collection('groups').doc(room.groupCode);
+  const now = Date.now();
+  const monthKey = istMonthKey(now);
+  const dayKey = istDayKey(now);
+
+  // Snapshot before the transaction -- the room can change under us while a
+  // transaction retries.
+  const finalScores = {};
+  const names = {};
+  for (const pid of room.game.playerIds) {
+    const p = room.players.get(pid);
+    if (!p || p.isBot || !p.firebaseUid) continue; // bots never score
+    finalScores[p.firebaseUid] = Number(room.game.scores[pid]) || 0;
+    names[p.firebaseUid] = p.name;
+  }
+  const uids = Object.keys(finalScores);
+  if (uids.length < 2) return; // a solo table isn't a game worth scoring
+
+  const earned = marathonPoints(finalScores);
+  const winnerUid = Object.keys(earned).reduce(
+    (best, uid) => (best === null || earned[uid] > earned[best] ? uid : best), null);
 
   try {
     await db.runTransaction(async (tx) => {
       const doc = await tx.get(ref);
-      if (!doc.exists) return; // group deleted mid-game -- nothing to update
+      if (!doc.exists) return; // group deleted mid-game
       const data = doc.data() || {};
-      const standings = data.standings || {};
-      for (const r of results) {
-        const prev = standings[r.uid] || { games: 0, wins: 0, totalScore: 0 };
-        standings[r.uid] = {
-          // Name is refreshed every game so the board follows a rename
-          // rather than showing whatever they were called the first time.
-          name: r.name,
+
+      const members = data.members || {};
+      for (const uid of uids) {
+        const prev = members[uid] || { games: 0 };
+        members[uid] = {
+          name: names[uid],            // refreshed so the list follows a rename
           games: (prev.games || 0) + 1,
-          wins: (prev.wins || 0) + (r.won ? 1 : 0),
-          totalScore: (prev.totalScore || 0) + r.score,
+          lastPlayedAt: new Date(now).toISOString(),
         };
       }
-      tx.set(ref, { standings, lastPlayedAt: finishedAt }, { merge: true });
+
+      // ---- month rollover ----
+      let marathon = data.marathon || { month: monthKey, points: {} };
+      const champions = (data.champions || []).slice();
+      if (marathon.month !== monthKey) {
+        const finished = pointsToList(marathon.points, members);
+        if (finished.length) {
+          const champ = finished[0];
+          // No back-to-back ad-free months. The winner is by definition the
+          // heaviest player and heavy players keep winning -- six months
+          // running would permanently remove the best-earning user rather
+          // than run a promotion. The crown and the champions entry are
+          // unaffected; only the ad-free benefit passes down.
+          const previous = champions.length ? champions[champions.length - 1] : null;
+          const repeat = previous && previous.uid === champ.uid;
+          const adFreeUid = repeat ? (finished[1] ? finished[1].uid : null) : champ.uid;
+          champions.push({
+            month: marathon.month,
+            uid: champ.uid,
+            name: champ.name,
+            points: champ.points,
+            adFreeUid,
+          });
+          if (adFreeUid) {
+            // Entitlement lives on the USER, not the group -- ads are global
+            // to a person, and someone can be champion of more than one
+            // group. Written outside the transaction below.
+            tx.set(db.collection('users').doc(adFreeUid), { adFreeMonth: monthKey }, { merge: true });
+          }
+        }
+        marathon = { month: monthKey, points: {} };
+      }
+      for (const uid of uids) {
+        marathon.points[uid] = (marathon.points[uid] || 0) + earned[uid];
+      }
+
+      // ---- daily board ----
+      let daily = data.daily || { day: dayKey, points: {} };
+      if (daily.day !== dayKey) daily = { day: dayKey, points: {} };
+      for (const uid of uids) {
+        daily.points[uid] = (daily.points[uid] || 0) + earned[uid];
+      }
+
+      // ---- recent games strip ----
+      const recent = (data.recent || []).slice();
+      recent.unshift({
+        at: new Date(now).toISOString(),
+        winnerUid,
+        winnerName: winnerUid ? names[winnerUid] : null,
+        players: uids.length,
+      });
+
+      tx.set(ref, {
+        members,
+        marathon,
+        daily,
+        recent: recent.slice(0, 5),
+        champions,
+        lastPlayedAt: new Date(now).toISOString(),
+      }, { merge: true });
     });
   } catch (e) {
-    // Never let a leaderboard write break the end of a game.
-    console.error(`[Groups] standings update failed for ${room.groupSlug}:`, e.message);
+    // A leaderboard write must never break the end of a game.
+    console.error(`[Groups] recordGroupGame failed for ${room.groupCode}:`, e.message);
   }
 }
 
-// Shapes the standings map into the sorted array the client renders.
-// Average score is per game and lower is better in Least Count, so it's a
-// genuine skill measure rather than just "who played most".
-function standingsToList(standings) {
-  return Object.entries(standings || {})
-    .map(([uid, s]) => ({
+
+// ---------------------------------------------------------------------------
+// The group screen's entire state, assembled from three sources:
+//   - Firestore  : name, members, marathon, daily, recent, champions
+//   - `rooms`    : who is actually PLAYING right now
+//   - memory     : who is online, and who has raised a hand
+//
+// Only the first of those is persisted. Presence and the table describe this
+// moment, so keeping them in memory means there's no stale state to reconcile
+// after a restart.
+// ---------------------------------------------------------------------------
+async function groupPayload(code, viewerUid) {
+  const group = await readGroup(code);
+  if (!group) return null;
+
+  const stored = group.members || {};
+  const online = onlineMembers(code);                  // uid -> {name, sockets}
+  const table = getTable(code);
+  const seatedUids = new Set((table ? table.seats : []).map((s) => s.uid));
+  const hostUid = tableHostUid(code);
+
+  // Who's mid-game right now, by uid.
+  const room = rooms.get(code);
+  const playingUids = new Set();
+  if (room && room.game && !room.game.gameOver) {
+    for (const pid of room.order) {
+      const p = room.players.get(pid);
+      if (p && !p.isBot && p.firebaseUid && p.connected) playingUids.add(p.firebaseUid);
+    }
+  }
+
+  // A member is anyone who's finished a game here, plus anyone present now --
+  // so somebody who joins and raises a hand appears immediately rather than
+  // only after their first completed game.
+  const uids = new Set([...Object.keys(stored), ...online.keys(), ...seatedUids]);
+  const members = [...uids].map((uid) => {
+    const s = stored[uid] || {};
+    const status = playingUids.has(uid) ? 'playing'
+      : seatedUids.has(uid) ? 'table'
+      : online.has(uid) ? 'online'
+      : 'away';
+    return {
       uid,
-      name: s.name || 'Player',
+      name: s.name || (online.get(uid) && online.get(uid).name) ||
+            ((table ? table.seats : []).find((x) => x.uid === uid) || {}).name || 'Player',
+      status,
+      isHost: uid === hostUid,
       games: s.games || 0,
-      wins: s.wins || 0,
-      avgScore: s.games ? Math.round((s.totalScore || 0) / s.games) : 0,
-    }))
-    .sort((a, b) => (b.wins - a.wins) || (a.avgScore - b.avgScore) || (b.games - a.games));
+      lastPlayedAt: s.lastPlayedAt || null,
+    };
+  });
+  // Actionable people first: playing, at the table, online, then by recency.
+  const rank = { playing: 0, table: 1, online: 2, away: 3 };
+  members.sort((a, b) =>
+    (rank[a.status] - rank[b.status]) ||
+    ((b.lastPlayedAt || '') > (a.lastPlayedAt || '') ? 1 : -1));
+
+  const monthKey = istMonthKey();
+  const dayKey = istDayKey();
+  const marathon = group.marathon || {};
+  const daily = group.daily || {};
+
+  return {
+    code,
+    name: group.name || code,
+    isAdmin: !!viewerUid && group.adminUid === viewerUid,
+    members,
+    atTable: (table ? table.seats : []).map((s) => ({ uid: s.uid, name: s.name })),
+    hostUid,
+    // Cooldown state so the client can show the bell as unavailable rather
+    // than letting someone tap it and silently do nothing.
+    bellReadyAt: table ? (table.lastBellAt + BELL_COOLDOWN_MS) : 0,
+    gameInProgress: playingUids.size > 0,
+    recent: group.recent || [],
+    champions: group.champions || [],
+    // A stale month/day is reported as empty rather than as last month's
+    // table -- the rollover itself happens lazily on the next finished game
+    // (see recordGroupGame), so until then the stored points belong to a
+    // period that has already ended.
+    marathon: {
+      month: monthKey,
+      standings: marathon.month === monthKey ? pointsToList(marathon.points, stored) : [],
+    },
+    daily: {
+      day: dayKey,
+      standings: daily.day === dayKey ? pointsToList(daily.points, stored) : [],
+    },
+  };
+}
+
+// Pushes fresh group state to everyone watching it. Called whenever presence,
+// the table, or the group document changes.
+async function broadcastGroup(code) {
+  if (!looksLikeGroupCode(code)) return;
+  try {
+    const payload = await groupPayload(code, null);
+    if (payload) io.to(`g:${code}`).emit('group_update', { group: payload });
+  } catch (e) {
+    console.error(`[Groups] broadcast failed for ${code}:`, e.message);
+  }
 }
 
 function publicRoomInfo(room) {
@@ -915,7 +1221,7 @@ function publicRoomInfo(room) {
     // Set only for rooms bound to a persistent group (see the groups section
     // above). null for ordinary one-off rooms, which is what the client keys
     // off to decide whether to show the group name and leaderboard.
-    groupSlug: room.groupSlug || null,
+    groupCode: room.groupCode || null,
     groupName: room.groupName || null,
     players: room.order.map((pid) => ({
       playerId: pid,
@@ -1332,6 +1638,11 @@ function beginStartSequence(room, roomCode) {
   // the same moment and nobody's local round counter can drift out of step.
   // Also read by the reveal timer below, which holds the first turn back on
   // these rounds so an ad can't cost someone their opening move.
+  // The people who raised their hands have become players -- tear the table
+  // down so the group screen shows "playing" rather than a stale queue of
+  // people who are already in the game.
+  if (room.groupCode) { clearTable(room.groupCode); broadcastGroup(room.groupCode); }
+
   const adRound = isAdRoundNumber(room.game ? room.game.roundNumber : 0);
   room.currentDealMs = dealMs; // remembered so a mid-sequence rejoin replays with the same timing
   broadcastRoom(room);
@@ -1617,15 +1928,17 @@ io.on('connection', (socket) => {
       if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
       // Two kinds of key arrive here (see the groups section above): a
       // 4-letter ad-hoc room code, which is case-insensitive and uppercased
-      // as it always was, and a permanent group slug, which is lowercase and
-      // always contains a hyphen. The hyphen is the whole test.
-      const rawCode = (roomCode || '').trim();
-      const code = looksLikeGroupSlug(rawCode) ? rawCode.toLowerCase() : rawCode.toUpperCase();
+      // as it always was, and a permanent group code. Both are uppercase;
+      // only the LENGTH separates them (4 vs 5).
+      // Both kinds of code are uppercase; only the LENGTH tells them apart
+      // (4 = ad-hoc room, 5 = permanent group). That's why one input box can
+      // accept either without the person typing knowing which they were given.
+      const code = (roomCode || '').trim().toUpperCase();
       let room = rooms.get(code);
       // A group whose room isn't currently live -- i.e. the first person to
       // open it since the last game finished. Spin the room up on demand
       // rather than keeping empty rooms alive between sessions.
-      if (!room && looksLikeGroupSlug(code)) {
+      if (!room && looksLikeGroupCode(code)) {
         room = await createRoomForGroup(code);
       }
       if (!room) throw new Error('Room not found. Check the code.');
@@ -1684,7 +1997,7 @@ io.on('connection', (socket) => {
       // startNextRound, which is the single place addPlayer happens).
       // Approval still applies to ad-hoc rooms, where a code could have
       // reached a stranger.
-      if (room.groupSlug) {
+      if (room.groupCode) {
         const playerId = makePlayerId();
         room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
         room.order.push(playerId);
@@ -1720,9 +2033,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Creates a permanent named group and returns its slug. Deliberately does
+  // Creates a permanent named group and returns its code. Deliberately does
   // NOT create or join a room -- the client follows up with an ordinary
-  // join_room using the slug, which spins the room up via
+  // join_room using the code, which spins the room up via
   // createRoomForGroup() and promotes them to host. Keeping it that way
   // means there is exactly ONE join path in this file, so the mid-game
   // approval flow, room-full checks and host handover all keep working for
@@ -1736,42 +2049,47 @@ io.on('connection', (socket) => {
       if (cleanName.length < 2) throw new Error('Give your group a name (at least 2 characters).');
       const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
 
-      // The random suffix makes collisions vanishingly unlikely, but check
-      // anyway and re-roll -- a silent collision would drop two families
-      // into the same table and the same leaderboard.
-      let slug = makeGroupSlug(cleanName);
+      // 5 letters from a 24-letter alphabet is ~8 million combinations, so a
+      // clash is very unlikely -- but codes are reserved permanently, so
+      // check and re-roll anyway. A silent collision would drop two families
+      // into the same table and the same marathon.
+      let code = makeGroupCode();
       for (let attempt = 0; attempt < 5; attempt++) {
-        const existing = await db.collection('groups').doc(slug).get();
+        const existing = await db.collection('groups').doc(code).get();
         if (!existing.exists) break;
-        slug = makeGroupSlug(cleanName);
+        code = makeGroupCode();
       }
 
-      await db.collection('groups').doc(slug).set({
+      const nowIso = new Date().toISOString();
+      await db.collection('groups').doc(code).set({
         name: cleanName,
-        slug,
-        // Recorded for future use (rename, removing a member). Membership is
-        // deliberately open -- anyone holding the link is in -- so this does
-        // not currently gate anything.
+        code,
+        // Recorded so rename and delete can be restricted to the creator.
+        // Membership itself stays open -- anyone with the code is in.
         adminUid: verifiedUid || null,
-        createdAt: new Date().toISOString(),
-        standings: {},
+        createdAt: nowIso,
+        members: {},
+        marathon: { month: istMonthKey(), points: {} },
+        daily: { day: istDayKey(), points: {} },
+        recent: [],
+        champions: [],
       });
-      console.log(`[Groups] Created "${cleanName}" -> ${slug}`);
-      ack && ack({ ok: true, slug, name: cleanName });
+      console.log(`[Groups] Created "${cleanName}" -> ${code}`);
+      ack && ack({ ok: true, code, name: cleanName });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
   });
 
-  // Rename a group. Admin (its creator) only -- membership is open to anyone
-  // with the link, so without this restriction any passer-by could rename
-  // somebody's family table. Updates the live room too, so anyone currently
-  // sitting in it sees the new name without reloading.
-  socket.on('rename_group', async ({ slug, groupName, firebaseIdToken }, ack) => {
+  // Rename a group. Creator only -- membership is open to anyone with the
+  // code, so without this restriction any passer-by could rename somebody's
+  // family table. Updates the live room too, so anyone sitting in it sees the
+  // new name without reloading.
+  socket.on('rename_group', async ({ code, groupName, firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'create_group')) throw new Error('Too many changes too quickly. Please wait a moment.');
       if (!db) throw new Error('Groups are unavailable right now.');
-      const clean = (slug || '').trim().toLowerCase();
+      const clean = (code || '').trim().toUpperCase();
       const newName = (groupName || '').trim().slice(0, GROUP_NAME_MAX);
       if (newName.length < 2) throw new Error('Give your group a name (at least 2 characters).');
       const group = await readGroup(clean);
@@ -1782,31 +2100,33 @@ io.on('connection', (socket) => {
       await db.collection('groups').doc(clean).set({ name: newName }, { merge: true });
       const room = rooms.get(clean);
       if (room) { room.groupName = newName; broadcastRoom(room); }
+      await broadcastGroup(clean);
       ack && ack({ ok: true, name: newName });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
   });
 
-  // Delete a group and its leaderboard for everyone. Admin only, and
-  // deliberately does NOT tear down a live room -- anyone mid-game keeps
-  // playing to the end; the record just stops existing afterwards.
-  socket.on('delete_group', async ({ slug, firebaseIdToken }, ack) => {
+  // Delete a group and its marathon for everyone. Creator only, and
+  // deliberately does NOT tear down a live room -- anyone mid-game plays to
+  // the end; the record just stops existing afterwards.
+  socket.on('delete_group', async ({ code, firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'create_group')) throw new Error('Too many changes too quickly. Please wait a moment.');
       if (!db) throw new Error('Groups are unavailable right now.');
-      const clean = (slug || '').trim().toLowerCase();
+      const clean = (code || '').trim().toUpperCase();
       const group = await readGroup(clean);
       if (!group) throw new Error('Group not found.');
       const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
       if (!verifiedUid || group.adminUid !== verifiedUid) throw new Error('Only the person who created this group can delete it.');
 
       await db.collection('groups').doc(clean).delete();
+      clearTable(clean);
       const room = rooms.get(clean);
-      // Unbind the live room so a finishing game can't resurrect standings
-      // for a group that no longer exists (updateGroupStandings no-ops
-      // without a slug).
-      if (room) { room.groupSlug = null; room.groupName = null; broadcastRoom(room); }
+      // Unbind the live room so a finishing game can't resurrect a marathon
+      // for a group that no longer exists (recordGroupGame no-ops with no
+      // groupCode).
+      if (room) { room.groupCode = null; room.groupName = null; broadcastRoom(room); }
       console.log(`[Groups] Deleted ${clean}`);
       ack && ack({ ok: true });
     } catch (e) {
@@ -1814,23 +2134,80 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Read-only lookup used by the invite card (to show which group you've
-  // been invited to before you commit a name) and by the lobby leaderboard.
-  socket.on('get_group', async ({ slug, firebaseIdToken }, ack) => {
+  // Full group state for the group screen. Also used by the join-by-code path
+  // to show what you're about to walk into.
+  socket.on('get_group', async ({ code, firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'get_group')) throw new Error('Too many requests too quickly. Please wait a moment.');
-      const clean = (slug || '').trim().toLowerCase();
+      const clean = (code || '').trim().toUpperCase();
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      const payload = await groupPayload(clean, verifiedUid);
+      if (!payload) throw new Error('Group not found.');
+      ack && ack({ ok: true, group: payload });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Tells the server which groups this client is looking at, so it can be
+  // counted as present and receive live updates. Sent on connect and whenever
+  // the remembered-groups list changes.
+  socket.on('watch_groups', async ({ codes, name, firebaseIdToken }, ack) => {
+    try {
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+      const list = Array.isArray(codes) ? codes.slice(0, 20) : [];
+      // Drop anything this socket was previously watching -- the client sends
+      // the complete list every time, so this is a replace, not an add.
+      const stale = removePresenceForSocket(socket.id);
+      for (const raw of list) {
+        const c = String(raw || '').trim().toUpperCase();
+        if (!looksLikeGroupCode(c)) continue;
+        socket.join(`g:${c}`);
+        if (verifiedUid) addPresence(c, verifiedUid, cleanName, socket.id);
+      }
+      const touched = new Set([...stale, ...list.map((c) => String(c || '').trim().toUpperCase())]);
+      for (const c of touched) if (looksLikeGroupCode(c)) await broadcastGroup(c);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // The bell: "I want to play". Seats you at the table, makes you host if
+  // you're first, and pings the group -- subject to the shared cooldown.
+  socket.on('ring_bell', async ({ code, name, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'ring_bell')) throw new Error('Too many taps too quickly. Please wait a moment.');
+      const clean = (code || '').trim().toUpperCase();
       const group = await readGroup(clean);
       if (!group) throw new Error('Group not found.');
-      // Resolved to a BOOLEAN here rather than sending adminUid back -- this
-      // file's standing rule is that a firebaseUid never crosses to the
-      // browser, not even your own.
-      let isAdmin = false;
-      if (firebaseIdToken && group.adminUid) {
-        const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
-        isAdmin = !!verifiedUid && verifiedUid === group.adminUid;
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      if (!verifiedUid) throw new Error('Could not identify you -- try again in a moment.');
+      const cleanName = (name || '').trim().slice(0, 20) || 'Player';
+
+      const { rang } = raiseHand(clean, verifiedUid, cleanName, (c) => { broadcastGroup(c); });
+      if (rang) {
+        // In-app ping for anyone with the group open. The push half (for
+        // people who DON'T have the app open) is the FCM work still to come;
+        // the mechanic doesn't change when it lands, it just reaches further.
+        io.to(`g:${clean}`).emit('group_bell', { code: clean, byName: cleanName });
       }
-      ack && ack({ ok: true, slug: clean, name: group.name || clean, isAdmin, standings: standingsToList(group.standings) });
+      await broadcastGroup(clean);
+      ack && ack({ ok: true, rang });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Leave the table without leaving the group.
+  socket.on('stand_down', async ({ code, firebaseIdToken }, ack) => {
+    try {
+      const clean = (code || '').trim().toUpperCase();
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      if (verifiedUid) standDown(clean, verifiedUid, (c) => { broadcastGroup(c); });
+      await broadcastGroup(clean);
+      ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
@@ -2306,7 +2683,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    rateBuckets.delete(socket.id); // this socket is gone -- no point keeping its rate-limit history around
+    rateBuckets.delete(socket.id);
+    // Drop this socket from every group it was watching, and tell the
+    // remaining watchers so somebody who closes the app stops showing as
+    // online. A member with a second device stays online -- presence is
+    // tracked per socket but collapsed per person.
+    for (const code of removePresenceForSocket(socket.id)) broadcastGroup(code); // this socket is gone -- no point keeping its rate-limit history around
     // Clean up matchmaking queue membership too -- someone who closes the
     // app while waiting for a match shouldn't count toward filling a table.
     const queuedSize = queueIndex.get(socket.id);
