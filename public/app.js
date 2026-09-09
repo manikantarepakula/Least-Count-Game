@@ -110,6 +110,14 @@
   // to that stranger's account. Resolves to null before sign-in has
   // finished, same as currentFirebaseUid() above -- the server treats that
   // the same as any other guest whose account isn't linked yet.
+  // Our own Firebase uid. Group payloads identify people by uid (never by
+  // playerId, which is per-room and changes every session), so the screen
+  // needs this to tell which row is us.
+  function myFirebaseUid() {
+    const user = window.LCAuth && window.LCAuth.getUser();
+    return user ? user.uid : null;
+  }
+
   async function currentFirebaseIdToken() {
     const user = window.LCAuth && window.LCAuth.getUser();
     if (!user) return null;
@@ -1327,7 +1335,7 @@
   // ====================================================================
   // Persistent groups (client side)
   // ====================================================================
-  // A group is a named, permanent table. Its slug and link never change,
+  // A group is a named, permanent table. Its code and link never change,
   // so one pinned WhatsApp message keeps working, and it carries a running
   // leaderboard across every session.
   //
@@ -1343,32 +1351,38 @@
   function readRememberedGroups() {
     try {
       const raw = JSON.parse(localStorage.getItem(GROUPS_STORAGE_KEY) || '[]');
-      return Array.isArray(raw) ? raw.filter((g) => g && g.slug) : [];
+      return Array.isArray(raw) ? raw.filter((g) => g && g.code) : [];
     } catch (e) { return []; }
   }
 
-  function rememberGroup(slug, name) {
-    if (!slug) return;
+  function rememberGroup(code, name) {
+    if (!code) return;
     try {
-      const list = readRememberedGroups().filter((g) => g.slug !== slug);
-      list.unshift({ slug, name: name || slug, lastOpenedAt: Date.now() });
+      const list = readRememberedGroups().filter((g) => g.code !== code);
+      list.unshift({ code, name: name || code, lastOpenedAt: Date.now() });
       localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list.slice(0, GROUPS_MAX_REMEMBERED)));
     } catch (e) { /* storage blocked -- the link still works, just no shortcut */ }
     renderGroupsBlock();
+    watchGroups();
   }
 
-  function groupInviteLinkFor(slug) {
+  function groupInviteLinkFor(code) {
     const url = new URL(window.location.href);
     url.search = '';
     url.hash = '';
-    url.searchParams.set('g', slug);
+    url.searchParams.set('g', code);
     return url.toString();
   }
 
-  function groupInviteTextFor(slug, name) {
+  // The CODE is given as well as the link, because typing a code keeps the
+  // whole journey inside the app. A tapped link opens the web version, which
+  // carries no ads at all -- so a player who joins that way is permanently
+  // worth nothing. The code is the reliable fix for that leak.
+  function groupInviteTextFor(code, name) {
     const who = (localStorage.getItem(NAME_STORAGE_KEY) || '').trim();
     const lead = who ? `${who} invited you` : 'You are invited';
-    return `${lead} to play Least Count with "${name}".\n${groupInviteLinkFor(slug)}`;
+    return `${lead} to play Least Count with "${name}".\n`
+      + `Open the app and enter code ${code}, or tap: ${groupInviteLinkFor(code)}`;
   }
 
   function renderGroupsBlock() {
@@ -1384,19 +1398,19 @@
       // Tapping the row PLAYS. Managing the group (share, rename, remove,
       // delete) lives behind the "..." -- creating and managing a group are
       // deliberately separate from sitting down at it.
+      // Tapping a group opens the GROUP, not a game lobby. That single
+      // change is why the first version felt dead -- tap, land alone in an
+      // empty lobby, leave. Management now lives inside the group behind the
+      // settings gear, so there's no menu on this row at all.
       li.innerHTML = `<span class="group-row-name">${escapeHtml(g.name)}</span>
-        <button class="group-row-menu" type="button" aria-label="Group options">⋯</button>`;
-      li.onclick = () => joinRoomByKey(g.slug);
-      li.querySelector('.group-row-menu').onclick = (e) => {
-        e.stopPropagation(); // don't also open the table
-        openGroupMenu(g.slug, g.name);
-      };
+        <span class="group-row-go">Open</span>`;
+      li.onclick = () => openGroupScreen(g.code, g.name);
       list.appendChild(li);
     });
   }
 
   // ---------------- group management menu ----------------
-  let groupMenuSlug = null;
+  let groupMenuCode = null;
   let groupMenuName = '';
 
   function setGroupMenuError(msg) {
@@ -1405,14 +1419,14 @@
   }
 
   function closeGroupMenu() {
-    groupMenuSlug = null;
+    groupMenuCode = null;
     document.getElementById('group-menu-overlay').classList.add('hidden');
     document.getElementById('group-rename-row').classList.add('hidden');
     setGroupMenuError('');
   }
 
-  async function openGroupMenu(slug, name) {
-    groupMenuSlug = slug;
+  async function openGroupMenu(code, name) {
+    groupMenuCode = code;
     groupMenuName = name;
     document.getElementById('group-menu-title').textContent = name;
     document.getElementById('group-rename-row').classList.add('hidden');
@@ -1425,13 +1439,13 @@
     document.getElementById('btn-group-delete').classList.add('hidden');
     document.getElementById('group-menu-overlay').classList.remove('hidden');
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('get_group', { slug, firebaseIdToken }, (res) => {
-      if (!res || !res.ok || groupMenuSlug !== slug) return;
-      groupMenuName = res.name;
-      document.getElementById('group-menu-title').textContent = res.name;
-      document.getElementById('input-group-rename').value = res.name;
-      document.getElementById('btn-group-rename').classList.toggle('hidden', !res.isAdmin);
-      document.getElementById('btn-group-delete').classList.toggle('hidden', !res.isAdmin);
+    socket.emit('get_group', { code, firebaseIdToken }, (res) => {
+      if (!res || !res.ok || !res.group || groupMenuCode !== code) return;
+      groupMenuName = res.group.name;
+      document.getElementById('group-menu-title').textContent = res.group.name;
+      document.getElementById('input-group-rename').value = res.group.name;
+      document.getElementById('btn-group-rename').classList.toggle('hidden', !res.group.isAdmin);
+      document.getElementById('btn-group-delete').classList.toggle('hidden', !res.group.isAdmin);
     });
   }
 
@@ -1441,18 +1455,18 @@
   };
 
   document.getElementById('btn-group-share').onclick = () => {
-    if (!groupMenuSlug) return;
+    if (!groupMenuCode) return;
     logAnalytics('invite_shared_whatsapp');
-    openWhatsAppShare(groupInviteTextFor(groupMenuSlug, groupMenuName));
+    openWhatsAppShare(groupInviteTextFor(groupMenuCode, groupMenuName));
   };
 
   document.getElementById('btn-group-copy').onclick = async () => {
-    if (!groupMenuSlug) return;
+    if (!groupMenuCode) return;
     try {
-      await navigator.clipboard.writeText(groupInviteTextFor(groupMenuSlug, groupMenuName));
+      await navigator.clipboard.writeText(groupInviteTextFor(groupMenuCode, groupMenuName));
       setGroupMenuError('Invite link copied.');
     } catch (e) {
-      setGroupMenuError('Could not copy — link is ' + groupInviteLinkFor(groupMenuSlug));
+      setGroupMenuError('Could not copy — link is ' + groupInviteLinkFor(groupMenuCode));
     }
   };
 
@@ -1462,13 +1476,14 @@
   };
 
   document.getElementById('btn-group-rename-save').onclick = async () => {
-    const slug = groupMenuSlug;
+    const code = groupMenuCode;
     const newName = document.getElementById('input-group-rename').value.trim();
-    if (!slug || !newName) return setGroupMenuError('Enter a name.');
+    if (!code || !newName) return setGroupMenuError('Enter a name.');
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('rename_group', { slug, groupName: newName, firebaseIdToken }, (res) => {
+    socket.emit('rename_group', { code, groupName: newName, firebaseIdToken }, (res) => {
       if (!res || !res.ok) return setGroupMenuError((res && res.error) || 'Could not rename.');
-      rememberGroup(slug, res.name);
+      rememberGroup(code, res.name);
+      if (groupScreenCode === code) openGroupScreen(code, res.name);
       closeGroupMenu();
     });
   };
@@ -1477,13 +1492,14 @@
   // forgetting the shortcut on this device. Nobody else is affected, and the
   // link still works if they change their mind.
   document.getElementById('btn-group-remove').onclick = () => {
-    if (!groupMenuSlug) return;
+    if (!groupMenuCode) return;
     try {
-      const list = readRememberedGroups().filter((g) => g.slug !== groupMenuSlug);
+      const list = readRememberedGroups().filter((g) => g.code !== groupMenuCode);
       localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list));
     } catch (e) { /* storage blocked */ }
     renderGroupsBlock();
     closeGroupMenu();
+    showScreen('screen-landing');
   };
 
   // Destructive and irreversible for everyone in the group, so it asks
@@ -1503,21 +1519,22 @@
     }
     groupDeleteArmed = false;
     btn.textContent = 'Delete group for everyone';
-    const slug = groupMenuSlug;
+    const code = groupMenuCode;
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('delete_group', { slug, firebaseIdToken }, (res) => {
+    socket.emit('delete_group', { code, firebaseIdToken }, (res) => {
       if (!res || !res.ok) return setGroupMenuError((res && res.error) || 'Could not delete.');
       try {
-        const list = readRememberedGroups().filter((g) => g.slug !== slug);
+        const list = readRememberedGroups().filter((g) => g.code !== code);
         localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list));
       } catch (e) {}
       renderGroupsBlock();
       closeGroupMenu();
+      showScreen('screen-landing');
     });
   };
 
   // Single entry point for joining ANY table -- a 4-letter ad-hoc code, a
-  // permanent group slug, from a typed code, a saved group row, or an invite
+  // permanent group code, from a typed code, a saved group row, or an invite
   // link. Previously this logic lived inline in the Join button's handler,
   // which meant every new way of arriving at a room needed its own copy of
   // the pending-approval and session-saving branches.
@@ -1553,6 +1570,292 @@
       showScreen('screen-lobby');
     });
   }
+
+  // ====================================================================
+  // Group screen
+  // ====================================================================
+  // Tapping a group opens THIS rather than a game lobby. The first version
+  // dropped you straight into an empty room, which is why groups felt dead:
+  // you tapped, sat alone, and left. This screen says something whether or
+  // not anyone is playing.
+  // ====================================================================
+  let groupScreenCode = null;
+  let groupScreenData = null;
+  let groupBoardTab = 'month';
+  let groupBellTimer = null;
+
+  // Tells the server which groups this client is watching, so it can count us
+  // as present and push live updates. Sent on connect and whenever the
+  // remembered list changes -- always the COMPLETE list, since the server
+  // treats it as a replace.
+  async function watchGroups() {
+    const codes = readRememberedGroups().map((g) => g.code);
+    if (groupScreenCode && !codes.includes(groupScreenCode)) codes.push(groupScreenCode);
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('watch_groups', {
+      codes,
+      name: localStorage.getItem(NAME_STORAGE_KEY) || '',
+      firebaseIdToken,
+    });
+  }
+
+  async function openGroupScreen(code, fallbackName) {
+    if (!code) return;
+    groupScreenCode = code;
+    groupBoardTab = 'month';
+    document.getElementById('group-title').textContent = fallbackName || 'Group';
+    document.getElementById('group-code-text').textContent = code;
+    showScreen('screen-group');
+    watchGroups();
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('get_group', { code, firebaseIdToken }, (res) => {
+      if (!res || !res.ok) {
+        setLandingError((res && res.error) || 'Could not open that group.');
+        showScreen('screen-landing');
+        return;
+      }
+      if (groupScreenCode !== code) return; // moved on while we waited
+      renderGroupScreen(res.group);
+    });
+  }
+
+  const GROUP_STATUS_LABEL = {
+    playing: 'playing',
+    table: 'at the table',
+    online: 'online',
+    away: '',
+  };
+
+  function relativeDay(iso) {
+    if (!iso) return '';
+    const days = Math.floor((Date.now() - Date.parse(iso)) / 86400000);
+    if (days <= 0) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 7) return days + ' days ago';
+    return Math.floor(days / 7) + 'w ago';
+  }
+
+  function renderGroupScreen(group) {
+    if (!group) return;
+    groupScreenData = group;
+    rememberGroup(group.code, group.name);
+    document.getElementById('group-title').textContent = group.name;
+    document.getElementById('group-code-text').textContent = group.code;
+
+    // ---- live strip ----
+    const liveText = document.getElementById('group-live-text');
+    const liveNames = document.getElementById('group-live-names');
+    const bellBtn = document.getElementById('btn-group-bell');
+    const bellLabel = document.getElementById('btn-group-bell-label');
+    const playBtn = document.getElementById('btn-group-play');
+    const standBtn = document.getElementById('btn-group-standdown');
+    const hint = document.getElementById('group-bell-hint');
+
+    const meAtTable = group.members.some((m) => m.uid === myFirebaseUid() && m.status === 'table');
+    const seated = group.atTable || [];
+
+    if (group.gameInProgress) {
+      liveText.textContent = 'A game is in progress';
+      liveNames.textContent = group.members.filter((m) => m.status === 'playing').map((m) => m.name).join(', ');
+      bellBtn.classList.add('hidden');
+      standBtn.classList.add('hidden');
+      playBtn.classList.remove('hidden');
+      playBtn.textContent = 'Join the game';
+      hint.textContent = 'You’ll be dealt in at the start of the next round.';
+    } else if (seated.length) {
+      liveText.textContent = seated.length === 1
+        ? `${seated[0].name} is at the table`
+        : `${seated.length} at the table`;
+      liveNames.textContent = seated.map((s) => s.name).join(', ');
+      bellBtn.classList.toggle('hidden', meAtTable);
+      standBtn.classList.toggle('hidden', !meAtTable);
+      // Start Game belongs to whoever raised their hand first -- they called
+      // the game. Everyone else waits for them, or just joins the table.
+      const iAmHost = group.hostUid && group.hostUid === myFirebaseUid();
+      playBtn.classList.toggle('hidden', !(iAmHost && seated.length >= 2));
+      playBtn.textContent = 'Start Game';
+      hint.textContent = seated.length >= 2
+        ? (iAmHost ? 'You called it — start when you’re ready.' : 'Waiting for the host to start.')
+        : 'Waiting for someone else to join.';
+    } else {
+      liveText.textContent = 'No one at the table';
+      liveNames.textContent = '';
+      bellBtn.classList.remove('hidden');
+      standBtn.classList.add('hidden');
+      playBtn.classList.add('hidden');
+      hint.textContent = '';
+    }
+
+    // The bell's cooldown is shown rather than letting someone tap it and
+    // have nothing happen.
+    const cooldownLeft = Math.max(0, (group.bellReadyAt || 0) - Date.now());
+    if (!meAtTable && cooldownLeft > 0) {
+      bellLabel.textContent = `I want to play (quiet for ${Math.ceil(cooldownLeft / 60000)}m)`;
+    } else {
+      bellLabel.textContent = 'I want to play';
+    }
+
+    // ---- members ----
+    const list = document.getElementById('group-members');
+    document.getElementById('group-member-count').textContent = group.members.length
+      ? '· ' + group.members.length : '';
+    list.innerHTML = '';
+    group.members.forEach((m) => {
+      const li = document.createElement('li');
+      li.className = 'group-member' + (m.status === 'away' ? ' away' : '');
+      const status = GROUP_STATUS_LABEL[m.status];
+      // "Played yesterday" carries the list when nobody is around. A column
+      // of grey offline dots would read as MORE dead, not less.
+      const meta = status || relativeDay(m.lastPlayedAt) || 'not played yet';
+      li.innerHTML =
+        `<span class="gm-dot ${m.status}"></span>` +
+        `<span class="gm-name">${escapeHtml(m.name)}${m.isHost ? ' <span class="gm-host">HOST</span>' : ''}</span>` +
+        `<span class="gm-meta">${escapeHtml(meta)}</span>`;
+      list.appendChild(li);
+    });
+
+    // ---- recent ----
+    const recent = document.getElementById('group-recent');
+    const recentEmpty = document.getElementById('group-recent-empty');
+    recent.innerHTML = '';
+    (group.recent || []).forEach((r) => {
+      const li = document.createElement('li');
+      li.className = 'group-recent-row';
+      li.innerHTML =
+        `<span class="gr-when">${escapeHtml(relativeDay(r.at))}</span>` +
+        `<span class="gr-who">${escapeHtml(r.winnerName || 'Nobody')} won</span>` +
+        `<span class="gr-n">${r.players} played</span>`;
+      recent.appendChild(li);
+    });
+    recentEmpty.classList.toggle('hidden', (group.recent || []).length > 0);
+
+    renderGroupBoard();
+  }
+
+  function renderGroupBoard() {
+    const g = groupScreenData;
+    if (!g) return;
+    const board = document.getElementById('group-board');
+    const empty = document.getElementById('group-board-empty');
+    board.innerHTML = '';
+    let rows = [];
+    if (groupBoardTab === 'month') rows = g.marathon.standings || [];
+    else if (groupBoardTab === 'today') rows = g.daily.standings || [];
+    else rows = (g.champions || []).slice().reverse();
+
+    if (groupBoardTab === 'champions') {
+      rows.forEach((c) => {
+        const li = document.createElement('li');
+        li.className = 'standings-row';
+        li.innerHTML =
+          `<span class="st-rank">👑</span>` +
+          `<span class="st-name">${escapeHtml(c.name)}</span>` +
+          `<span class="st-wins">${c.points}</span>` +
+          `<span class="st-meta">${escapeHtml(c.month)}</span>`;
+        board.appendChild(li);
+      });
+    } else {
+      rows.forEach((s, i) => {
+        const li = document.createElement('li');
+        li.className = 'standings-row';
+        li.innerHTML =
+          `<span class="st-rank">${i + 1}</span>` +
+          `<span class="st-name">${escapeHtml(s.name)}</span>` +
+          `<span class="st-wins">${s.points}</span>`;
+        board.appendChild(li);
+      });
+    }
+    empty.classList.toggle('hidden', rows.length > 0);
+    empty.textContent = groupBoardTab === 'champions'
+      ? 'No months finished yet.'
+      : 'No games yet.';
+  }
+
+  document.getElementById('btn-group-back').onclick = () => {
+    groupScreenCode = null;
+    groupScreenData = null;
+    showScreen('screen-landing');
+  };
+
+  document.getElementById('btn-group-settings').onclick = () => {
+    if (groupScreenData) openGroupMenu(groupScreenData.code, groupScreenData.name);
+  };
+
+  document.getElementById('btn-group-invite').onclick = () => {
+    if (!groupScreenData) return;
+    logAnalytics('invite_shared_whatsapp');
+    openWhatsAppShare(groupInviteTextFor(groupScreenData.code, groupScreenData.name));
+  };
+
+  document.getElementById('btn-group-bell').onclick = async () => {
+    if (!groupScreenCode) return;
+    if (!getPlayerName()) return setLandingError('Enter your name');
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('ring_bell', {
+      code: groupScreenCode,
+      name: getPlayerName(),
+      firebaseIdToken,
+    }, (res) => {
+      if (!res || !res.ok) setLandingError((res && res.error) || 'Could not do that.');
+      else logAnalytics('group_bell_rung');
+    });
+  };
+
+  document.getElementById('btn-group-standdown').onclick = async () => {
+    if (!groupScreenCode) return;
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('stand_down', { code: groupScreenCode, firebaseIdToken });
+  };
+
+  // Start Game and Join the game are the same action -- join the group's
+  // room. The server spins one up if there isn't one, and seats you at the
+  // next round if a game is already running.
+  document.getElementById('btn-group-play').onclick = () => {
+    if (groupScreenCode) joinRoomByKey(groupScreenCode);
+  };
+
+  (function wireGroupBoardTabs() {
+    const tabs = document.getElementById('group-board-tabs');
+    if (!tabs) return;
+    tabs.querySelectorAll('.seg').forEach((seg) => {
+      seg.onclick = () => {
+        groupBoardTab = seg.dataset.board;
+        tabs.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s === seg));
+        renderGroupBoard();
+      };
+    });
+  })();
+
+  // Live updates: presence changes, someone raising a hand, a game starting.
+  socket.on('group_update', ({ group }) => {
+    if (!group) return;
+    // Keep the list row's name fresh even for groups we're not looking at.
+    rememberGroup(group.code, group.name);
+    if (group.code === groupScreenCode) {
+      // isAdmin only comes back on our own get_group (broadcasts have no
+      // viewer), so preserve what we already learned rather than losing the
+      // settings buttons on every push.
+      if (groupScreenData && groupScreenData.isAdmin) group.isAdmin = true;
+      renderGroupScreen(group);
+    }
+  });
+
+  // Somebody rang the bell. Until FCM lands this only reaches people who
+  // already have the app open -- the mechanic is the same either way, push
+  // just makes it reach further.
+  socket.on('group_bell', ({ code, byName }) => {
+    if (groupBellTimer) clearTimeout(groupBellTimer);
+    const el = document.getElementById('landing-toast-error');
+    if (!el) return;
+    el.textContent = `${byName} wants to play`;
+    el.classList.remove('hidden');
+    groupBellTimer = setTimeout(() => el.classList.add('hidden'), 6000);
+    if (code && code !== groupScreenCode) {
+      el.onclick = () => openGroupScreen(code);
+    }
+  });
+
+  socket.on('connect', () => { watchGroups(); });
 
   // --------------------------------------------------------------------
   // Invite mode: what someone sees after tapping a shared link.
@@ -1592,27 +1895,27 @@
 
   (function handleInviteLink() {
     const params = new URLSearchParams(window.location.search);
-    const groupSlug = (params.get('g') || '').trim().toLowerCase();
-    // Ad-hoc room codes are case-insensitive; group slugs are not, which is
-    // exactly why they travel in different params.
+    const groupCode = (params.get('g') || '').trim().toUpperCase();
+    // Both kinds of code are uppercase; ?g= vs ?room= only says which sort
+    // of table you were invited to.
     const roomFromLink = (params.get('room') || '').trim().toUpperCase();
 
-    if (groupSlug) {
-      enterInviteMode(groupSlug, 'You’ve been invited to play');
+    if (groupCode) {
+      enterInviteMode(groupCode, 'You’ve been invited to play');
       // Ask the server what this group is actually called, so the card says
-      // "Sharma Family" rather than the raw slug. Purely cosmetic -- if the
+      // "Sharma Family" rather than the raw code. Purely cosmetic -- if the
       // lookup fails the card still works and they can still join.
-      socket.emit('get_group', { slug: groupSlug }, (res) => {
-        if (!res || !res.ok) return;
-        document.getElementById('invite-headline').textContent = `You’ve been invited to ${res.name}`;
-        document.getElementById('invite-roomcode').textContent = res.name;
+      socket.emit('get_group', { code: groupCode }, (res) => {
+        if (!res || !res.ok || !res.group) return;
+        document.getElementById('invite-headline').textContent = `You’ve been invited to ${res.group.name}`;
+        document.getElementById('invite-roomcode').textContent = res.group.name;
       });
     } else if (roomFromLink) {
       document.getElementById('input-roomcode').value = roomFromLink;
       enterInviteMode(roomFromLink, 'You’ve been invited to a game');
     }
 
-    if (groupSlug || roomFromLink) {
+    if (groupCode || roomFromLink) {
       // Strip the param so it can't linger in the address bar or get shared
       // onward by accident (e.g. a browser "share this page").
       const url = new URL(window.location.href);
@@ -1641,17 +1944,17 @@
     CapApp.addListener('appUrlOpen', (event) => {
       try {
         const url = new URL(event.url);
-        const slug = (url.searchParams.get('g') || '').trim().toLowerCase();
+        const gcode = (url.searchParams.get('g') || '').trim().toUpperCase();
         const room = (url.searchParams.get('room') || '').trim().toUpperCase();
-        if (!slug && !room) return;
+        if (!gcode && !room) return;
         // Already sitting in that exact table? Don't yank them out of it.
-        if (myRoomCode && (myRoomCode === slug || myRoomCode === room)) return;
-        if (slug) {
-          enterInviteMode(slug, 'You’ve been invited to play');
-          socket.emit('get_group', { slug }, (res) => {
-            if (!res || !res.ok) return;
-            document.getElementById('invite-headline').textContent = `You’ve been invited to ${res.name}`;
-            document.getElementById('invite-roomcode').textContent = res.name;
+        if (myRoomCode && (myRoomCode === gcode || myRoomCode === room)) return;
+        if (gcode) {
+          enterInviteMode(gcode, 'You’ve been invited to play');
+          socket.emit('get_group', { code: gcode }, (res) => {
+            if (!res || !res.ok || !res.group) return;
+            document.getElementById('invite-headline').textContent = `You’ve been invited to ${res.group.name}`;
+            document.getElementById('invite-roomcode').textContent = res.group.name;
           });
         } else {
           document.getElementById('input-roomcode').value = room;
@@ -1693,7 +1996,7 @@
       btn.disabled = false;
       if (!res || !res.ok) return setLandingError((res && res.error) || 'Could not create the group.');
       nameInput.value = '';
-      rememberGroup(res.slug, res.name);
+      rememberGroup(res.code, res.name);
       logAnalytics('group_created');
       // Creating a group does NOT drop you into a game (Sept 2026, per
       // feedback). Making a group and playing at it are separate acts: the
@@ -1701,7 +2004,10 @@
       // actually around. The menu opens straight away so the obvious next
       // step -- sharing the link -- is one tap, without having sat down at
       // an empty table first.
-      openGroupMenu(res.slug, res.name);
+      // Creating a group does NOT drop you into a game -- making a group and
+      // playing at it are separate acts. You land on the group's own screen,
+      // where Invite is right there.
+      openGroupScreen(res.code, res.name);
     });
   };
 
@@ -1767,13 +2073,13 @@
   //                            and keep working for years.
   //   ?room=ABCD            -- a one-off room, good only for this session.
   // Separate params rather than one, because the room-code path uppercases
-  // its value (codes are case-insensitive) and that would mangle a slug.
+  // its value, and ?g= vs ?room= records which kind of table it was.
   function roomInviteLink() {
     const url = new URL(window.location.href);
     url.search = '';
     url.hash = '';
-    const slug = latestRoom && latestRoom.groupSlug;
-    if (slug) url.searchParams.set('g', slug);
+    const gcode = latestRoom && latestRoom.groupCode;
+    if (gcode) url.searchParams.set('g', gcode);
     else url.searchParams.set('room', myRoomCode || '');
     return url.toString();
   }
@@ -2177,16 +2483,13 @@
       : `Ready with ${room.players.length} players — anyone can start`;
 
     // ---- persistent group extras ----
-    const isGroup = !!room.groupSlug;
+    const isGroup = !!room.groupCode;
     const groupHeader = document.getElementById('lobby-group-header');
     const groupNameEl = document.getElementById('lobby-group-name');
     if (groupNameEl) groupNameEl.textContent = room.groupName || '';
     if (groupHeader) groupHeader.classList.toggle('hidden', !isGroup);
-    // A group's slug is long and never typed by hand -- the room-code box is
-    // 4 characters and uppercases what you type, so copying a slug into it
-    // could never work. For a group the whole code row is hidden and the
-    // invite link (the WhatsApp button below) is the only way in, which is
-    // also the only way anyone actually uses.
+    // A group has its own screen carrying the code and the invite, so the
+    // lobby's ad-hoc room-code row is redundant while playing in one.
     const codeLabel = document.getElementById('lobby-roomcode-label');
     const codeRow = document.getElementById('lobby-roomcode-row');
     const codeHint = document.getElementById('lobby-code-hint');
@@ -2194,19 +2497,21 @@
     if (codeRow) codeRow.classList.toggle('hidden', isGroup);
     if (codeHint) codeHint.classList.toggle('hidden', isGroup);
 
-    if (isGroup) rememberGroup(room.groupSlug, room.groupName);
+    if (isGroup) rememberGroup(room.groupCode, room.groupName);
   }
 
   // Running leaderboard for a permanent group, shown in an overlay from the
   // trophy icon rather than inline -- as a block in the page flow it pushed
   // Start Game and Leave Table below the fold on a phone.
-  function loadGroupStandings(slug) {
+  function loadGroupStandings(code) {
     const list = document.getElementById('lobby-standings');
     const empty = document.getElementById('lobby-standings-empty');
     if (!list) return;
-    socket.emit('get_group', { slug }, (res) => {
-      if (!res || !res.ok) return;
-      const rows = res.standings || [];
+    socket.emit('get_group', { code }, (res) => {
+      if (!res || !res.ok || !res.group) return;
+      // The lobby's trophy shows THIS MONTH's marathon -- the same table the
+      // group screen leads with, so the two never disagree.
+      const rows = res.group.marathon.standings || [];
       list.innerHTML = '';
       empty.classList.toggle('hidden', rows.length > 0);
       rows.forEach((s, i) => {
@@ -2217,16 +2522,15 @@
         li.innerHTML =
           `<span class="st-rank">${i + 1}</span>` +
           `<span class="st-name">${escapeHtml(s.name)}</span>` +
-          `<span class="st-wins">${s.wins}W</span>` +
-          `<span class="st-meta">${s.games} games · avg ${s.avgScore}</span>`;
+          `<span class="st-wins">${s.points}</span>`;
         list.appendChild(li);
       });
     });
   }
 
   document.getElementById('btn-group-leaderboard').onclick = () => {
-    if (!latestRoom || !latestRoom.groupSlug) return;
-    loadGroupStandings(latestRoom.groupSlug);
+    if (!latestRoom || !latestRoom.groupCode) return;
+    loadGroupStandings(latestRoom.groupCode);
     document.getElementById('overlay-standings').classList.remove('hidden');
   };
   document.getElementById('btn-close-standings').onclick = () => {
