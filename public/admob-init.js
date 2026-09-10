@@ -196,6 +196,31 @@
     addDiagListener('bannerAdOpened', () => console.log('[AdMob] banner opened'));
     addDiagListener('bannerAdClosed', () => console.log('[AdMob] banner closed'));
     addDiagListener('bannerAdImpression', () => console.log('[AdMob] banner impression recorded'));
+
+    // ---- Interstitial ----
+    // There were NONE of these until now, which is why "only one ad per game"
+    // could not be diagnosed from a device log: the format earning ~8x per
+    // impression what the banner does was the one format we were blind on.
+    // Same defensive wrapper as above -- a wrong event name must cost only
+    // the log line, never the ad.
+    addDiagListener('interstitialAdLoaded', () => {
+      console.log('[AdMob] INTERSTITIAL LOADED -- one is in hand, ready to show.');
+    });
+    addDiagListener('interstitialAdFailedToLoad', (err) => {
+      console.warn('[AdMob] INTERSTITIAL FAILED TO LOAD:', JSON.stringify(err));
+      console.warn('[AdMob]   code 3 = NO_FILL, 1 = INVALID_REQUEST (our unit ID),' +
+        ' 2 = NETWORK_ERROR. Same codes as the banner.');
+    });
+    addDiagListener('interstitialAdShowed', () => console.log('[AdMob] interstitial showed'));
+    addDiagListener('interstitialAdFailedToShow', (err) => {
+      console.warn('[AdMob] interstitial failed to show:', JSON.stringify(err));
+      onInterstitialFinished('failed to show');
+    });
+    // The one listener that is load-bearing rather than diagnostic -- it's
+    // what lets the next ad start loading the moment this one closes instead
+    // of waiting out the safety timer. onInterstitialFinished() is written to
+    // be safe if this never fires at all.
+    addDiagListener('interstitialAdDismissed', () => onInterstitialFinished('dismissed'));
   }
 
   function ensureInit() {
@@ -372,14 +397,80 @@
   // and show() just presents whatever is already in hand. If nothing is
   // ready, show() gives up immediately rather than making the player wait.
   // ------------------------------------------------------------------------
-  const MIN_MS_BETWEEN_INTERSTITIALS = 3 * 60 * 1000; // ~1 ad per 3 minutes, max
+  // ------------------------------------------------------------------------
+  // Frequency floor. THIS WAS 3 MINUTES AND IT WAS EATING SCHEDULED ADS.
+  //
+  // The round ad is scheduled by the server every 4th round. A 3-minute floor
+  // on top of that only lets those ads through if 4 rounds actually take
+  // longer than 3 minutes -- i.e. rounds longer than 45 seconds. Real rounds
+  // here run around 40s, so the ad at round 9 was silently dropped and the
+  // player got one ad per game instead of three.
+  //
+  // The tell was that the SAME code worked on an every-5th-round schedule and
+  // stopped working on every-4th: 5 rounds only needs 36s/round to clear a
+  // 3-minute floor, 4 rounds needs 45s, and the real round length sits
+  // between the two. Making the ads MORE frequent made fewer of them appear.
+  //
+  //   ads per 13-round game, averaged over 25-90s round lengths:
+  //     180s floor -> 2.56     90s floor -> 3.11     60s floor -> 3.44
+  //
+  // The every-4th-round schedule IS the frequency control; this floor's only
+  // remaining job is stopping two ads landing on top of each other -- most
+  // obviously a round ad followed by the player leaving moments later. 60
+  // seconds does that and nothing more. Raise it if ads start to feel heavy,
+  // but keep it well under (4 x shortest realistic round) or it will start
+  // swallowing scheduled ads again.
+  // ------------------------------------------------------------------------
+  const MIN_MS_BETWEEN_INTERSTITIALS = 60 * 1000;
+  // How long to wait before giving up on a load that never came back. Without
+  // this the "am I already loading?" flag can latch forever (see below).
+  const INTERSTITIAL_LOAD_TIMEOUT_MS = 30 * 1000;
+  // Backstop for clearing interstitialOnScreen if the dismiss event never
+  // arrives. Deliberately longer than any interstitial a user might sit
+  // through, and far shorter than the gap between two scheduled round ads.
+  const INTERSTITIAL_ONSCREEN_MAX_MS = 45 * 1000;
+
   let interstitialReady = false;
-  let interstitialLoading = false;
   let lastInterstitialAt = 0;
+  // Timestamp, not a boolean, ON PURPOSE. As a boolean this was the same
+  // latch that has broken every ad in this app at least once: if the native
+  // load promise never settles, `finally` never runs, the flag stays true,
+  // and prepareInterstitial() early-returns for the rest of the session --
+  // no ads again until an app restart. A timestamp cannot latch, because it
+  // expires on its own.
+  let interstitialLoadingSince = 0;
+  // Is a full-screen ad on screen right now? showInterstitial() resolves when
+  // the ad is PRESENTED, not when it's dismissed -- the same trap documented
+  // for showBanner() above -- so without this we were asking the plugin to
+  // load the next interstitial while the current one was still displayed.
+  let interstitialOnScreen = false;
+  let interstitialReloadTimer = null;
+
+  function interstitialLoading() {
+    if (!interstitialLoadingSince) return false;
+    return (Date.now() - interstitialLoadingSince) < INTERSTITIAL_LOAD_TIMEOUT_MS;
+  }
+
+  // Called by the dismiss listener when it fires, and by a safety timer when
+  // it doesn't. Both paths are needed: the listener makes the reload prompt,
+  // and the timer means a wrong/unsupported event name costs a few seconds
+  // rather than every interstitial for the rest of the session. The banner's
+  // size listener was a guessed event name that took down every banner in the
+  // app -- correctness must not depend on getting this string right.
+  function onInterstitialFinished(why) {
+    if (interstitialReloadTimer) { clearTimeout(interstitialReloadTimer); interstitialReloadTimer = null; }
+    if (!interstitialOnScreen) return;
+    interstitialOnScreen = false;
+    console.log('[AdMob] interstitial finished (' + why + ') -- loading the next one');
+    prepareInterstitial();
+  }
 
   async function prepareInterstitial() {
-    if (interstitialReady || interstitialLoading) return;
-    interstitialLoading = true;
+    if (interstitialReady || interstitialLoading()) return;
+    // Never request while one is on screen -- the plugin holds a single
+    // interstitial instance, exactly like the single banner slot.
+    if (interstitialOnScreen) return;
+    interstitialLoadingSince = Date.now();
     try {
       await ensureInit();
       await AdMob.prepareInterstitial({ adId: INTERSTITIAL_AD_ID });
@@ -388,37 +479,53 @@
     } catch (e) {
       // Most often a no-fill, same as the banner -- nothing to do but carry
       // on without one. Deliberately not retried in a loop; the next
-      // prepare() call comes from the next natural trigger.
+      // prepare() call comes from the next natural trigger (showScreen fires
+      // one on every game_state push).
       interstitialReady = false;
       console.warn('[AdMob] prepareInterstitial failed:', e && e.message);
     } finally {
-      interstitialLoading = false;
+      interstitialLoadingSince = 0;
     }
   }
 
   async function showInterstitial() {
     if (!interstitialReady) {
       // Nothing loaded -- leave silently and start loading one for next time.
+      console.log('[AdMob] interstitial skipped (none loaded yet)');
       prepareInterstitial();
       return false;
     }
     if (Date.now() - lastInterstitialAt < MIN_MS_BETWEEN_INTERSTITIALS) {
-      console.log('[AdMob] interstitial skipped (frequency cap)');
+      console.log('[AdMob] interstitial skipped (frequency floor, '
+        + Math.round((MIN_MS_BETWEEN_INTERSTITIALS - (Date.now() - lastInterstitialAt)) / 1000)
+        + 's to go)');
       return false;
     }
     try {
+      interstitialOnScreen = true;
       await AdMob.showInterstitial();
       lastInterstitialAt = Date.now();
       console.log('[AdMob] interstitial shown');
       return true;
     } catch (e) {
+      // It never made it on screen, so don't sit in the on-screen state.
+      interstitialOnScreen = false;
       console.warn('[AdMob] showInterstitial failed:', e && e.message);
       return false;
     } finally {
       // A given interstitial is single-use -- once shown (or once it failed)
-      // the loaded ad is spent, so queue the next one up for later.
+      // the loaded ad is spent. The RELOAD, though, deliberately does not
+      // happen here: this block runs while the ad is still on screen.
       interstitialReady = false;
-      prepareInterstitial();
+      if (interstitialOnScreen) {
+        if (interstitialReloadTimer) clearTimeout(interstitialReloadTimer);
+        interstitialReloadTimer = setTimeout(
+          () => onInterstitialFinished('safety timer'),
+          INTERSTITIAL_ONSCREEN_MAX_MS
+        );
+      } else {
+        prepareInterstitial();
+      }
       // THE landing-page-banner bug: showing a full-screen ad makes the
       // plugin hide the banner ITSELF (device logs show showInterstitial
       // immediately followed by hideBanner, which nothing in this file
