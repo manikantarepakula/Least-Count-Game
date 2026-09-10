@@ -275,9 +275,7 @@
     </div>
     <h1 id="group-title" class="landing-wordmark landing-wordmark-sm">Group</h1>
     <div class="landing-topbar-right">
-      <button id="btn-group-settings" class="icon-btn" type="button" aria-label="Group settings" title="Group settings">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
-      </button>
+      <button id="btn-group-settings" class="icon-btn" type="button" aria-label="More options" title="More options"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
     </div>
   </div>
 
@@ -718,23 +716,54 @@
      screen. Deliberately separate from playing: creating, renaming and
      deleting a group are things you do to the group, not things you do at
      the table. Rename/Delete are shown only to the group's creator. -->
-<div id="group-menu-overlay" class="overlay hidden">
-  <div class="card-panel">
-    <h2 id="group-menu-title">Group</h2>
-    <button id="btn-group-share" class="primary" type="button">Share invite on WhatsApp</button>
-    <button id="btn-group-copy" class="secondary" type="button">Copy invite link</button>
-    <button id="btn-group-rename" class="secondary hidden" type="button">Rename group</button>
-    <!-- Inline rather than a browser prompt() -- prompt support inside an
-         Android WebView is inconsistent, and a native dialog would look
-         nothing like the rest of the app. -->
-    <div id="group-rename-row" class="mode-block-join-row hidden">
-      <input id="input-group-rename" type="text" maxlength="30" placeholder="New name" />
-      <button id="btn-group-rename-save" class="secondary" type="button">Save</button>
-    </div>
-    <button id="btn-group-remove" class="secondary" type="button">Remove from my list</button>
-    <button id="btn-group-delete" class="secondary hidden" type="button">Delete group for everyone</button>
+<!-- ==================================================================
+     Group overflow menu -- WhatsApp-style (Sept 2026)
+
+     A plain list dropping from the three dots at top right, not a centred
+     card of chunky full-width buttons. Options were right, the presentation
+     wasn't.
+
+     POSITIONING, and why it's `fixed` rather than anchored to the button:
+     this project already tried anchoring a dropdown to a topbar control once
+     (the profile menu) and went through several rounds of position/z-index/
+     overflow bugs before giving up and using a centred modal -- see the
+     comment on #profile-menu-panel. Pinning to the VIEWPORT instead gets the
+     same visual result with no anchoring maths to get wrong and no parent
+     overflow to escape: the topbar is always in the same place, so top-right
+     is always top-right.
+     ================================================================== -->
+<div id="group-menu-backdrop" class="menu-backdrop hidden"></div>
+<div id="group-menu" class="menu-sheet hidden" role="menu">
+  <button class="menu-row" id="btn-group-share" type="button" role="menuitem">Invite to group</button>
+  <button class="menu-row" id="btn-group-copy" type="button" role="menuitem">Copy invite link</button>
+  <button class="menu-row hidden" id="btn-group-rename" type="button" role="menuitem">Rename group</button>
+  <button class="menu-row" id="btn-group-remove" type="button" role="menuitem">Remove from my list</button>
+  <button class="menu-row danger hidden" id="btn-group-delete" type="button" role="menuitem">Delete group</button>
+</div>
+
+<!-- Small centred dialogs for the two actions that need a second step.
+     WhatsApp does the same: the overflow list itself never contains inputs
+     or confirmations, it just launches them. -->
+<div id="group-rename-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel">
+    <h2>Rename group</h2>
+    <input id="input-group-rename" type="text" maxlength="30" placeholder="New name" />
     <p id="group-menu-error" class="error"></p>
-    <button id="btn-group-menu-close" class="secondary" type="button">Close</button>
+    <div class="dialog-actions">
+      <button id="btn-group-rename-cancel" class="secondary" type="button">Cancel</button>
+      <button id="btn-group-rename-save" class="primary" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="group-delete-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel">
+    <h2>Delete group?</h2>
+    <p class="hint" id="group-delete-text">This removes the group and its marathon for everyone. It can't be undone.</p>
+    <div class="dialog-actions">
+      <button id="btn-group-delete-cancel" class="secondary" type="button">Cancel</button>
+      <button id="btn-group-delete-confirm" class="primary" type="button">Delete</button>
+    </div>
   </div>
 </div>
 
