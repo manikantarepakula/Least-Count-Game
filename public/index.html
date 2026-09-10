@@ -174,16 +174,26 @@
       </div>
 
       <div class="mode-block">
+        <h3>🔑 Join with a code</h3>
+        <!-- Its OWN section, not a row tucked under "Quick Room" (Sept 2026).
+             It accepted a group code before, but sat under a heading that
+             said "one-off game, expires with the session" -- so nobody would
+             ever have thought to type a permanent group code into it. This
+             is the entry point for anyone who's been given anything, so it
+             has to say so plainly. -->
+        <p class="mode-block-sub">Someone sent you a code? Enter it here</p>
+        <div class="mode-block-join-row">
+          <input id="input-roomcode" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
+          <button id="btn-join" class="primary">Join</button>
+        </div>
+        <p class="hint">4 letters for a one-off room, 5 for a group.</p>
+      </div>
+
+      <div class="mode-block">
         <h3>👥 Quick Room</h3>
         <p class="mode-block-sub">One-off game, code expires with the session</p>
-        <div class="mode-block-join-row">
+        <div class="row">
           <button id="btn-create" class="secondary">Create Room</button>
-          <!-- Takes EITHER kind of code: 4 letters for a one-off room, 5 for a
-               permanent group. Whoever is typing doesn't know or care which
-               they were given, so one box accepts both and the server works
-               it out from the length. -->
-          <input id="input-roomcode" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
-          <button id="btn-join" class="secondary">Join</button>
         </div>
       </div>
 
