@@ -2060,9 +2060,27 @@
   // Thin wrapper now -- the actual join lives in joinRoomByKey() above, so
   // typing a code, tapping a saved group and following an invite link all
   // go through exactly the same path.
+  // Routes by code length: a 4-letter ad-hoc code drops you straight into
+  // that room, but a 5-letter GROUP code opens the group's own screen rather
+  // than seating you at a table nobody else is at. Joining a group and
+  // sitting down to play are separate acts -- typing a code shouldn't skip
+  // the first one.
   document.getElementById('btn-join').onclick = () => {
-    joinRoomByKey(document.getElementById('input-roomcode').value.trim().toUpperCase());
+    const code = document.getElementById('input-roomcode').value.trim().toUpperCase();
+    if (!code) return setLandingError('Enter a code');
+    if (code.length === 5) {
+      document.getElementById('input-roomcode').value = '';
+      openGroupScreen(code);
+      return;
+    }
+    joinRoomByKey(code);
   };
+  // Enter key submits -- on a phone the keyboard's Go key is the natural way
+  // to finish typing a code, and reaching for the button instead is friction
+  // on the one screen a brand-new player has to get through.
+  document.getElementById('input-roomcode').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('btn-join').click();
+  });
 
   // Copy just the code, or share a full join-link that pre-fills the room
   // code on the other end (see prefillRoomCodeFromLink above). Both give a
