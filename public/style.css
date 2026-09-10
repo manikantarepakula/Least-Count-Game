@@ -1890,14 +1890,21 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .gm-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 
-/* ---- invite row: the code is deliberately small ---- */
-.group-invite-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
-.group-invite-row button { flex-shrink: 0; }
-/* Small on purpose. The code only matters at the moment somebody joins;
-   after that nobody needs to see it again, so it must not compete with the
-   group's name for attention. */
-.group-code-inline { font-size: 11px; color: var(--text-muted); }
-.group-code-inline b { color: var(--text-light); letter-spacing: 0.12em; font-size: 13px; }
+/* ---- group code ----
+   Understated but legible. It only matters at the moment somebody joins, so
+   it must not compete with the group's name -- but the first attempt put it
+   beside a width:100% button, which squashed it to an unreadable sliver at
+   the right edge. Its own line, left-aligned, in a quiet chip. */
+.group-code-row {
+  display: flex; align-items: center; gap: 8px;
+  margin: 12px 0 10px;
+}
+.group-code-label { font-size: 11px; color: var(--text-muted); }
+.group-code-value {
+  font-size: 15px; letter-spacing: 0.18em; color: var(--text-light); font-weight: 700;
+  background: var(--jade-panel-alt); border: 1px solid var(--jade-border);
+  border-radius: var(--radius-sm); padding: 4px 10px;
+}
 .group-count { font-size: 12px; font-weight: 400; color: var(--text-muted); }
 
 /* ---- recent games ---- */
@@ -1909,3 +1916,7 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 .gr-when { color: var(--text-muted); font-size: 11px; min-width: 62px; }
 .gr-who { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gr-n { color: var(--text-muted); font-size: 11px; }
+
+/* Four tabs on a narrow phone: shrink the type and padding rather than let
+   them wrap onto two rows. */
+.segmented-4 .seg { padding: 8px 4px; font-size: 12px; letter-spacing: -0.01em; }
