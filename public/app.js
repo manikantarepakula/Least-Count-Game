@@ -1418,18 +1418,22 @@
     if (el) el.textContent = msg || '';
   }
 
+  // Closing only dismisses the dropdown -- it deliberately does NOT clear
+  // groupMenuCode, because Rename and Delete open their own dialogs from the
+  // menu and still need to know which group they're acting on.
   function closeGroupMenu() {
-    groupMenuCode = null;
-    document.getElementById('group-menu-overlay').classList.add('hidden');
-    document.getElementById('group-rename-row').classList.add('hidden');
+    document.getElementById('group-menu').classList.add('hidden');
+    document.getElementById('group-menu-backdrop').classList.add('hidden');
+  }
+  function closeGroupDialogs() {
+    document.getElementById('group-rename-dialog').classList.add('hidden');
+    document.getElementById('group-delete-dialog').classList.add('hidden');
     setGroupMenuError('');
   }
 
   async function openGroupMenu(code, name) {
     groupMenuCode = code;
     groupMenuName = name;
-    document.getElementById('group-menu-title').textContent = name;
-    document.getElementById('group-rename-row').classList.add('hidden');
     document.getElementById('input-group-rename').value = name;
     setGroupMenuError('');
     // Rename/Delete are admin-only. Hidden until the server confirms who we
@@ -1437,43 +1441,49 @@
     // that would fail.
     document.getElementById('btn-group-rename').classList.add('hidden');
     document.getElementById('btn-group-delete').classList.add('hidden');
-    document.getElementById('group-menu-overlay').classList.remove('hidden');
+    document.getElementById('group-menu').classList.remove('hidden');
+    document.getElementById('group-menu-backdrop').classList.remove('hidden');
     const firebaseIdToken = await currentFirebaseIdToken();
     socket.emit('get_group', { code, firebaseIdToken }, (res) => {
       if (!res || !res.ok || !res.group || groupMenuCode !== code) return;
       groupMenuName = res.group.name;
-      document.getElementById('group-menu-title').textContent = res.group.name;
       document.getElementById('input-group-rename').value = res.group.name;
       document.getElementById('btn-group-rename').classList.toggle('hidden', !res.group.isAdmin);
       document.getElementById('btn-group-delete').classList.toggle('hidden', !res.group.isAdmin);
     });
   }
 
-  document.getElementById('btn-group-menu-close').onclick = closeGroupMenu;
-  document.getElementById('group-menu-overlay').onclick = (e) => {
-    if (e.target.id === 'group-menu-overlay') closeGroupMenu();
-  };
+  // Tap anywhere off the menu to dismiss it -- there's no Close row, the
+  // same as any Android overflow menu.
+  document.getElementById('group-menu-backdrop').onclick = closeGroupMenu;
 
   document.getElementById('btn-group-share').onclick = () => {
     if (!groupMenuCode) return;
+    closeGroupMenu();
     logAnalytics('invite_shared_whatsapp');
     openWhatsAppShare(groupInviteTextFor(groupMenuCode, groupMenuName));
   };
 
   document.getElementById('btn-group-copy').onclick = async () => {
     if (!groupMenuCode) return;
+    closeGroupMenu();
     try {
       await navigator.clipboard.writeText(groupInviteTextFor(groupMenuCode, groupMenuName));
-      setGroupMenuError('Invite link copied.');
+      setLandingError('Invite link copied.');
     } catch (e) {
-      setGroupMenuError('Could not copy — link is ' + groupInviteLinkFor(groupMenuCode));
+      setLandingError('Could not copy — code is ' + groupMenuCode);
     }
   };
 
+  // The overflow list never contains inputs or confirmations -- it launches
+  // them, the way WhatsApp does.
   document.getElementById('btn-group-rename').onclick = () => {
-    document.getElementById('group-rename-row').classList.remove('hidden');
-    try { document.getElementById('input-group-rename').focus(); } catch (e) {}
+    closeGroupMenu();
+    document.getElementById('group-rename-dialog').classList.remove('hidden');
+    setTimeout(() => { try { document.getElementById('input-group-rename').focus(); } catch (e) {} }, 60);
   };
+  document.getElementById('btn-group-rename-cancel').onclick = closeGroupDialogs;
+  document.getElementById('btn-group-delete-cancel').onclick = closeGroupDialogs;
 
   document.getElementById('btn-group-rename-save').onclick = async () => {
     const code = groupMenuCode;
@@ -1484,7 +1494,7 @@
       if (!res || !res.ok) return setGroupMenuError((res && res.error) || 'Could not rename.');
       rememberGroup(code, res.name);
       if (groupScreenCode === code) openGroupScreen(code, res.name);
-      closeGroupMenu();
+      closeGroupDialogs();
     });
   };
 
@@ -1502,23 +1512,14 @@
     showScreen('screen-landing');
   };
 
-  // Destructive and irreversible for everyone in the group, so it asks
-  // twice: the button turns into a confirm before it does anything.
-  let groupDeleteArmed = false;
-  document.getElementById('btn-group-delete').onclick = async () => {
-    const btn = document.getElementById('btn-group-delete');
-    if (!groupDeleteArmed) {
-      groupDeleteArmed = true;
-      btn.textContent = 'Tap again to delete permanently';
-      setGroupMenuError('This removes the group and its leaderboard for everyone.');
-      setTimeout(() => {
-        groupDeleteArmed = false;
-        btn.textContent = 'Delete group for everyone';
-      }, 5000);
-      return;
-    }
-    groupDeleteArmed = false;
-    btn.textContent = 'Delete group for everyone';
+  // Destructive and irreversible for everyone, so it gets a proper confirm
+  // dialog rather than a tap-again trick -- a dropdown that closes underneath
+  // you is the wrong place to arm something dangerous.
+  document.getElementById('btn-group-delete').onclick = () => {
+    closeGroupMenu();
+    document.getElementById('group-delete-dialog').classList.remove('hidden');
+  };
+  document.getElementById('btn-group-delete-confirm').onclick = async () => {
     const code = groupMenuCode;
     const firebaseIdToken = await currentFirebaseIdToken();
     socket.emit('delete_group', { code, firebaseIdToken }, (res) => {
@@ -1528,7 +1529,7 @@
         localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list));
       } catch (e) {}
       renderGroupsBlock();
-      closeGroupMenu();
+      closeGroupDialogs();
       showScreen('screen-landing');
     });
   };
