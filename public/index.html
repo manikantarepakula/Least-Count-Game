@@ -290,26 +290,30 @@
     <div class="mode-block">
       <h3>Members <span id="group-member-count" class="group-count"></span></h3>
       <ul id="group-members" class="group-member-list"></ul>
-      <div class="group-invite-row">
-        <button id="btn-group-invite" class="secondary" type="button">Invite</button>
-        <!-- Small on purpose: the code only matters at the moment somebody
-             joins. After that nobody needs to see it again. -->
-        <span class="group-code-inline">Code <b id="group-code-text">-----</b></span>
+      <!-- The code gets its OWN line, not a slot beside the button: every
+           button in this app is width:100%, so sitting them side by side
+           squeezed the code into an unreadable sliver at the right edge.
+           Still deliberately understated -- it only matters at the moment
+           somebody joins -- but it has to be legible when it does. -->
+      <div class="group-code-row">
+        <span class="group-code-label">Group code</span>
+        <b id="group-code-text" class="group-code-value">-----</b>
       </div>
+      <button id="btn-group-invite" class="secondary" type="button">Invite</button>
     </div>
 
-    <div class="mode-block" id="group-recent-block">
-      <h3>Recent</h3>
-      <ul id="group-recent" class="group-recent-list"></ul>
-      <p id="group-recent-empty" class="hint hidden">No games yet.</p>
-    </div>
 
     <div class="mode-block">
-      <h3>🏆 Marathon</h3>
-      <div class="segmented" id="group-board-tabs">
-        <button type="button" class="seg active" data-board="month">This month</button>
+      <h3 id="group-board-title">🏆 Marathon</h3>
+      <!-- Recent sits in the SAME control as the marathon boards (Sept 2026):
+           four stacked sections made the group screen a long scroll, and
+           Recent and the standings are both "what has been happening here",
+           so they belong behind one toggle rather than two headings. -->
+      <div class="segmented segmented-4" id="group-board-tabs">
+        <button type="button" class="seg active" data-board="month">Month</button>
         <button type="button" class="seg" data-board="today">Today</button>
-        <button type="button" class="seg" data-board="champions">Champions</button>
+        <button type="button" class="seg" data-board="recent">Recent</button>
+        <button type="button" class="seg" data-board="champions">Champs</button>
       </div>
       <ul id="group-board" class="standings-list"></ul>
       <p id="group-board-empty" class="hint hidden">Nothing here yet.</p>
