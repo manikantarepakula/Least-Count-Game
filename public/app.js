@@ -1714,21 +1714,6 @@
       list.appendChild(li);
     });
 
-    // ---- recent ----
-    const recent = document.getElementById('group-recent');
-    const recentEmpty = document.getElementById('group-recent-empty');
-    recent.innerHTML = '';
-    (group.recent || []).forEach((r) => {
-      const li = document.createElement('li');
-      li.className = 'group-recent-row';
-      li.innerHTML =
-        `<span class="gr-when">${escapeHtml(relativeDay(r.at))}</span>` +
-        `<span class="gr-who">${escapeHtml(r.winnerName || 'Nobody')} won</span>` +
-        `<span class="gr-n">${r.players} played</span>`;
-      recent.appendChild(li);
-    });
-    recentEmpty.classList.toggle('hidden', (group.recent || []).length > 0);
-
     renderGroupBoard();
   }
 
@@ -1741,9 +1726,29 @@
     let rows = [];
     if (groupBoardTab === 'month') rows = g.marathon.standings || [];
     else if (groupBoardTab === 'today') rows = g.daily.standings || [];
+    else if (groupBoardTab === 'recent') rows = g.recent || [];
     else rows = (g.champions || []).slice().reverse();
 
-    if (groupBoardTab === 'champions') {
+    // The heading follows the tab, so it never says "Marathon" over a list
+    // of recent games.
+    const title = document.getElementById('group-board-title');
+    if (title) {
+      title.textContent = groupBoardTab === 'recent' ? 'Recent games'
+        : groupBoardTab === 'champions' ? '👑 Champions'
+        : '🏆 Marathon';
+    }
+
+    if (groupBoardTab === 'recent') {
+      rows.forEach((r) => {
+        const li = document.createElement('li');
+        li.className = 'group-recent-row';
+        li.innerHTML =
+          `<span class="gr-when">${escapeHtml(relativeDay(r.at))}</span>` +
+          `<span class="gr-who">${escapeHtml(r.winnerName || 'Nobody')} won</span>` +
+          `<span class="gr-n">${r.players} played</span>`;
+        board.appendChild(li);
+      });
+    } else if (groupBoardTab === 'champions') {
       rows.forEach((c) => {
         const li = document.createElement('li');
         li.className = 'standings-row';
@@ -1766,9 +1771,12 @@
       });
     }
     empty.classList.toggle('hidden', rows.length > 0);
+    const note = document.querySelector('.group-scoring-note');
+    if (note) note.classList.toggle('hidden', groupBoardTab === 'recent' || groupBoardTab === 'champions');
     empty.textContent = groupBoardTab === 'champions'
       ? 'No months finished yet.'
-      : 'No games yet.';
+      : groupBoardTab === 'recent' ? 'No games yet.'
+      : 'Nothing scored yet.';
   }
 
   document.getElementById('btn-group-back').onclick = () => {
