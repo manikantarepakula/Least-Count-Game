@@ -192,6 +192,40 @@ class LeastCountGame {
   }
 
   /**
+   * Empties a seat that has been abandoned -- three consecutive turns
+   * auto-played while the player's connection was gone (the strike rules live
+   * in server.js; this is only the engine side of it).
+   *
+   * Uses `eliminated` rather than `quit`, deliberately. Their score stands
+   * exactly as they earned it: if someone's battery died while they were
+   * winning, that is simply what happened, and the round-result screen
+   * already knows how to announce an elimination. Same between-rounds-only
+   * restriction as removePlayer(), so nobody's mid-hand cards vanish.
+   */
+  eliminateAbsent(playerId) {
+    if (this.gameOver) return this.getPublicState();
+    if (!this.roundOver) throw new Error('Cannot remove a player in the middle of a round');
+    if (this.eliminated.has(playerId) || this.quit.has(playerId)) return this.getPublicState();
+
+    this.eliminated.add(playerId);
+    this.log.push({ type: 'absent', round: this.roundNumber, playerId });
+    // Reported separately from newlyEliminated (which means "hit the max
+    // score"). The two need different wording on the result screen -- "Ravi
+    // is out on 210" and "Ravi left the table" are not the same news.
+    if (this.lastRoundResult) {
+      this.lastRoundResult.absentEliminated =
+        (this.lastRoundResult.absentEliminated || []).concat(playerId);
+    }
+
+    const stillActive = this.activePlayers();
+    if (stillActive.length <= 1) {
+      this.gameOver = true;
+      this.winner = stillActive[0] || null;
+    }
+    return this.getPublicState();
+  }
+
+  /**
    * Adds a brand-new player to an already-running game -- the "someone wants
    * to join mid-game, host admitted them" flow. Only allowed between rounds
    * (same restriction as removePlayer -- never mid-hand), and the new player
