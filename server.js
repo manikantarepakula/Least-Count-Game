@@ -574,7 +574,13 @@ const queueIndex = new Map(); // socket.id -> playerCount (which bucket they're 
 // Reduced from 30s -> 20s: with the sound-only "your turn" cue proving easy
 // to miss, a snappier timer keeps a distracted player from stalling the
 // table for too long even before the new visual pulse (client-side) kicks in.
-const TURN_SECONDS = 20;
+// Cut from 20s (which was itself cut from 30s). Fast enough to keep a table
+// moving; still long enough to group and select cards on a phone.
+const TURN_SECONDS = 15;
+// Consecutive turns auto-played WHILE DISCONNECTED before a seat is put on
+// bot pace, and then emptied at the end of the round. Strikes deliberately
+// never accrue for a player who is present but slow -- see handleTurnTimeout.
+const ABSENCE_STRIKES = 3;
 const CHAT_HISTORY_LIMIT = 100;
 const DEFAULT_ELIMINATION_SCORE = 200;
 // Solo play (item: "Play Solo" on the landing screen) -- bots act fast, well
@@ -668,6 +674,7 @@ const RATE_LIMITS = {
   // legitimate client sends this only when its group list changes.
   watch_groups: { max: 20, windowMs: 10000 },
   ring_bell: { max: 6, windowMs: 60000 },
+  set_name: { max: 8, windowMs: 60000 },
   start_marathon: { max: 5, windowMs: 60000 },      // starting one is rare and admin-only
   group_chat_send: { max: 5, windowMs: 10000 },     // same as in-room chat
   create_solo_room: { max: 5, windowMs: 60000 },
@@ -1176,7 +1183,10 @@ async function recordGroupGame(room) {
     const p = room.players.get(pid);
     if (!p || p.isBot || !p.firebaseUid) continue; // bots never score
     finalScores[p.firebaseUid] = Number(room.game.scores[pid]) || 0;
-    names[p.firebaseUid] = p.name;
+    // The REAL name, not whatever they renamed themselves to for a laugh. A
+    // month of joke names would leave the marathon standings unreadable by the
+    // time the crown is awarded.
+    names[p.firebaseUid] = p.profileName || p.name;
   }
   const uids = Object.keys(finalScores);
   if (uids.length < 2) return; // a solo table isn't a game worth scoring
@@ -1613,6 +1623,18 @@ function scheduleTurnTimer(room) {
     room.turnTimer = setTimeout(() => runBotTurn(room), BOT_MOVE_MS);
     return;
   }
+  // A human seat that has been abandoned (ABSENCE_STRIKES auto-plays in a row
+  // with the socket gone) moves at bot pace for the rest of the round, so
+  // three people aren't made to sit through 15 empty seconds every lap
+  // waiting for someone who has clearly left. The deadline is still published
+  // rather than hidden the way a bot's is -- everyone else can then see the
+  // seat ticking fast, which is what makes it obvious somebody has dropped
+  // out rather than looking like the game has stalled.
+  if (currentPlayerRecord && currentPlayerRecord.botMode && !currentPlayerRecord.connected) {
+    room.turnDeadline = Date.now() + BOT_MOVE_MS;
+    room.turnTimer = setTimeout(() => handleTurnTimeout(room), BOT_MOVE_MS);
+    return;
+  }
   room.turnDeadline = Date.now() + TURN_SECONDS * 1000;
   room.turnTimer = setTimeout(() => handleTurnTimeout(room), TURN_SECONDS * 1000);
 }
@@ -1751,8 +1773,36 @@ function scheduleAutoNextRound(room) {
 // Called from every path that can end a round (human declare, turn-timeout
 // auto-play, bot turn). Kept as one helper so a new round-ending path can't
 // forget to arm the countdown and strand the table again.
+// Empties seats abandoned for a whole round. Runs at round end, never
+// mid-hand -- the engine refuses to remove anyone while a round is live, so
+// nobody's cards vanish underneath them.
+function applyAbsenceEliminations(room) {
+  const game = room.game;
+  if (!game || !game.roundOver || game.gameOver) return;
+  const gone = room.order.filter((pid) => {
+    const p = room.players.get(pid);
+    return p && !p.isBot && !p.connected && p.botMode;
+  });
+  for (const pid of gone) {
+    try {
+      game.eliminateAbsent(pid);
+      const p = room.players.get(pid);
+      if (p) { p.botMode = false; p.awayStrikes = 0; }
+    } catch (e) {
+      console.error(`[Room ${room.code}] absence elimination failed:`, e.message);
+    }
+  }
+  if (gone.length) {
+    console.log(`[Room ${room.code}] emptied ${gone.length} abandoned seat(s)`);
+  }
+}
+
 function onRoundEnded(room) {
   clearTurnTimer(room);
+  // Before the game-over check, not after: eliminating the last-but-one
+  // player is itself a way for the game to end, and eliminateAbsent() sets
+  // gameOver when it leaves fewer than two people standing.
+  applyAbsenceEliminations(room);
   if (room.game && room.game.gameOver) {
     room.phase = 'game_over';
     recordGameResult(room);
@@ -1880,11 +1930,44 @@ function checkLowCardReaction(room, roomCode, playerId) {
   }
 }
 
+// Any real move -- or simply coming back -- wipes the slate. Coming back is
+// enough on its own: making someone watch their own cards auto-play until
+// they manage a move would punish the reconnect we actually want.
+function clearAbsenceStrikes(room, playerId) {
+  const p = room && room.players && room.players.get(playerId);
+  if (!p) return;
+  p.awayStrikes = 0;
+  p.botMode = false;
+}
+
 function handleTurnTimeout(room) {
   const game = room.game;
   if (!game || game.roundOver || game.gameOver) return;
 
   const pid = game.currentPlayer();
+  // ------------------------------------------------------------------
+  // Strikes accrue ONLY while the player is actually gone.
+  //
+  // A present-but-slow player is auto-played exactly as before and keeps
+  // their seat indefinitely. That asymmetry is the whole point: being
+  // eliminated while sitting at the table watching it happen is far worse
+  // than a slow game, and at a 15-second clock a beginner with 13 cards will
+  // time out sometimes. The rule is aimed at people who walked away.
+  //
+  // The consequence, accepted deliberately: somebody who reconnects and then
+  // does nothing can be auto-played for ever and never eliminated. This
+  // fixes "left the room", not "stopped paying attention".
+  // ------------------------------------------------------------------
+  const timedOut = room.players.get(pid);
+  if (timedOut && !timedOut.isBot) {
+    if (!timedOut.connected) {
+      timedOut.awayStrikes = (timedOut.awayStrikes || 0) + 1;
+      if (timedOut.awayStrikes >= ABSENCE_STRIKES) timedOut.botMode = true;
+    } else {
+      timedOut.awayStrikes = 0;
+      timedOut.botMode = false;
+    }
+  }
   try {
     const cardIds = game.autoPickDiscard(pid);
     game.playTurn(pid, cardIds);
@@ -2115,7 +2198,14 @@ io.on('connection', (socket) => {
         const p = room.players.get(existingId);
         p.socketId = socket.id;
         p.connected = true;
-        p.name = cleanName;
+        // Back at the table -- hand control straight back rather than making
+        // them watch their own cards auto-play for a turn or two.
+        clearAbsenceStrikes(room, existingId);
+        // Refresh the real name, but don't clobber a nickname they picked for
+        // this table -- a wifi blip turning "Batman" back into "Mani" would
+        // look like a bug.
+        p.profileName = cleanName;
+        if (!p.hasNickname) p.name = cleanName;
         p.platform = cleanPlatform(platform);
         room.allHumansDisconnectedAt = null; // a human is back
         socketIndex.set(socket.id, { roomCode: code, playerId: existingId });
@@ -2447,7 +2537,7 @@ io.on('connection', (socket) => {
 
   // Group chat. Lives in memory for 30 minutes -- see groupChats above for
   // why it deliberately never reaches Firestore.
-  socket.on('group_chat_send', async ({ code, text, name, firebaseIdToken }, ack) => {
+  socket.on('group_chat_send', async ({ code, text, name, firebaseIdToken, mentions }, ack) => {
     try {
       if (isRateLimited(socket, 'group_chat_send')) throw new Error('You are sending messages too quickly. Please slow down.');
       const clean = (code || '').trim().toUpperCase();
@@ -2466,6 +2556,11 @@ io.on('connection', (socket) => {
         name: (name || '').trim().slice(0, 20) || 'Player',
         text: cleanText,
         at: Date.now(),
+        // Same rule as the table chat: ids, validated against real members.
+        mentions: (Array.isArray(mentions) ? mentions : [])
+          .map((x) => String(x || ''))
+          .filter((uid) => (group.members || {})[uid] || onlineMembers(clean).has(uid))
+          .slice(0, 8),
       };
       addGroupChat(clean, msg);
       // Pushed as a single message rather than by re-broadcasting the whole
@@ -2650,6 +2745,7 @@ io.on('connection', (socket) => {
       const entry = socketIndex.get(socket.id);
       if (!entry) throw new Error('Not in a room.');
       room.game.playTurn(entry.playerId, cardIds || []);
+      clearAbsenceStrikes(room, entry.playerId);
       revealDrawIfAny(room);
       emitLogBasedReactions(room, roomCode);
       checkLowCardReaction(room, roomCode, entry.playerId);
@@ -2722,6 +2818,7 @@ io.on('connection', (socket) => {
       const entry = socketIndex.get(socket.id);
       if (!entry) throw new Error('Not in a room.');
       room.game.declare(entry.playerId);
+      clearAbsenceStrikes(room, entry.playerId);
       onRoundEnded(room); // stops the turn timer, then either records the
                           // finished game or arms the auto-advance countdown
       const newlyEliminated = (room.game.lastRoundResult && room.game.lastRoundResult.newlyEliminated) || [];
@@ -2833,7 +2930,38 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('chat_message', ({ roomCode, type, text, gifUrl }, ack) => {
+  // Table nickname. Friends rename themselves for a laugh between rounds --
+  // this changes what the table sees and nothing else. The saved profile name
+  // is untouched, so it lasts for this room only, and the group leaderboard
+  // still records the real one (see recordGroupGame).
+  socket.on('set_name', ({ roomCode, name }, ack) => {
+    try {
+      if (isRateLimited(socket, 'set_name')) throw new Error('Too many changes too quickly. Please wait a moment.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      // Taken from the socket's OWN seat, which is what makes renaming
+      // somebody else impossible rather than merely hidden in the UI.
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      const p = room.players.get(entry.playerId);
+      if (!p) throw new Error('Not seated.');
+      // Same censor as chat. A free-text name box is exactly where someone
+      // tries something rude, and unlike a chat line it then sits on the
+      // table for the rest of the game.
+      const cleanName = censorText((name || '').toString().trim().slice(0, 20));
+      if (!cleanName) throw new Error('Enter a name.');
+      if (!p.profileName) p.profileName = p.name;
+      p.name = cleanName;
+      p.hasNickname = cleanName !== p.profileName;
+      broadcastRoom(room);
+      if (room.game) broadcastGameState(room);
+      ack && ack({ ok: true, name: cleanName });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('chat_message', ({ roomCode, type, text, gifUrl, mentions }, ack) => {
     try {
       if (isRateLimited(socket, 'chat_message')) throw new Error('You are sending messages too quickly. Please slow down.');
       const room = rooms.get(roomCode);
@@ -2861,6 +2989,14 @@ io.on('connection', (socket) => {
         if (!cleanText) throw new Error('Empty message.');
         msg.type = 'text';
         msg.text = cleanText;
+        // Mentions travel as player IDS, never names -- two people at one
+        // table can share a name, and a text match would light up for both or
+        // neither. Validated against who is actually seated, so a crafted
+        // payload can't fabricate one.
+        msg.mentions = (Array.isArray(mentions) ? mentions : [])
+          .map((x) => String(x || ''))
+          .filter((id) => room.players.has(id))
+          .slice(0, 8);
       }
 
       room.chatHistory.push(msg);
