@@ -87,7 +87,7 @@ body.game-active {
    bottom-most buttons/nav. --ad-safe-bottom is 0px whenever the banner is
    hidden, which is always true on #screen-game, so this is harmless there
    too -- no #screen-game exclusion needed. */
-.screen { padding-bottom: calc(16px + var(--ad-safe-bottom, 0px)); }
+.screen { padding-bottom: calc(8px + var(--ad-safe-bottom, 0px)); }
 
 /* Game screen fits one viewport height, no page scroll, on any device.
    justify-content:center matters on screens taller than the oval table's own
@@ -1289,7 +1289,10 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 
 /* ---- Full scorecard (players in rows, rounds in columns + Total) ---- */
 .link-btn {
-  background: none; border: none; color: var(--red); font-size: 12.5px;
+  /* Was var(--red) -- the same colour as .error, so a benign "See full
+     scorecard" read as a warning. Gold is already the app's highlight, and
+     red is left to mean errors and destructive actions only. */
+  background: none; border: none; color: var(--gold-bright); font-size: 12.5px;
   padding: 6px 0; width: 100%; text-decoration: underline;
 }
 .full-scorecard { margin: 4px 0 8px; }
@@ -2050,3 +2053,60 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
    input down onto its own line -- the same rule that once squeezed the group
    code into a sliver at the screen edge. */
 .group-chat-row button { width: auto; flex: 0 0 auto; padding: 12px 18px; }
+
+
+/* ==========================================================================
+   Sept 2026 audit fixes
+   ========================================================================== */
+
+/* --- Touch targets ---------------------------------------------------------
+   Measured on the live build at 375x812. Discard and Least Count! were 37px
+   tall -- the two most-tapped controls in the game were the smallest things
+   on screen that mattered. 44px is the platform minimum for a finger. */
+#btn-discard, #btn-declare { min-height: 44px; }
+#btn-profile-menu { min-width: 44px; min-height: 44px; }
+#btn-mute, #btn-scores, #btn-leave-game { min-height: 44px; min-width: 44px; }
+#btn-game-rules { min-height: 44px; }
+.segmented .seg { min-height: 44px; }
+.footer-nav-item { min-height: 44px; }
+
+/* Leave sits beside Scores in the game bar. Outlined, not filled: it's the
+   one irreversible control up there. */
+.leave-btn { color: var(--text-muted); }
+.leave-btn:active { color: var(--red); }
+
+/* The round advances by itself, so the countdown is the actual news on this
+   screen -- it sat as small grey text at the very bottom while "Start Now"
+   shouted above it. #round-result-hint is the element that carries it. */
+#round-result-hint {
+  font-size: 14px; color: var(--text-light); margin-top: 10px;
+}
+
+/* Leave Game sat directly under Start Now in near-identical red, a thumb-width
+   from the one action that can't be undone. Step it back to a quiet outline
+   and put air between them. */
+#btn-leave-round-result, #btn-leave-gameover {
+  color: var(--text-muted); border-color: var(--jade-border);
+  background: transparent; margin-top: 14px;
+}
+#btn-leave-round-result:active, #btn-leave-gameover:active { color: var(--red); }
+
+/* --- Lobby own row: Edit belongs next to the name it edits, not after the
+   status, where it read as "Mani HOST online Edit". --- */
+.lobby-players li.own-row { display: flex; align-items: center; gap: 6px; }
+.lobby-players li.own-row .row-edit { order: 1; margin-left: 2px; }
+.lobby-players li.own-row .status { order: 2; margin-left: auto; }
+
+/* --- Respect "remove animations" -------------------------------------------
+   There was no prefers-reduced-motion rule anywhere in this stylesheet. It
+   matters most for the intro splash, which is dismissed BY an animation: with
+   motion disabled it could sit over the whole app forever. app.js now removes
+   the node regardless, and this makes it never appear in the first place. */
+@media (prefers-reduced-motion: reduce) {
+  #screen-intro { display: none !important; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
