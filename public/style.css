@@ -737,9 +737,11 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 
 /* ---------------- Game screen ---------------- */
 .game-top {
-  display: flex; justify-content: flex-end; align-items: center;
+  display: flex; justify-content: space-between; align-items: center;
   font-size: 13px; padding: 3px 4px; flex-shrink: 0;
 }
+.game-round { font-size: 12px; color: var(--text-muted); padding-left: 6px; letter-spacing: 0.02em; }
+.round-result-round { font-size: 12px; color: var(--text-muted); margin-bottom: 2px; }
 .top-actions { display: flex; gap: 6px; align-items: center; }
 .mute-btn { padding: 6px 9px !important; font-size: 13px !important; line-height: 1; }
 .mute-btn .icon { width: 16px; height: 16px; margin: 0; }
@@ -1634,6 +1636,9 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
    single "Name: text" line. The avatar is what makes a fast-moving group
    chat scannable at a glance. */
 .chat-msg { display: flex; gap: 9px; margin-bottom: 12px; align-items: flex-start; }
+/* Left at 28px. The density win came from dropping the per-message
+   timestamp line and grouping consecutive messages, not from the avatar --
+   shrinking this further would cost legibility for a few pixels. */
 .chat-avatar {
   flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
@@ -1648,7 +1653,35 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 .chat-msg .chat-name { font-weight: 700; color: var(--gold-bright); }
 .chat-msg.me .chat-name { color: var(--red); }
 .chat-msg .chat-text { word-break: break-word; color: var(--text-light); }
-.chat-msg .chat-time { display: block; font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+/* Per-message timestamps are gone from the table chat -- they cost a full
+   line each to tell people who are all playing the same round that a message
+   arrived "now". A time is printed only after a real silence (.chat-gap). */
+.chat-msg.grouped { margin-bottom: 3px; }
+/* Lines up under the name when the avatar is omitted: 28px avatar + 9px gap. */
+.chat-msg.grouped .chat-body { padding-left: 37px; }
+.chat-msg.mentions-me {
+  background: rgba(242,193,78,0.10); border-left: 2px solid var(--gold-bright);
+  border-radius: 0; padding: 3px 6px 3px 7px; margin-left: -7px;
+}
+.chat-gap { text-align: center; font-size: 11px; color: var(--text-muted); margin: 10px 0 8px; }
+.chat-mention { color: var(--gold-bright); font-weight: 700; }
+.chat-mention.me { color: var(--gold-bright); background: rgba(242,193,78,0.18); border-radius: 4px; padding: 0 3px; }
+
+.mention-bar { display: flex; gap: 6px; overflow-x: auto; padding: 6px 10px 0; }
+.mention-bar.hidden { display: none; }
+.mention-chip {
+  width: auto !important; flex: 0 0 auto; padding: 6px 12px !important;
+  font-size: 13px !important; border-radius: 999px;
+  background: var(--jade-panel-alt); border: 1px solid var(--jade-border);
+  color: var(--text-light);
+}
+
+.group-chat-msg.grouped { padding-top: 2px; }
+.group-chat-msg.mentions-me { border-left: 2px solid var(--gold-bright); }
+.group-chat-msg .gc-text { color: var(--text-light); }
+
+.lobby-players li.own-row { cursor: pointer; }
+.row-edit { font-size: 11px; color: var(--text-muted); margin-left: 8px; }
 .chat-msg .chat-gif { display: block; max-width: 160px; border-radius: 8px; margin-top: 4px; }
 .chat-empty { color: var(--text-muted); font-size: 12px; text-align: center; margin-top: 20px; }
 
@@ -1850,7 +1883,9 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 
 /* Round score sits next to the hand value -- the hand value alone never
    told you what the round actually cost. */
-.seat-reveal-score { margin-left: 5px; font-weight: 700; color: var(--text-muted); }
+.seat-reveal-score { font-weight: 700; color: var(--gold-bright); font-size: 15px; }
+.seat-reveal-arrow { margin: 0 4px; color: var(--text-muted); font-size: 12px; }
+.seat-reveal-total { font-weight: 700; color: var(--text-light); font-size: 13px; }
 .seat-reveal-score.zero { color: #4ade80; }
 .seat-reveal-score.penalty { color: #ff6b6b; }
 
