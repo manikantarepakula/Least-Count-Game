@@ -347,6 +347,7 @@
       <h3>Chat <span class="group-count">· last 30 minutes</span></h3>
       <ul id="group-chat-list" class="group-chat-list"></ul>
       <p id="group-chat-empty" class="hint">No messages yet — say when you're free.</p>
+      <div id="group-chat-mention-bar" class="mention-bar hidden"></div>
       <div class="group-chat-row">
         <input id="input-group-chat" type="text" maxlength="300" placeholder="Message the group" autocomplete="off" />
         <button id="btn-group-chat-send" class="primary" type="button" aria-label="Send">Send</button>
@@ -460,6 +461,9 @@
 
 <div id="screen-game" class="screen">
   <div class="game-top">
+    <!-- Left side of this bar was empty (justify-content:flex-end), so the
+         round number costs nothing here. -->
+    <div id="game-round" class="game-round"></div>
     <div class="top-actions">
       <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
       <button id="btn-scores" class="tiny">Scores</button>
@@ -566,6 +570,7 @@
 <div id="overlay-round-result" class="overlay hidden">
   <div class="card-panel podium-panel">
     <div id="round-result-emoji" class="round-result-emoji"></div>
+    <div id="round-result-round" class="round-result-round"></div>
     <h2 id="round-result-title">Round Result</h2>
     <div id="round-result-maxscore" class="round-result-maxscore"></div>
 
@@ -713,6 +718,9 @@
        (self-hosted meme library never made it to GitHub, plus the content
        was Telugu-only and not a fair Remove Ads perk for a wider audience).
        May come back later with broader content. -->
+  <!-- Name chips, shown only while an @ is being typed, so it costs no
+       height the rest of the time. -->
+  <div id="chat-mention-bar" class="mention-bar hidden"></div>
   <div class="chat-input-row">
     <!-- enterkeyhint="send" turns the Android keyboard's Enter key into a
          Send key, and autocomplete/autocorrect off stops Gboard's
@@ -785,6 +793,21 @@
      whole point of the countdown, and free entry invites someone typing 365
      -- which turns the marathon back into a leaderboard decided in week two,
      the exact thing it exists to prevent. -->
+<!-- Table nickname. Changes what this table sees for this game only; the
+     saved profile name and the group marathon board both keep the real one. -->
+<div id="table-name-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel">
+    <h2>Your name at this table</h2>
+    <p class="hint">Just for this game — your saved name and the group leaderboard don't change.</p>
+    <input id="input-table-name" type="text" maxlength="20" placeholder="e.g. Batman" autocomplete="off" />
+    <p id="table-name-error" class="error"></p>
+    <div class="dialog-actions">
+      <button id="btn-table-name-cancel" class="secondary" type="button">Cancel</button>
+      <button id="btn-table-name-save" class="primary" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="marathon-start-dialog" class="overlay hidden">
   <div class="card-panel dialog-panel">
     <h2>Start a marathon</h2>
