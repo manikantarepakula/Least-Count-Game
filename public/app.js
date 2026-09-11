@@ -1789,6 +1789,20 @@
     startBtn.classList.toggle('hidden', !(group && group.isAdmin));
   }
 
+  function groupMemberNameByUid(uid) {
+    if (!groupScreenData || !uid) return '';
+    const m = (groupScreenData.members || []).find((x) => x.uid === uid);
+    return m ? m.name : '';
+  }
+
+  function groupChatPeople() {
+    const me = myFirebaseUid();
+    if (!groupScreenData) return [];
+    return (groupScreenData.members || [])
+      .filter((m) => m.uid && m.uid !== me)
+      .map((m) => ({ id: m.uid, name: m.name }));
+  }
+
   function chatClock(ts) {
     const d = new Date(ts || Date.now());
     return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
@@ -1801,14 +1815,36 @@
     groupChatMsgs = list || [];
     ul.innerHTML = '';
     const me = myFirebaseUid();
+    let prevUid = null;
     groupChatMsgs.forEach((m) => {
+      // Same grouping as the table chat. The TIME stays, though -- opposite
+      // decision, for a reason: with only 30 minutes of history, "25 minutes
+      // ago" versus "just now" is how you tell whether somebody is still
+      // around and worth waiting for. At the table everyone is already
+      // playing, so there it said nothing.
+      const grouped = prevUid && m.uid === prevUid;
+      const mentionsMe = Array.isArray(m.mentions) && m.mentions.indexOf(me) >= 0;
       const li = document.createElement('li');
-      li.className = 'group-chat-msg' + (m.uid && m.uid === me ? ' mine' : '');
-      li.innerHTML =
-        '<span class="gc-time">' + escapeHtml(chatClock(m.at)) + '</span>' +
-        '<span class="gc-name">' + escapeHtml(m.name || 'Player') + '</span>' +
-        escapeHtml(m.text || '');
+      li.className = 'group-chat-msg'
+        + (m.uid && m.uid === me ? ' mine' : '')
+        + (grouped ? ' grouped' : '')
+        + (mentionsMe ? ' mentions-me' : '');
+      if (!grouped) {
+        const t = document.createElement('span');
+        t.className = 'gc-time';
+        t.textContent = chatClock(m.at);
+        li.appendChild(t);
+        const n = document.createElement('span');
+        n.className = 'gc-name';
+        n.textContent = m.name || 'Player';
+        li.appendChild(n);
+      }
+      const body = document.createElement('span');
+      body.className = 'gc-text';
+      renderChatText(body, m.text, m.mentions, groupMemberNameByUid, me);
+      li.appendChild(body);
       ul.appendChild(li);
+      prevUid = m.uid || null;
     });
     empty.classList.toggle('hidden', groupChatMsgs.length > 0);
     ul.classList.toggle('hidden', groupChatMsgs.length === 0);
@@ -2012,11 +2048,13 @@
       text,
       name: getPlayerName(),
       firebaseIdToken,
+      mentions: collectMentions(text, groupChatPeople()),
     }, (res) => {
       if (!res || !res.ok) setLandingError((res && res.error) || 'Could not send that.');
     });
   }
 
+  wireMentionBar('input-group-chat', 'group-chat-mention-bar', groupChatPeople);
   document.getElementById('btn-group-chat-send').onclick = sendGroupChat;
   document.getElementById('input-group-chat').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); sendGroupChat(); }
@@ -2664,6 +2702,54 @@
     });
   };
 
+  // ------------------------------------------------------------------
+  // Table nickname. Friends rename themselves for a laugh between rounds --
+  // this changes what THIS table sees and nothing else: the saved profile
+  // name is untouched, and the group marathon board still records the real
+  // one (see recordGroupGame on the server).
+  //
+  // Reachable from your own lobby row and your own seat. Deliberately NOT
+  // from the round-result screen, which auto-advances after 10 seconds and
+  // would cut people off mid-typing.
+  // ------------------------------------------------------------------
+  function openNameDialog() {
+    const dlg = document.getElementById('table-name-dialog');
+    const input = document.getElementById('input-table-name');
+    if (!dlg || !input) return;
+    input.value = playerName(myPlayerId) || getPlayerName() || '';
+    document.getElementById('table-name-error').textContent = '';
+    dlg.classList.remove('hidden');
+    setTimeout(() => { try { input.focus(); input.select(); } catch (e) {} }, 60);
+  }
+
+  function closeNameDialog() {
+    const dlg = document.getElementById('table-name-dialog');
+    if (dlg) dlg.classList.add('hidden');
+  }
+
+  (function wireNameDialog() {
+    const cancel = document.getElementById('btn-table-name-cancel');
+    const save = document.getElementById('btn-table-name-save');
+    const input = document.getElementById('input-table-name');
+    if (!cancel || !save || !input) return;
+    cancel.onclick = closeNameDialog;
+    save.onclick = () => {
+      const name = (input.value || '').trim();
+      if (!name) {
+        document.getElementById('table-name-error').textContent = 'Enter a name.';
+        return;
+      }
+      socket.emit('set_name', { roomCode: myRoomCode, name }, (res) => {
+        if (!res || !res.ok) {
+          document.getElementById('table-name-error').textContent = (res && res.error) || 'Could not change it.';
+          return;
+        }
+        closeNameDialog();
+      });
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.onclick(); });
+  })();
+
   function renderLobby(room) {
     document.getElementById('lobby-roomcode').textContent = room.roomCode;
     const list = document.getElementById('lobby-players');
@@ -2684,6 +2770,15 @@
           e.stopPropagation();
           togglePlayerActionPopover(li, p.playerId, p.name, 'align-right');
         };
+      } else if (p.playerId === myPlayerId) {
+        // Your own row opens the rename box instead of the report popover --
+        // there is nothing to report yourself for.
+        li.classList.add('tappable', 'own-row');
+        const pencil = document.createElement('span');
+        pencil.className = 'row-edit';
+        pencil.textContent = 'Edit';
+        li.appendChild(pencil);
+        li.onclick = (e) => { e.stopPropagation(); openNameDialog(); };
       }
       list.appendChild(li);
     });
@@ -2877,6 +2972,11 @@
           e.stopPropagation();
           togglePlayerActionPopover(seatEl, p.playerId, p.name, alignClass);
         };
+      } else if (!dealing && p.playerId === myPlayerId) {
+        // Tapping your own seat renames you. Always available mid-game, and
+        // never racing the round-result countdown.
+        seatEl.classList.add('tappable');
+        seatEl.onclick = (e) => { e.stopPropagation(); openNameDialog(); };
       }
 
       const count = game && game.handCounts ? game.handCounts[p.playerId] : (dealing ? 0 : undefined);
@@ -2899,7 +2999,12 @@
       chipEl.appendChild(nameEl);
       const metaEl = document.createElement('div');
       metaEl.className = 'seat-meta';
-      metaEl.textContent = count !== undefined ? count + ' cards' + (dealing ? '' : ' · ' + score + ' pts') : '';
+      // The reveal box now carries the running total, so the chip drops it
+      // while that box is up -- otherwise moving the total into the box just
+      // relocates the duplicate instead of removing it.
+      const chipHidesScore = dealing || (revealPhaseActive && p.playerId !== myPlayerId);
+      metaEl.textContent = count !== undefined
+        ? count + ' cards' + (chipHidesScore ? '' : ' · ' + score + ' pts') : '';
       chipEl.appendChild(metaEl);
 
       // Recent discards for THIS player, this round -- lets you track what
@@ -3064,6 +3169,13 @@
 
     const isMyTurn = game.currentPlayer === myPlayerId;
     const currentName = playerName(game.currentPlayer);
+
+    // Round number went into the LEFT of the game bar, which was empty --
+    // .game-top was justify-content:flex-end, so everything sat on the right.
+    // It was pulled out of this bar once before for crowding it; this time it
+    // occupies space nothing else wanted.
+    const roundEl = document.getElementById('game-round');
+    if (roundEl) roundEl.textContent = game.roundNumber ? 'Round ' + game.roundNumber : '';
 
     updateTurnTimerDisplay(game.roundOver ? null : game.turnDeadline);
     renderOvalTable(game);
@@ -3257,7 +3369,6 @@
     if (!hand) return null;
     const r = game.lastRoundResult;
     const wildRank = game.roundJokerRank;
-    const value = (game.finalHandValues || {})[playerId];
     const roundScore = (r && r.roundScores) ? r.roundScores[playerId] : undefined;
     const isDeclarer = !!(r && r.declaredBy === playerId);
     // A wrong declare is the one genuinely punitive outcome in this game, so
@@ -3285,17 +3396,30 @@
       box.appendChild(tag);
     }
 
+    // What the round cost them, then where that leaves them. The bare hand
+    // value used to lead this line, but for everyone except the declarer it
+    // IS the round score -- so the same number was printed twice, with the
+    // running total sitting a few pixels below in the seat chip as a third.
+    // Only the declarer's two numbers ever differed, and their cards are
+    // right underneath to be counted.
     const valEl = document.createElement('div');
     valEl.className = 'seat-reveal-value';
-    // Hand value, plus what the round actually cost them. The score is the
-    // number people care about; the hand value alone doesn't tell you that
-    // a wrong declarer just took +40.
-    valEl.textContent = value !== undefined ? String(value) : '';
     if (roundScore !== undefined) {
       const scoreEl = document.createElement('span');
       scoreEl.className = 'seat-reveal-score' + (roundScore === 0 ? ' zero' : '') + (isPenalty ? ' penalty' : '');
       scoreEl.textContent = roundScore === 0 ? '+0' : '+' + roundScore;
       valEl.appendChild(scoreEl);
+    }
+    const runningTotal = game.scores ? game.scores[playerId] : undefined;
+    if (runningTotal !== undefined) {
+      const arrow = document.createElement('span');
+      arrow.className = 'seat-reveal-arrow';
+      arrow.textContent = '\u203a';
+      valEl.appendChild(arrow);
+      const totalEl = document.createElement('span');
+      totalEl.className = 'seat-reveal-total';
+      totalEl.textContent = String(runningTotal);
+      valEl.appendChild(totalEl);
     }
     box.appendChild(valEl);
 
@@ -3695,6 +3819,8 @@
       ? `${playerName(r.declaredBy)} correctly declared Least Count!`
       : `${playerName(r.declaredBy)} declared wrong! (+${declarerScore} penalty)`;
     document.getElementById('round-result-title').textContent = title;
+    const rrRound = document.getElementById('round-result-round');
+    if (rrRound) rrRound.textContent = game.roundNumber ? 'Round ' + game.roundNumber : '';
     document.getElementById('round-result-maxscore').textContent = `Playing to ${game.eliminationScore} pts`;
 
     // Declare emojis show here (not at a seat) since the game redirects to
@@ -4060,6 +4186,122 @@
     return Math.floor(diff / 3600000) + 'h';
   }
 
+  // How long a silence has to be before the chat bothers printing a time.
+  const CHAT_GAP_MS = 5 * 60 * 1000;
+
+  function playerNameById(id) {
+    if (!latestRoom || !id) return '';
+    const p = latestRoom.players.find((x) => x.playerId === id);
+    return p ? p.name : '';
+  }
+
+  // ------------------------------------------------------------------
+  // Renders message text with @mentions highlighted, WITHOUT putting user
+  // input anywhere near innerHTML. Every fragment -- including the name
+  // inside the tag, which is user-supplied too -- goes in as a text node.
+  //
+  // This matters more than it looks: chat text was safe precisely because it
+  // was escaped and never treated as markup, and "highlight part of it" is
+  // exactly the change that quietly undoes that if done by string joining.
+  // ------------------------------------------------------------------
+  function renderChatText(target, text, mentions, nameOf, meId) {
+    const known = (mentions || [])
+      .map((id) => ({ id, name: nameOf(id) }))
+      .filter((x) => x.name)
+      // Longest name first, or "@Ravi Kumar" gets matched as "@Ravi".
+      .sort((a, b) => b.name.length - a.name.length);
+    let rest = String(text || '');
+    let guard = 0;
+    while (rest && known.length && guard++ < 80) {
+      let hit = null;
+      for (const k of known) {
+        const i = rest.indexOf('@' + k.name);
+        if (i >= 0 && (!hit || i < hit.i)) hit = { i, k };
+      }
+      if (!hit) break;
+      if (hit.i > 0) target.appendChild(document.createTextNode(rest.slice(0, hit.i)));
+      const tag = document.createElement('span');
+      tag.className = 'chat-mention' + (hit.k.id === meId ? ' me' : '');
+      tag.textContent = '@' + hit.k.name;
+      target.appendChild(tag);
+      rest = rest.slice(hit.i + 1 + hit.k.name.length);
+    }
+    if (rest) target.appendChild(document.createTextNode(rest));
+  }
+
+  // Mentions are worked out from the finished text at send time rather than
+  // tracked as you type. Tracking a selection list means keeping it in step
+  // with every edit and backspace; re-reading the text can't drift.
+  //
+  // This CONSUMES each match rather than just testing indexOf per person --
+  // the first version didn't, and "@Ravi Kumar" therefore also matched the
+  // shorter "@Ravi", so a different Ravi at the same table was told he'd been
+  // mentioned. Scanning left to right, longest name first, mirrors exactly
+  // what renderChatText does, so what gets highlighted and who gets flagged
+  // can no longer disagree.
+  function collectMentions(text, people) {
+    const sorted = (people || []).filter((p) => p && p.name)
+      .sort((a, b) => b.name.length - a.name.length);
+    const out = [];
+    let rest = String(text || '');
+    let guard = 0;
+    while (rest && sorted.length && guard++ < 80) {
+      let hit = null;
+      for (const p of sorted) {
+        const i = rest.indexOf('@' + p.name);
+        if (i >= 0 && (!hit || i < hit.i)) hit = { i, p };
+      }
+      if (!hit) break;
+      if (out.indexOf(hit.p.id) < 0) out.push(hit.p.id);
+      rest = rest.slice(hit.i + 1 + hit.p.name.length);
+    }
+    return out.slice(0, 8);
+  }
+
+  // Shared by both chats: shows name chips while an @ is being typed, and
+  // hides itself the rest of the time so it costs no height.
+  function wireMentionBar(inputId, barId, peopleFn) {
+    const input = document.getElementById(inputId);
+    const bar = document.getElementById(barId);
+    if (!input || !bar) return;
+    function insert(name) {
+      const v = input.value || '';
+      const at = v.lastIndexOf('@');
+      input.value = (at < 0 ? v : v.slice(0, at)) + '@' + name + ' ';
+      input.focus();
+      bar.classList.add('hidden');
+    }
+    function refresh() {
+      const v = input.value || '';
+      const at = v.lastIndexOf('@');
+      const frag = at >= 0 ? v.slice(at + 1) : null;
+      // Only while an @ is actively being typed -- no whitespace after it.
+      if (frag === null || /\s/.test(frag)) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+      const q = frag.toLowerCase();
+      const hits = peopleFn().filter((p) => p.name && p.name.toLowerCase().indexOf(q) === 0).slice(0, 6);
+      bar.innerHTML = '';
+      if (!hits.length) { bar.classList.add('hidden'); return; }
+      hits.forEach((p) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'mention-chip';
+        chip.textContent = p.name;
+        chip.onclick = () => insert(p.name);
+        bar.appendChild(chip);
+      });
+      bar.classList.remove('hidden');
+    }
+    input.addEventListener('input', refresh);
+    input.addEventListener('blur', () => setTimeout(() => bar.classList.add('hidden'), 180));
+  }
+
+  function tableChatPeople() {
+    if (!latestRoom) return [];
+    return latestRoom.players
+      .filter((p) => !p.isBot && p.playerId !== myPlayerId)
+      .map((p) => ({ id: p.playerId, name: p.name }));
+  }
+
   function appendChatMessage(msg, opts) {
     opts = opts || {};
     const container = document.getElementById('chat-messages');
@@ -4071,37 +4313,71 @@
     // once during a round, the avatar column is what makes it scannable
     // without reading every line.
     const isMine = msg.playerId === myPlayerId;
-    const div = document.createElement('div');
-    div.className = 'chat-msg' + (isMine ? ' me' : '');
-    div.dataset.playerId = msg.playerId || '';
+    const ts = msg.ts || Date.now();
 
-    const avatar = document.createElement('div');
-    avatar.className = 'chat-avatar';
-    const hue = chatAvatarHue(msg.playerId || msg.name);
-    avatar.style.background = `linear-gradient(135deg, hsl(${hue} 55% 42%), hsl(${(hue + 40) % 360} 55% 30%))`;
-    avatar.textContent = (msg.name || '?').trim().charAt(0) || '?';
-    div.appendChild(avatar);
+    // Read the previous row off the DOM rather than keeping "last sender"
+    // in a variable. A variable would have to be reset every time the chat
+    // is cleared or a player is muted, and a stale one here would silently
+    // eat somebody's name -- this project has lost enough days to flags that
+    // latched. The DOM is the state.
+    const prev = container.lastElementChild;
+    const prevIsMsg = !!(prev && prev.classList && prev.classList.contains('chat-msg'));
+    const prevPid = prevIsMsg ? (prev.dataset.playerId || null) : null;
+    const prevTs = prevIsMsg ? Number(prev.dataset.ts || 0) : 0;
+
+    // A time is printed only after a real silence. Every message used to
+    // carry one on its own line -- a full line each, to say "now" to people
+    // who are all sat at the same table playing the same round.
+    let brokeByGap = false;
+    if (prevTs && ts - prevTs > CHAT_GAP_MS) {
+      const sep = document.createElement('div');
+      sep.className = 'chat-gap';
+      sep.textContent = chatShortTime(ts) || '';
+      container.appendChild(sep);
+      brokeByGap = true;
+    }
+
+    // Consecutive messages from one person share an avatar and name, the way
+    // every messaging app does it. People type in bursts, so this is where
+    // most of the space was actually going.
+    const grouped = !brokeByGap && prevPid && msg.playerId === prevPid;
+    const mentionsMe = Array.isArray(msg.mentions) && msg.mentions.indexOf(myPlayerId) >= 0;
+
+    const div = document.createElement('div');
+    div.className = 'chat-msg' + (isMine ? ' me' : '') + (grouped ? ' grouped' : '')
+      + (mentionsMe ? ' mentions-me' : '');
+    div.dataset.playerId = msg.playerId || '';
+    div.dataset.ts = String(ts);
+
+    if (!grouped) {
+      const avatar = document.createElement('div');
+      avatar.className = 'chat-avatar';
+      const hue = chatAvatarHue(msg.playerId || msg.name);
+      avatar.style.background = `linear-gradient(135deg, hsl(${hue} 55% 42%), hsl(${(hue + 40) % 360} 55% 30%))`;
+      avatar.textContent = (msg.name || '?').trim().charAt(0) || '?';
+      div.appendChild(avatar);
+    }
 
     const body = document.createElement('div');
     body.className = 'chat-body';
+    if (!grouped) {
+      const nameEl = document.createElement('span');
+      nameEl.className = 'chat-name';
+      nameEl.textContent = msg.name || '?';
+      body.appendChild(nameEl);
+      body.appendChild(document.createTextNode(' '));
+    }
     if (msg.type === 'gif' && msg.gifUrl) {
-      body.innerHTML = `<span class="chat-name">${escapeHtml(msg.name)}</span>`;
       const img = document.createElement('img');
       img.src = msg.gifUrl;
       img.className = 'chat-gif';
       img.alt = 'GIF';
       body.appendChild(img);
     } else {
-      body.innerHTML =
-        `<span class="chat-name">${escapeHtml(msg.name)}</span> ` +
-        `<span class="chat-text">${escapeHtml(msg.text)}</span>`;
-    }
-    const time = chatShortTime(msg.ts);
-    if (time) {
-      const timeEl = document.createElement('span');
-      timeEl.className = 'chat-time';
-      timeEl.textContent = time;
-      body.appendChild(timeEl);
+      const textEl = document.createElement('span');
+      textEl.className = 'chat-text';
+      renderChatText(textEl, msg.text, msg.mentions, playerNameById, myPlayerId);
+      body.appendChild(textEl);
     }
     div.appendChild(body);
 
@@ -4378,11 +4654,15 @@
     const input = document.getElementById('chat-input');
     const text = input.value.trim();
     if (!text) return;
-    socket.emit('chat_message', { roomCode: myRoomCode, type: 'text', text }, (res) => {
+    socket.emit('chat_message', {
+      roomCode: myRoomCode, type: 'text', text,
+      mentions: collectMentions(text, tableChatPeople()),
+    }, (res) => {
       if (!res.ok) setGameError(res.error);
     });
     input.value = '';
   }
+  wireMentionBar('chat-input', 'chat-mention-bar', tableChatPeople);
   document.getElementById('btn-chat-send').onclick = sendChat;
   document.getElementById('chat-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendChat();
