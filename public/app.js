@@ -1584,6 +1584,8 @@
   let groupScreenData = null;
   let groupBoardTab = 'month';
   let groupBellTimer = null;
+  let groupChatMsgs = [];
+  let marathonDays = 7;
 
   // Tells the server which groups this client is watching, so it can count us
   // as present and push live updates. Sent on connect and whenever the
@@ -1715,7 +1717,82 @@
       list.appendChild(li);
     });
 
+    renderMarathonStrip(group);
+    renderGroupChat(group.chat || []);
     renderGroupBoard();
+  }
+
+  // The marathon is started by the admin and runs a fixed number of days, so
+  // this strip has three states rather than one: running (with a countdown),
+  // just ended (with the winner), and none at all. Between marathons games
+  // still count on the daily board -- the group isn't dead in the gaps.
+  function renderMarathonStrip(group) {
+    const state = document.getElementById('group-marathon-state');
+    const sub = document.getElementById('group-marathon-sub');
+    const startBtn = document.getElementById('btn-start-marathon');
+    if (!state || !sub || !startBtn) return;
+    const m = (group && group.marathon) || {};
+
+    if (m.running) {
+      const days = Math.ceil((m.msLeft || 0) / 86400000);
+      state.textContent = days <= 1 ? 'Marathon ends today' : 'Marathon ends in ' + days + ' days';
+      sub.textContent = (m.days ? m.days + '-day marathon · ' : '') +
+        'whoever leads at the end takes the crown';
+      startBtn.classList.add('hidden');
+      return;
+    }
+    if (m.ended) {
+      state.textContent = m.winnerName ? 'Marathon over — ' + m.winnerName + ' won' : 'Marathon over';
+      sub.textContent = 'Starting another resets the board.';
+      startBtn.textContent = 'Start a new marathon';
+    } else {
+      state.textContent = 'No marathon running';
+      sub.textContent = group && group.isAdmin
+        ? 'Start one to give everyone a reason to play daily.'
+        : 'The group admin can start one.';
+      startBtn.textContent = 'Start a marathon';
+    }
+    // isAdmin only arrives on our own get_group (a broadcast has no viewer);
+    // renderGroupScreen already carries it forward across pushes.
+    startBtn.classList.toggle('hidden', !(group && group.isAdmin));
+  }
+
+  function chatClock(ts) {
+    const d = new Date(ts || Date.now());
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  function renderGroupChat(list) {
+    const ul = document.getElementById('group-chat-list');
+    const empty = document.getElementById('group-chat-empty');
+    if (!ul || !empty) return;
+    groupChatMsgs = list || [];
+    ul.innerHTML = '';
+    const me = myFirebaseUid();
+    groupChatMsgs.forEach((m) => {
+      const li = document.createElement('li');
+      li.className = 'group-chat-msg' + (m.uid && m.uid === me ? ' mine' : '');
+      li.innerHTML =
+        '<span class="gc-time">' + escapeHtml(chatClock(m.at)) + '</span>' +
+        '<span class="gc-name">' + escapeHtml(m.name || 'Player') + '</span>' +
+        escapeHtml(m.text || '');
+      ul.appendChild(li);
+    });
+    empty.classList.toggle('hidden', groupChatMsgs.length > 0);
+    ul.classList.toggle('hidden', groupChatMsgs.length === 0);
+    ul.scrollTop = ul.scrollHeight;
+  }
+
+  // Champions rows used to be keyed by calendar month. They now record when
+  // the marathon ended and how long it ran -- but old rows are still sitting
+  // in Firestore, so both shapes have to render.
+  function championLabel(c) {
+    if (c && c.endedAt) {
+      const d = new Date(c.endedAt);
+      const when = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+      return c.days ? c.days + 'd · ' + when : when;
+    }
+    return (c && c.month) || '';
   }
 
   function renderGroupBoard() {
@@ -1757,7 +1834,7 @@
           `<span class="st-rank">👑</span>` +
           `<span class="st-name">${escapeHtml(c.name)}</span>` +
           `<span class="st-wins">${c.points}</span>` +
-          `<span class="st-meta">${escapeHtml(c.month)}</span>`;
+          `<span class="st-meta">${escapeHtml(championLabel(c))}</span>`;
         board.appendChild(li);
       });
     } else {
@@ -1775,9 +1852,14 @@
     const note = document.querySelector('.group-scoring-note');
     if (note) note.classList.toggle('hidden', groupBoardTab === 'recent' || groupBoardTab === 'champions');
     empty.textContent = groupBoardTab === 'champions'
-      ? 'No months finished yet.'
+      ? 'No marathons finished yet.'
       : groupBoardTab === 'recent' ? 'No games yet.'
-      : 'Nothing scored yet.';
+      // The marathon tab's empty state has two quite different causes, and
+      // "nothing scored yet" for the second one reads as though the app has
+      // lost your points.
+      : (groupBoardTab === 'month' && !(g.marathon && (g.marathon.running || g.marathon.ended)))
+        ? 'No marathon running. Games still count on Today.'
+        : 'Nothing scored yet.';
   }
 
   document.getElementById('btn-group-back').onclick = () => {
@@ -1834,6 +1916,89 @@
       };
     });
   })();
+
+  // ---- start a marathon ----
+  document.getElementById('btn-start-marathon').onclick = () => {
+    if (!groupScreenData) return;
+    marathonDays = 7;
+    const tabs = document.getElementById('marathon-days-tabs');
+    tabs.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s.dataset.days === '7'));
+    document.getElementById('marathon-start-error').textContent = '';
+    document.getElementById('marathon-start-dialog').classList.remove('hidden');
+  };
+
+  (function wireMarathonDayTabs() {
+    const tabs = document.getElementById('marathon-days-tabs');
+    if (!tabs) return;
+    tabs.querySelectorAll('.seg').forEach((seg) => {
+      seg.onclick = () => {
+        marathonDays = Number(seg.dataset.days);
+        tabs.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s === seg));
+      };
+    });
+  })();
+
+  document.getElementById('btn-marathon-cancel').onclick = () => {
+    document.getElementById('marathon-start-dialog').classList.add('hidden');
+  };
+
+  document.getElementById('btn-marathon-confirm').onclick = async () => {
+    if (!groupScreenCode) return;
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('start_marathon', {
+      code: groupScreenCode,
+      days: marathonDays,
+      firebaseIdToken,
+    }, (res) => {
+      if (!res || !res.ok) {
+        // Shown inside the dialog rather than as a landing toast -- the
+        // dialog is covering the screen, so a toast behind it is invisible.
+        document.getElementById('marathon-start-error').textContent =
+          (res && res.error) || 'Could not start it.';
+        return;
+      }
+      document.getElementById('marathon-start-dialog').classList.add('hidden');
+      logAnalytics('marathon_started');
+      // The server broadcasts the new state, but that broadcast carries no
+      // viewer, so re-asking keeps isAdmin and the Start button correct.
+      openGroupScreen(groupScreenCode, groupScreenData && groupScreenData.name);
+    });
+  };
+
+  // ---- group chat ----
+  async function sendGroupChat() {
+    const input = document.getElementById('input-group-chat');
+    const text = (input.value || '').trim();
+    if (!text || !groupScreenCode) return;
+    if (!getPlayerName()) return setLandingError('Enter your name');
+    // Cleared immediately rather than in the ack: a message that sits in the
+    // box until the server answers feels broken on a slow connection.
+    input.value = '';
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('group_chat_send', {
+      code: groupScreenCode,
+      text,
+      name: getPlayerName(),
+      firebaseIdToken,
+    }, (res) => {
+      if (!res || !res.ok) setLandingError((res && res.error) || 'Could not send that.');
+    });
+  }
+
+  document.getElementById('btn-group-chat-send').onclick = sendGroupChat;
+  document.getElementById('input-group-chat').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); sendGroupChat(); }
+  });
+
+  // One message at a time, not a whole group_update -- a full refresh means a
+  // Firestore read, and paying for a document read per chat message would be
+  // absurd. The 30-minute window is enforced server-side; nothing here needs
+  // to expire anything.
+  socket.on('group_chat', ({ code, msg }) => {
+    if (!msg || code !== groupScreenCode) return;
+    groupChatMsgs.push(msg);
+    renderGroupChat(groupChatMsgs);
+  });
 
   // Live updates: presence changes, someone raising a hand, a game starting.
   socket.on('group_update', ({ group }) => {
