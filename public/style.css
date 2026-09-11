@@ -1971,3 +1971,47 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .dialog-actions { display: flex; gap: 8px; margin-top: 14px; }
 .dialog-actions button { flex: 1; }
+
+/* ==========================================================================
+   Marathon strip + group chat
+   ========================================================================== */
+.group-marathon-strip {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px; margin-bottom: 10px;
+  background: var(--jade-panel-alt); border: 1px solid var(--jade-border);
+  border-radius: var(--radius-md);
+}
+.group-marathon-state { font-size: 15px; font-weight: 600; color: var(--text-light); }
+.group-marathon-sub { font-size: 12px; color: var(--text-muted); }
+.group-marathon-strip button { margin-top: 8px; }
+.group-marathon-strip button.hidden { display: none; }
+
+/* Fixed height so the chat can never push the input off the bottom of a
+   phone as messages arrive -- the list scrolls, the page doesn't grow. */
+.group-chat-list {
+  list-style: none; margin: 0 0 8px; padding: 0;
+  max-height: 190px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.group-chat-list.hidden { display: none; }
+.group-chat-msg {
+  padding: 7px 10px; border-radius: var(--radius-sm);
+  background: var(--jade-panel-alt); font-size: 14px;
+  color: var(--text-light); word-break: break-word;
+}
+.group-chat-msg .gc-name { font-weight: 600; font-size: 12px; color: var(--gold-bright); margin-right: 6px; }
+.group-chat-msg .gc-time { float: right; font-size: 11px; color: var(--text-muted); }
+.group-chat-msg.mine { background: rgba(46,160,120,0.18); }
+
+.group-chat-row { display: flex; gap: 8px; align-items: center; }
+.group-chat-row input {
+  flex: 1; min-width: 0; padding: 12px 14px; border-radius: var(--radius-md);
+  border: 1px solid var(--jade-border); background: var(--jade-panel-alt);
+  color: var(--text-light);
+  /* 16px or iOS zooms the whole page in when the field is focused. */
+  font-size: 16px;
+}
+/* Overrides the app-wide button{width:100%}, which would otherwise push the
+   input down onto its own line -- the same rule that once squeezed the group
+   code into a sliver at the screen edge. */
+.group-chat-row button { width: auto; flex: 0 0 auto; padding: 12px 18px; }
