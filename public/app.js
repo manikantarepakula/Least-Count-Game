@@ -734,6 +734,28 @@
     };
   })();
 
+  // ------------------------------------------------------------------
+  // The intro splash is dismissed by a CSS animation ALONE (introFadeOut,
+  // 2.2s delay, forwards). The markup says a JS timer isn't needed so it
+  // "can never get stuck open" -- that is backwards: with no JS path, an
+  // animation that never runs or never completes leaves a full-screen
+  // element at z-index 999 with pointer-events on, and nothing in the app
+  // can remove it.
+  //
+  // Observed stuck at opacity 1 during the audit, after the tab was
+  // backgrounded during load -- on a phone that is just "the screen locked
+  // while the game was opening". An OS-level "remove animations" setting
+  // would do the same.
+  //
+  // Removing the node outright is the safe way out: the animation has run
+  // its course by 2.8s (2.2 delay + 0.6 duration) and the splash has no
+  // other job afterwards.
+  // ------------------------------------------------------------------
+  setTimeout(() => {
+    const intro = document.getElementById('screen-intro');
+    if (intro && intro.parentNode) intro.parentNode.removeChild(intro);
+  }, 3200);
+
   document.addEventListener('click', function initAudioOnce() {
     Sound.init();
     document.removeEventListener('click', initAudioOnce);
@@ -1880,8 +1902,8 @@
     const title = document.getElementById('group-board-title');
     if (title) {
       title.textContent = groupBoardTab === 'recent' ? 'Recent games'
-        : groupBoardTab === 'champions' ? '👑 Champions'
-        : '🏆 Marathon';
+        : groupBoardTab === 'champions' ? 'Champions'
+        : 'Marathon';
     }
 
     if (groupBoardTab === 'recent') {
@@ -2499,7 +2521,28 @@
   //    the dropdown itself (#landing-error) plus a brief pulse on the
   //    avatar, for anyone who does have it open already. Whichever a
   //    player actually notices, the message gets through.
-  function setLandingError(msg) {
+  // ------------------------------------------------------------------
+  // Server error strings are shown to the player verbatim, so anything the
+  // server didn't phrase deliberately lands in the UI as-is. Creating a group
+  // on the live build printed "8 RESOURCE_EXHAUSTED: Quota exceeded." into
+  // the toast -- a raw Firestore gRPC code, to a family playing cards.
+  //
+  // Messages we wrote ("Only the group admin can start a marathon") pass
+  // through untouched; this only rewrites the ones that are plainly not ours,
+  // and logs the original so it's still debuggable.
+  // ------------------------------------------------------------------
+  function friendlyError(msg) {
+    const raw = (msg || '').toString().trim();
+    if (!raw) return '';
+    const looksInternal = /^\d+\s+[A-Z][A-Z_]{3,}/.test(raw)
+      || /RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|PERMISSION_DENIED|UNAUTHENTICATED|INTERNAL|ECONNREFUSED|ETIMEDOUT/.test(raw);
+    if (!looksInternal) return raw;
+    console.warn('[LC] internal error shown as generic:', raw);
+    return 'That’s not available right now — please try again in a moment.';
+  }
+
+  function setLandingError(rawMsg) {
+    const msg = friendlyError(rawMsg);
     document.getElementById('landing-error').textContent = msg || '';
     const toast = document.getElementById('landing-toast-error');
     if (toast) {
@@ -2928,6 +2971,10 @@
   // dealer-rotated play order (which also already excludes anyone eliminated
   // or quit) -- rather than plain join order, so who's sitting next to you
   // on screen always matches who you actually play after/before.
+  // Must match .seat { width } in style.css -- the clamp below is in percent
+  // of the table, so it needs the seat's pixel width to convert.
+  const SEAT_WIDTH_PX = 96;
+
   function renderOvalTable(game, orderOverride) {
     const oval = document.getElementById('oval-table');
     oval.querySelectorAll('.seat').forEach((el) => el.remove());
@@ -2957,7 +3004,14 @@
       if (game && game.eliminated && game.eliminated.includes(p.playerId)) seatEl.classList.add('eliminated');
       if (game && game.quit && game.quit.includes(p.playerId)) seatEl.classList.add('quit');
       if (p.playerId === myPlayerId && myTurnPulseActive) seatEl.classList.add('my-turn-pulse');
-      seatEl.style.left = left + '%';
+      // Keep the seat fully on screen. The ring puts side seats at 7% and
+      // 93% of the table and, at 96px wide centred on that point, they hung
+      // 5px off each edge on a 375px phone -- measured on the live build,
+      // both sides, every game. Clamping against the table's real width
+      // fixes it at any screen size instead of nudging the radius by feel.
+      const tableW = oval.getBoundingClientRect().width || 1;
+      const halfSeatPct = (SEAT_WIDTH_PX / 2) / tableW * 100;
+      seatEl.style.left = Math.min(100 - halfSeatPct, Math.max(halfSeatPct, left)) + '%';
       seatEl.style.top = top + '%';
 
       // Tap a seat to report/mute that player -- never wired for yourself
@@ -3169,6 +3223,10 @@
 
     const isMyTurn = game.currentPlayer === myPlayerId;
     const currentName = playerName(game.currentPlayer);
+    // Only on the TRANSITION to your turn, so a chat you deliberately
+    // reopened mid-turn isn't slammed shut on every game_state push.
+    if (isMyTurn && !game.roundOver && prevCurrentPlayerForChat !== myPlayerId) closeChatForMyTurn();
+    prevCurrentPlayerForChat = game.currentPlayer;
 
     // Round number went into the LEFT of the game bar, which was empty --
     // .game-top was justify-content:flex-end, so everything sat on the right.
@@ -3312,6 +3370,9 @@
   const REVEAL_MAX_SEAT_TILES = 5;
   const REVEAL_HOLD_MS = 8000;
   let revealPhaseActive = false;
+  // Whose turn it was on the previous render -- used to spot the moment the
+  // turn becomes yours (see closeChatForMyTurn).
+  let prevCurrentPlayerForChat = null;
   let revealTimer = null;
   let revealPendingGame = null;
 
@@ -3411,7 +3472,10 @@
       valEl.appendChild(scoreEl);
     }
     const runningTotal = game.scores ? game.scores[playerId] : undefined;
-    if (runningTotal !== undefined) {
+    // In round one the running total IS the round score, so showing both
+    // reintroduces exactly the duplicate this panel was changed to remove --
+    // "+11 › 11". Only show where it leads once that tells you something new.
+    if (runningTotal !== undefined && runningTotal !== roundScore) {
       const arrow = document.createElement('span');
       arrow.className = 'seat-reveal-arrow';
       arrow.textContent = '\u203a';
@@ -3546,7 +3610,25 @@
     });
   };
 
-  function setGameError(msg) { document.getElementById('game-error').textContent = msg || ''; }
+  function setGameError(msg) {
+    document.getElementById('game-error').textContent = friendlyError(msg) || '';
+  }
+
+  // ------------------------------------------------------------------
+  // The chat sheet covers the hand tray and both action buttons -- measured
+  // on the live build, it takes the bottom ~55% of the screen. The turn
+  // timer stays visible above it, so with chat open on your turn you can
+  // watch 15 seconds run out while unable to reach your cards.
+  //
+  // So the sheet yields: the moment the turn becomes yours, it closes. The
+  // alternative (shrinking it) leaves a cramped chat AND a cramped hand, and
+  // still hides the buttons on shorter phones.
+  // ------------------------------------------------------------------
+  function closeChatForMyTurn() {
+    const panel = document.getElementById('chat-panel');
+    if (!panel || panel.classList.contains('hidden')) return;
+    document.getElementById('btn-chat-close').click();
+  }
 
   // Remembers every name this client has ever seen for a playerId, and never
   // forgets one -- unlike latestRoom.players, which the server actively
@@ -4142,6 +4224,19 @@
       if (window.LCAds && !adsRemoved) window.LCAds.showInterstitial();
     });
   }
+  // Leaving from the TABLE. Until now the only exits were the lobby, the
+  // round-result overlay (which auto-advances in 10 seconds) and game over --
+  // so mid-round there was no way out at all, and because a refresh
+  // auto-rejoins the stored room there was no way back to the menu either.
+  // Confirmed, because it forfeits the game.
+  const leaveDialog = () => document.getElementById('leave-game-dialog');
+  document.getElementById('btn-leave-game').onclick = () => leaveDialog().classList.remove('hidden');
+  document.getElementById('btn-leave-game-cancel').onclick = () => leaveDialog().classList.add('hidden');
+  document.getElementById('btn-leave-game-confirm').onclick = () => {
+    leaveDialog().classList.add('hidden');
+    leaveRoom();
+  };
+
   document.getElementById('btn-leave-lobby').onclick = leaveRoom;
   document.getElementById('btn-leave-round-result').onclick = leaveRoom;
   document.getElementById('btn-leave-gameover').onclick = leaveRoom;
@@ -4441,7 +4536,7 @@
   function applyStatsToEl(el, stats) {
     if (!stats) { el.classList.add('hidden'); el.textContent = ''; return; }
     el.classList.remove('hidden');
-    el.textContent = `🎮 ${stats.gamesPlayed} games · 🏆 ${stats.wins} wins`;
+    el.textContent = `${stats.gamesPlayed} games · ${stats.wins} wins`;
   }
 
   function loadStatsIntoPopover(playerId, statsEl) {
