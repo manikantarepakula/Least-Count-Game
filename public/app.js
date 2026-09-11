@@ -1355,15 +1355,42 @@
     } catch (e) { return []; }
   }
 
+  // The set of codes we're watching, order-independent. Only this decides
+  // whether the server needs telling again -- the list's ORDER changes every
+  // time a group is opened (most recent first) and that's a local display
+  // concern the server has no interest in.
+  function watchedCodesKey() {
+    return readRememberedGroups().map((g) => g.code).sort().join(',');
+  }
+
   function rememberGroup(code, name) {
     if (!code) return;
+    const before = watchedCodesKey();
     try {
       const list = readRememberedGroups().filter((g) => g.code !== code);
       list.unshift({ code, name: name || code, lastOpenedAt: Date.now() });
       localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list.slice(0, GROUPS_MAX_REMEMBERED)));
     } catch (e) { /* storage blocked -- the link still works, just no shortcut */ }
     renderGroupsBlock();
-    watchGroups();
+    // ------------------------------------------------------------------
+    // THIS CALL USED TO BE UNCONDITIONAL, AND IT WAS A FEEDBACK LOOP.
+    //
+    // socket.on('group_update') calls rememberGroup() to keep names fresh.
+    // rememberGroup() called watchGroups(). watchGroups() emits watch_groups.
+    // The server answered watch_groups by broadcasting group_update -- to
+    // EVERY member of the group. Each of those arrivals started the cycle
+    // again, once per member, so it amplified rather than settling:
+    //
+    //   one person opening a 6-member group, five round trips deep
+    //   -> ~9,300 group_update messages and ~1,550 Firestore reads
+    //
+    // It never terminated on its own; it just ran at whatever rate the
+    // network allowed, for as long as anyone had a group open. That is the
+    // slowdown that arrived with permanent groups.
+    //
+    // Re-registering only when the set of codes actually changed breaks it.
+    // ------------------------------------------------------------------
+    if (watchedCodesKey() !== before) watchGroups();
   }
 
   function groupInviteLinkFor(code) {
@@ -1591,15 +1618,20 @@
   // as present and push live updates. Sent on connect and whenever the
   // remembered list changes -- always the COMPLETE list, since the server
   // treats it as a replace.
-  async function watchGroups() {
+  // Second guard behind rememberGroup's, because this is reachable from
+  // several places and every needless call costs the server a Firestore read
+  // per group. `force` is for reconnects, where the server has a new socket
+  // id and genuinely does need telling again even though nothing here moved.
+  let lastWatchKey = null;
+  async function watchGroups(force) {
     const codes = readRememberedGroups().map((g) => g.code);
     if (groupScreenCode && !codes.includes(groupScreenCode)) codes.push(groupScreenCode);
+    const name = localStorage.getItem(NAME_STORAGE_KEY) || '';
+    const key = codes.slice().sort().join(',') + '|' + name;
+    if (!force && key === lastWatchKey) return;
+    lastWatchKey = key;
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('watch_groups', {
-      codes,
-      name: localStorage.getItem(NAME_STORAGE_KEY) || '',
-      firebaseIdToken,
-    });
+    socket.emit('watch_groups', { codes, name, firebaseIdToken });
   }
 
   async function openGroupScreen(code, fallbackName) {
@@ -2029,7 +2061,9 @@
     }
   });
 
-  socket.on('connect', () => { watchGroups(); });
+  // Forced: a reconnect means a new socket id server-side, so presence has to
+  // be re-registered even though nothing changed on this device.
+  socket.on('connect', () => { watchGroups(true); });
 
   // --------------------------------------------------------------------
   // Invite mode: what someone sees after tapping a shared link.
