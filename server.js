@@ -665,6 +665,8 @@ const RATE_LIMITS = {
   create_group: { max: 3, windowMs: 60000 },        // groups are permanent -- much tighter than rooms
   get_group: { max: 20, windowMs: 30000 },
   ring_bell: { max: 6, windowMs: 60000 },
+  start_marathon: { max: 5, windowMs: 60000 },      // starting one is rare and admin-only
+  group_chat_send: { max: 5, windowMs: 10000 },     // same as in-room chat
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
   report_player: { max: 5, windowMs: 60000 },
@@ -785,18 +787,20 @@ function looksLikeGroupCode(key) {
 // ---------------------------------------------------------------------------
 // Date keys, in INDIA time, not UTC.
 //
-// The marathon runs on calendar months and the daily board on calendar days,
-// both read by people in IST. On UTC boundaries a month would end at 5:30am
-// IST, so a late game on the 31st would land in the following month -- which
-// is exactly the sort of thing that causes an argument when there's a crown
-// riding on the result.
+// The daily board runs on calendar days read by people in IST. On a UTC
+// boundary the day would roll over at 5:30am IST, so a late-night game would
+// land on tomorrow's board -- exactly the sort of thing that causes an
+// argument when there's a standing riding on it.
+//
+// The marathon no longer needs a month key: it runs for a fixed number of
+// days from whenever the admin starts it (see MARATHON_DAY_OPTIONS), so its
+// boundaries are absolute timestamps and carry no timezone question at all.
 // ---------------------------------------------------------------------------
 const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
 function istKey(ts, len) {
   return new Date((ts || Date.now()) + IST_OFFSET_MS).toISOString().slice(0, len);
 }
 function istDayKey(ts) { return istKey(ts, 10); }   // YYYY-MM-DD
-function istMonthKey(ts) { return istKey(ts, 7); }  // YYYY-MM
 
 async function readGroup(code) {
   if (!db || !looksLikeGroupCode(code)) return null;
@@ -995,6 +999,96 @@ function pointsToList(points, members) {
 }
 
 // ---------------------------------------------------------------------------
+// Marathon lifecycle -- STARTED BY THE ADMIN, runs a fixed number of days.
+//
+// This replaced an automatic calendar-month marathon, for two reasons. A
+// month that begins on the 1st whether or not the group is ready means most
+// groups meet the feature halfway through and already behind; and "ends on
+// the 31st" is a rule you have to be told, whereas "6 days left" is a fact
+// you can read off the screen. Someone deciding to start it is also what
+// makes it an event rather than a leaderboard that was always quietly
+// running in the background.
+//
+// Lengths are fixed choices rather than free entry. A predictable end date is
+// the whole point: free text invites someone typing 365, and a marathon that
+// never ends is just a leaderboard decided in week two -- exactly what this
+// exists to prevent.
+// ---------------------------------------------------------------------------
+const MARATHON_DAY_OPTIONS = [7, 14, 30];
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function marathonRunning(m, now) {
+  return !!(m && m.active && m.endsAt && (now || Date.now()) < m.endsAt);
+}
+function marathonExpired(m, now) {
+  return !!(m && m.active && m.endsAt && (now || Date.now()) >= m.endsAt);
+}
+
+// Archives a finished marathon into the champions list and hands back a
+// cleared one.
+//
+// Called LAZILY -- from the next finished game, and from start_marathon --
+// rather than from a scheduled job, which would need somewhere reliable to
+// run and would wake up for groups that stopped playing months ago. A dormant
+// group simply archives whenever it next does something. The visible
+// consequence is that an expired marathon keeps showing its final standings
+// until then, which is the right thing to show anyway.
+//
+// The champions list survives the wipe; the detailed table does not. It's the
+// only thing giving a group long-term memory -- without it, a family that has
+// played all year has nothing to show for it.
+function closeMarathon(marathon, champions, members) {
+  const out = (champions || []).slice();
+  const finished = pointsToList(marathon && marathon.points, members);
+  if (finished.length) {
+    const champ = finished[0];
+    out.push({
+      endedAt: new Date((marathon && marathon.endsAt) || Date.now()).toISOString(),
+      days: (marathon && marathon.days) || null,
+      uid: champ.uid,
+      name: champ.name,
+      points: champ.points,
+    });
+  }
+  return { champions: out, marathon: { active: false, points: {} } };
+}
+
+// ---------------------------------------------------------------------------
+// Group chat -- in memory, last 30 minutes only.
+//
+// Deliberately NOT in Firestore. The free tier allows 20,000 writes a day and
+// a chatty group would spend them on messages nobody will ever read twice.
+// Half an hour is long enough to arrange a game, which is the only thing this
+// chat is for; nobody scrolls up to see what was said this morning.
+//
+// Be clear about the consequences: a server restart drops every message, and
+// messages live in one process only. Both are fine for "are we playing
+// tonight?" and would be unacceptable for anything worth keeping.
+// ---------------------------------------------------------------------------
+const GROUP_CHAT_TTL_MS = 30 * 60 * 1000;
+const GROUP_CHAT_MAX = 80;
+const groupChats = new Map(); // code -> [{ id, uid, name, text, at }]
+
+// Pruned on read rather than on a timer. A timer per group would hold a
+// dormant group's messages in the event loop for no reason, and the only
+// moments anyone can observe the list are reads.
+function groupChatHistory(code) {
+  const list = groupChats.get(code);
+  if (!list) return [];
+  const cutoff = Date.now() - GROUP_CHAT_TTL_MS;
+  const kept = list.filter((m) => m.at >= cutoff);
+  if (kept.length) groupChats.set(code, kept);
+  else groupChats.delete(code);
+  return kept;
+}
+
+function addGroupChat(code, msg) {
+  const kept = groupChatHistory(code);
+  kept.push(msg);
+  groupChats.set(code, kept.slice(-GROUP_CHAT_MAX));
+}
+
+// ---------------------------------------------------------------------------
 // Records a finished group game: marathon points, the daily board, the
 // members list, and the recent-games strip -- all in ONE document write.
 //
@@ -1009,7 +1103,6 @@ async function recordGroupGame(room) {
   if (!db || !room.groupCode || !room.game) return;
   const ref = db.collection('groups').doc(room.groupCode);
   const now = Date.now();
-  const monthKey = istMonthKey(now);
   const dayKey = istDayKey(now);
 
   // Snapshot before the transaction -- the room can change under us while a
@@ -1045,39 +1138,27 @@ async function recordGroupGame(room) {
         };
       }
 
-      // ---- month rollover ----
-      let marathon = data.marathon || { month: monthKey, points: {} };
-      const champions = (data.champions || []).slice();
-      if (marathon.month !== monthKey) {
-        const finished = pointsToList(marathon.points, members);
-        if (finished.length) {
-          const champ = finished[0];
-          // No back-to-back ad-free months. The winner is by definition the
-          // heaviest player and heavy players keep winning -- six months
-          // running would permanently remove the best-earning user rather
-          // than run a promotion. The crown and the champions entry are
-          // unaffected; only the ad-free benefit passes down.
-          const previous = champions.length ? champions[champions.length - 1] : null;
-          const repeat = previous && previous.uid === champ.uid;
-          const adFreeUid = repeat ? (finished[1] ? finished[1].uid : null) : champ.uid;
-          champions.push({
-            month: marathon.month,
-            uid: champ.uid,
-            name: champ.name,
-            points: champ.points,
-            adFreeUid,
-          });
-          if (adFreeUid) {
-            // Entitlement lives on the USER, not the group -- ads are global
-            // to a person, and someone can be champion of more than one
-            // group. Written outside the transaction below.
-            tx.set(db.collection('users').doc(adFreeUid), { adFreeMonth: monthKey }, { merge: true });
-          }
-        }
-        marathon = { month: monthKey, points: {} };
+      // ---- marathon ----
+      // Points only count while a marathon is actually RUNNING. Between
+      // marathons games still land on the daily board, so a group is never
+      // dead in the gaps -- there's simply no crown riding on them.
+      //
+      // The prize is the crown and the champions-list entry, nothing else.
+      // The ad-free month that used to sit here is gone: it removed the
+      // group's heaviest player -- by definition the winner -- from ad
+      // revenue for a month, which is a promotion aimed squarely at the
+      // person you least want to stop earning from.
+      let marathon = data.marathon || { active: false, points: {} };
+      let champions = (data.champions || []).slice();
+      if (marathonExpired(marathon, now)) {
+        const closed = closeMarathon(marathon, champions, members);
+        champions = closed.champions;
+        marathon = closed.marathon;
       }
-      for (const uid of uids) {
-        marathon.points[uid] = (marathon.points[uid] || 0) + earned[uid];
+      if (marathonRunning(marathon, now)) {
+        for (const uid of uids) {
+          marathon.points[uid] = (marathon.points[uid] || 0) + earned[uid];
+        }
       }
 
       // ---- daily board ----
@@ -1168,10 +1249,17 @@ async function groupPayload(code, viewerUid) {
     (rank[a.status] - rank[b.status]) ||
     ((b.lastPlayedAt || '') > (a.lastPlayedAt || '') ? 1 : -1));
 
-  const monthKey = istMonthKey();
   const dayKey = istDayKey();
-  const marathon = group.marathon || {};
   const daily = group.daily || {};
+
+  // Marathon display state. An EXPIRED marathon still shows its final
+  // standings and its winner -- the archive write happens on the next
+  // finished game or when the admin starts the next one, because this is a
+  // read path called on every broadcast and must never write.
+  const m = group.marathon || {};
+  const mRunning = marathonRunning(m);
+  const mEnded = marathonExpired(m);
+  const mStandings = (mRunning || mEnded) ? pointsToList(m.points, stored) : [];
 
   return {
     code,
@@ -1186,18 +1274,25 @@ async function groupPayload(code, viewerUid) {
     gameInProgress: playingUids.size > 0,
     recent: group.recent || [],
     champions: group.champions || [],
-    // A stale month/day is reported as empty rather than as last month's
-    // table -- the rollover itself happens lazily on the next finished game
-    // (see recordGroupGame), so until then the stored points belong to a
-    // period that has already ended.
     marathon: {
-      month: monthKey,
-      standings: marathon.month === monthKey ? pointsToList(marathon.points, stored) : [],
+      running: mRunning,
+      ended: mEnded,
+      days: m.days || null,
+      startedAt: m.startedAt || null,
+      endsAt: m.endsAt || null,
+      // Sent as a duration rather than a timestamp so a phone with a wrong
+      // clock still counts down correctly.
+      msLeft: mRunning ? Math.max(0, m.endsAt - Date.now()) : 0,
+      standings: mStandings,
+      winnerName: mEnded && mStandings.length ? mStandings[0].name : null,
+      options: MARATHON_DAY_OPTIONS,
     },
     daily: {
       day: dayKey,
+      // A stale day is reported as empty rather than as yesterday's table.
       standings: daily.day === dayKey ? pointsToList(daily.points, stored) : [],
     },
+    chat: groupChatHistory(code),
   };
 }
 
@@ -2069,7 +2164,8 @@ io.on('connection', (socket) => {
         adminUid: verifiedUid || null,
         createdAt: nowIso,
         members: {},
-        marathon: { month: istMonthKey(), points: {} },
+        // No marathon until an admin starts one (see MARATHON_DAY_OPTIONS).
+        marathon: { active: false, points: {} },
         daily: { day: istDayKey(), points: {} },
         recent: [],
         champions: [],
@@ -2195,6 +2291,92 @@ io.on('connection', (socket) => {
       }
       await broadcastGroup(clean);
       ack && ack({ ok: true, rang });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Start a marathon. Admin-only, fixed lengths, one at a time.
+  socket.on('start_marathon', async ({ code, days, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'start_marathon')) throw new Error('Too many requests too quickly. Please wait a moment.');
+      const clean = (code || '').trim().toUpperCase();
+      if (!looksLikeGroupCode(clean)) throw new Error('Group not found.');
+      if (!db) throw new Error('Not available right now.');
+      const n = Number(days);
+      // Validated against the same list the UI offers. The UI showing three
+      // buttons is not a constraint -- anyone can emit this event directly.
+      if (!MARATHON_DAY_OPTIONS.includes(n)) throw new Error('Pick 7, 14 or 30 days.');
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      if (!verifiedUid) throw new Error('Could not identify you -- try again in a moment.');
+
+      const ref = db.collection('groups').doc(clean);
+      const now = Date.now();
+      await db.runTransaction(async (tx) => {
+        const doc = await tx.get(ref);
+        if (!doc.exists) throw new Error('Group not found.');
+        const data = doc.data() || {};
+        // Enforced here, not merely hidden in the UI -- same rule as rename
+        // and delete.
+        if (data.adminUid && data.adminUid !== verifiedUid) {
+          throw new Error('Only the group admin can start a marathon.');
+        }
+        const marathon = data.marathon || { active: false, points: {} };
+        if (marathonRunning(marathon, now)) throw new Error('A marathon is already running.');
+        // Starting the next one is the other moment an expired marathon gets
+        // archived (see closeMarathon) -- otherwise a group that finishes a
+        // marathon and immediately starts another would lose the champion.
+        let champions = (data.champions || []).slice();
+        if (marathonExpired(marathon, now)) {
+          champions = closeMarathon(marathon, champions, data.members || {}).champions;
+        }
+        tx.set(ref, {
+          marathon: {
+            active: true,
+            days: n,
+            startedAt: now,
+            endsAt: now + n * DAY_MS,
+            startedByUid: verifiedUid,
+            points: {},
+          },
+          champions,
+        }, { merge: true });
+      });
+      await broadcastGroup(clean);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Group chat. Lives in memory for 30 minutes -- see groupChats above for
+  // why it deliberately never reaches Firestore.
+  socket.on('group_chat_send', async ({ code, text, name, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'group_chat_send')) throw new Error('You are sending messages too quickly. Please slow down.');
+      const clean = (code || '').trim().toUpperCase();
+      if (!looksLikeGroupCode(clean)) throw new Error('Group not found.');
+      const group = await readGroup(clean);
+      if (!group) throw new Error('Group not found.');
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      if (!verifiedUid) throw new Error('Could not identify you -- try again in a moment.');
+      // Same censor the in-room chat uses, so the two can't drift apart.
+      const cleanText = censorText((text || '').toString().trim().slice(0, 300));
+      if (!cleanText) throw new Error('Empty message.');
+
+      const msg = {
+        id: crypto.randomUUID(),
+        uid: verifiedUid,
+        name: (name || '').trim().slice(0, 20) || 'Player',
+        text: cleanText,
+        at: Date.now(),
+      };
+      addGroupChat(clean, msg);
+      // Pushed as a single message rather than by re-broadcasting the whole
+      // group: a full group_update means a Firestore read, and paying for a
+      // document read per chat message would be absurd.
+      io.to(`g:${clean}`).emit('group_chat', { code: clean, msg });
+      ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
