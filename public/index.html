@@ -313,12 +313,20 @@
 
     <div class="mode-block">
       <h3 id="group-board-title">🏆 Marathon</h3>
+      <!-- A marathon no longer runs by itself on calendar months -- the admin
+           starts one and picks how long it lasts. "Ends in 6 days" is a fact
+           you can read; "resets on the 1st" was a rule you had to be told. -->
+      <div class="group-marathon-strip">
+        <div id="group-marathon-state" class="group-marathon-state">No marathon running</div>
+        <div id="group-marathon-sub" class="group-marathon-sub"></div>
+        <button id="btn-start-marathon" class="secondary hidden" type="button">Start a marathon</button>
+      </div>
       <!-- Recent sits in the SAME control as the marathon boards (Sept 2026):
            four stacked sections made the group screen a long scroll, and
            Recent and the standings are both "what has been happening here",
            so they belong behind one toggle rather than two headings. -->
       <div class="segmented segmented-4" id="group-board-tabs">
-        <button type="button" class="seg active" data-board="month">Month</button>
+        <button type="button" class="seg active" data-board="month">Marathon</button>
         <button type="button" class="seg" data-board="today">Today</button>
         <button type="button" class="seg" data-board="recent">Recent</button>
         <button type="button" class="seg" data-board="champions">Champs</button>
@@ -326,6 +334,23 @@
       <ul id="group-board" class="standings-list"></ul>
       <p id="group-board-empty" class="hint hidden">Nothing here yet.</p>
       <p class="hint group-scoring-note">One point for every player you finish ahead of, plus one for turning up.</p>
+    </div>
+
+    <!-- Group chat. Deliberately an ORDINARY block in the page rather than
+         the bottom sheet the game screen uses. The game screen needed a
+         sheet because it's locked to one viewport and can't scroll, which is
+         what made its keyboard handling so involved. This screen scrolls
+         normally, so the browser already does the right thing when the
+         keyboard opens -- borrowing the sheet here would import all of that
+         complexity to solve a problem this screen doesn't have. -->
+    <div class="mode-block">
+      <h3>Chat <span class="group-count">· last 30 minutes</span></h3>
+      <ul id="group-chat-list" class="group-chat-list"></ul>
+      <p id="group-chat-empty" class="hint">No messages yet — say when you're free.</p>
+      <div class="group-chat-row">
+        <input id="input-group-chat" type="text" maxlength="300" placeholder="Message the group" autocomplete="off" />
+        <button id="btn-group-chat-send" class="primary" type="button" aria-label="Send">Send</button>
+      </div>
     </div>
   </div>
 </div>
@@ -752,6 +777,27 @@
     <div class="dialog-actions">
       <button id="btn-group-rename-cancel" class="secondary" type="button">Cancel</button>
       <button id="btn-group-rename-save" class="primary" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Fixed lengths, not a free number field. A predictable end date is the
+     whole point of the countdown, and free entry invites someone typing 365
+     -- which turns the marathon back into a leaderboard decided in week two,
+     the exact thing it exists to prevent. -->
+<div id="marathon-start-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel">
+    <h2>Start a marathon</h2>
+    <p class="hint">Points reset now. Whoever leads when it ends takes the crown and a permanent line on the champions list.</p>
+    <div class="segmented" id="marathon-days-tabs">
+      <button type="button" class="seg active" data-days="7">7 days</button>
+      <button type="button" class="seg" data-days="14">14 days</button>
+      <button type="button" class="seg" data-days="30">30 days</button>
+    </div>
+    <p id="marathon-start-error" class="error"></p>
+    <div class="dialog-actions">
+      <button id="btn-marathon-cancel" class="secondary" type="button">Cancel</button>
+      <button id="btn-marathon-confirm" class="primary" type="button">Start</button>
     </div>
   </div>
 </div>
