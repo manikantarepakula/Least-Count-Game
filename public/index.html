@@ -84,12 +84,18 @@
   </div>
 </div>
 
-<!-- 3-second intro splash, pure CSS -- shows the same card fan full-screen
-     for ~2.4s then fades itself out and away automatically (no JS timer
-     needed, so it can never get stuck open). No wordmark here (dropped per
-     feedback -- looked off against the floating cards); the cards alone
-     carry it. The real landing screen underneath is already fully
-     loaded/interactive the whole time, just visually covered until this fades. -->
+<!-- 3-second intro splash. Shows the card fan full-screen for ~2.4s, then
+     the introFadeOut animation takes it away.
+     CORRECTION (Sept 2026 audit): this used to claim that having no JS timer
+     meant it "can never get stuck open". It is the other way round -- with
+     no JS path, an animation that never runs or never completes leaves this
+     element covering the whole app at z-index 999 with pointer-events on,
+     and nothing can dismiss it. It was found stuck at opacity 1 after the
+     tab was backgrounded during load, which on a phone is just "the screen
+     locked while the game was opening". app.js now removes this node at
+     3.2s regardless, and style.css skips the animation under
+     prefers-reduced-motion. The landing screen underneath is fully
+     interactive the whole time either way. -->
 <div id="screen-intro">
   <div class="intro-glow"></div>
   <div class="intro-cards">
@@ -162,7 +168,7 @@
          ================================================================ -->
     <div class="mode-blocks">
       <div class="mode-block" id="groups-block">
-        <h3>👪 Your Groups</h3>
+        <h3>Your Groups</h3>
         <!-- Scrolls internally after ~2 rows so a player with eight groups
              can't push everything else off the screen. -->
         <ul id="groups-list" class="group-list"></ul>
@@ -174,7 +180,7 @@
       </div>
 
       <div class="mode-block">
-        <h3>🔑 Join with a code</h3>
+        <h3>Join with a code</h3>
         <!-- Its OWN section, not a row tucked under "Quick Room" (Sept 2026).
              It accepted a group code before, but sat under a heading that
              said "one-off game, expires with the session" -- so nobody would
@@ -190,7 +196,7 @@
       </div>
 
       <div class="mode-block">
-        <h3>👥 Quick Room</h3>
+        <h3>Quick Room</h3>
         <p class="mode-block-sub">One-off game, code expires with the session</p>
         <div class="row">
           <button id="btn-create" class="secondary">Create Room</button>
@@ -201,10 +207,10 @@
            blocks stay in the DOM with their original ids so app.js's
            existing handlers are untouched -- only visibility switches. -->
       <div class="mode-block">
-        <h3>⚡ Quick Play</h3>
+        <h3>Quick Play</h3>
         <div class="segmented" id="quickplay-toggle">
-          <button type="button" class="seg active" data-mode="online">🌐 Online</button>
-          <button type="button" class="seg" data-mode="bots">🤖 vs Bots</button>
+          <button type="button" class="seg active" data-mode="online">Online</button>
+          <button type="button" class="seg" data-mode="bots">vs Bots</button>
         </div>
         <div id="quickplay-online">
           <label for="input-online-playercount">No. of players</label>
@@ -312,7 +318,7 @@
 
 
     <div class="mode-block">
-      <h3 id="group-board-title">🏆 Marathon</h3>
+      <h3 id="group-board-title">Marathon</h3>
       <!-- A marathon no longer runs by itself on calendar months -- the admin
            starts one and picks how long it lasts. "Ends in 6 days" is a fact
            you can read; "resets on the 1st" was a rule you had to be told. -->
@@ -467,6 +473,10 @@
     <div class="top-actions">
       <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
       <button id="btn-scores" class="tiny">Scores</button>
+      <!-- The only mid-round exit. Without it the table had no way out at
+           all, and a refresh auto-rejoins the room, so there was no way back
+           to the menu either. -->
+      <button id="btn-leave-game" class="tiny leave-btn" type="button" aria-label="Leave game" title="Leave game"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg></button>
     </div>
   </div>
 
@@ -635,7 +645,7 @@
         <p>Once your hand value is 5 or less, you can declare "Least Count!" If your total really is the lowest at the table, every other player scores their own hand value as penalty points. If you're wrong, you take the penalty instead.</p>
       </div>
       <div class="rules-item">
-        <div class="rules-heading">🏆 Elimination & Winning</div>
+        <div class="rules-heading">Elimination &amp; Winning</div>
         <p>Points carry over every round. Cross the elimination score (chosen before the game, e.g. 100/200) and you're eliminated. Play continues until only one player remains — they win!</p>
       </div>
     </div>
@@ -729,7 +739,7 @@
          typing. -->
     <input id="chat-input" type="text" maxlength="300" placeholder="Say something..."
            enterkeyhint="send" autocomplete="off" autocapitalize="sentences" />
-    <button id="btn-chat-send" class="tiny primary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg></button>
+    <button id="btn-chat-send" class="tiny primary" aria-label="Send message"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg></button>
   </div>
 </div>
 
@@ -738,7 +748,7 @@
      server.js for the exact ordering. -->
 <div id="overlay-standings" class="overlay hidden">
   <div class="card-panel">
-    <h2>🏆 Leaderboard</h2>
+    <h2>Leaderboard</h2>
     <ul id="lobby-standings" class="standings-list"></ul>
     <p id="lobby-standings-empty" class="hint hidden">No games yet — the first result lands here.</p>
     <button id="btn-close-standings" class="secondary">Close</button>
@@ -795,6 +805,17 @@
      the exact thing it exists to prevent. -->
 <!-- Table nickname. Changes what this table sees for this game only; the
      saved profile name and the group marathon board both keep the real one. -->
+<div id="leave-game-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel">
+    <h2>Leave this game?</h2>
+    <p class="hint">You'll forfeit the game and go back to the menu. The others carry on without you.</p>
+    <div class="dialog-actions">
+      <button id="btn-leave-game-cancel" class="secondary" type="button">Stay</button>
+      <button id="btn-leave-game-confirm" class="primary" type="button">Leave</button>
+    </div>
+  </div>
+</div>
+
 <div id="table-name-dialog" class="overlay hidden">
   <div class="card-panel dialog-panel">
     <h2>Your name at this table</h2>
