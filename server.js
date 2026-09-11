@@ -664,6 +664,9 @@ const RATE_LIMITS = {
   create_room: { max: 5, windowMs: 60000 },
   create_group: { max: 3, windowMs: 60000 },        // groups are permanent -- much tighter than rooms
   get_group: { max: 20, windowMs: 30000 },
+  // Backstop against the re-watch loop ever returning in another form. A
+  // legitimate client sends this only when its group list changes.
+  watch_groups: { max: 20, windowMs: 10000 },
   ring_bell: { max: 6, windowMs: 60000 },
   start_marathon: { max: 5, windowMs: 60000 },      // starting one is rare and admin-only
   group_chat_send: { max: 5, windowMs: 10000 },     // same as in-room chat
@@ -802,10 +805,42 @@ function istKey(ts, len) {
 }
 function istDayKey(ts) { return istKey(ts, 10); }   // YYYY-MM-DD
 
-async function readGroup(code) {
+// ---------------------------------------------------------------------------
+// Group document reads, with a short in-memory cache.
+//
+// Every broadcastGroup() reads this document, and broadcasts fire on presence
+// changes, the bell, table expiry and every round start. On Firestore's free
+// tier that is 50,000 reads a day shared across the whole app -- and a
+// re-watch loop in an earlier version exhausted it outright, which surfaces
+// as "8 RESOURCE_EXHAUSTED: Quota exceeded" and takes every group, stat and
+// leaderboard down with it until the quota resets.
+//
+// A few seconds of staleness costs nothing here: the parts of the group
+// screen that must be live -- who's online, who's at the table, who's playing
+// -- are all held in memory and never came from this document anyway. What IS
+// in the document (standings, members, recent games) only changes when a game
+// finishes or an admin acts, and both of those invalidate the entry
+// explicitly, so nothing waits out the TTL to appear.
+// ---------------------------------------------------------------------------
+const GROUP_CACHE_TTL_MS = 20 * 1000;
+const groupCache = new Map(); // code -> { data, at }
+
+function invalidateGroupCache(code) {
+  if (code) groupCache.delete(code);
+}
+
+async function readGroup(code, opts) {
   if (!db || !looksLikeGroupCode(code)) return null;
+  const fresh = !!(opts && opts.fresh);
+  const hit = groupCache.get(code);
+  if (!fresh && hit && (Date.now() - hit.at) < GROUP_CACHE_TTL_MS) return hit.data;
   const doc = await db.collection('groups').doc(code).get();
-  return doc.exists ? doc.data() : null;
+  const data = doc.exists ? doc.data() : null;
+  // Cached by reference. Every caller treats this as read-only; anything
+  // needing to MUTATE a group goes through a transaction with its own
+  // tx.get(), never through here.
+  groupCache.set(code, { data, at: Date.now() });
+  return data;
 }
 
 // Builds the in-memory room for a group that doesn't currently have one --
@@ -852,19 +887,47 @@ async function createRoomForGroup(code) {
 // ---------------------------------------------------------------------------
 const groupPresence = new Map(); // code -> Map(uid -> { name, sockets:Set })
 
+// What each socket is currently watching, so watch_groups can act on the
+// DIFFERENCE instead of tearing presence down and rebuilding it wholesale.
+// The old handler removed the socket from every group and re-added it on
+// every call, which made an identical repeat call look like a presence change
+// in every group -- and each of those "changes" broadcast a group_update,
+// costing a Firestore read, to every member. Combined with the client
+// re-watching on receipt of a group_update, that was an amplifying loop.
+const socketWatchedGroups = new Map(); // socket.id -> Set(codes)
+
+// Returns true when this socket was NOT already present, i.e. something
+// actually changed and a broadcast is warranted.
 function addPresence(code, uid, name, socketId) {
-  if (!code || !uid) return;
+  if (!code || !uid) return false;
   if (!groupPresence.has(code)) groupPresence.set(code, new Map());
   const members = groupPresence.get(code);
   const entry = members.get(uid) || { name, sockets: new Set() };
+  const had = entry.sockets.has(socketId);
   entry.name = name || entry.name;
   entry.sockets.add(socketId);
   members.set(uid, entry);
+  return !had;
+}
+
+// Drops one socket from ONE group. Returns whether anything changed.
+function removePresenceFromGroup(code, socketId) {
+  const members = groupPresence.get(code);
+  if (!members) return false;
+  let changed = false;
+  for (const [uid, entry] of members) {
+    if (!entry.sockets.delete(socketId)) continue;
+    changed = true;
+    if (entry.sockets.size === 0) members.delete(uid);
+  }
+  if (members.size === 0) groupPresence.delete(code);
+  return changed;
 }
 
 // Returns the group codes whose presence actually changed, so the caller only
 // re-broadcasts where something moved.
 function removePresenceForSocket(socketId) {
+  socketWatchedGroups.delete(socketId);
   const touched = [];
   for (const [code, members] of groupPresence) {
     for (const [uid, entry] of members) {
@@ -1186,6 +1249,9 @@ async function recordGroupGame(room) {
         lastPlayedAt: new Date(now).toISOString(),
       }, { merge: true });
     });
+    // New standings, members and recent-games row must be visible on the
+    // group screen straight away, not after the cache TTL.
+    invalidateGroupCache(room.groupCode);
   } catch (e) {
     // A leaderboard write must never break the end of a game.
     console.error(`[Groups] recordGroupGame failed for ${room.groupCode}:`, e.message);
@@ -2170,6 +2236,7 @@ io.on('connection', (socket) => {
         recent: [],
         champions: [],
       });
+      invalidateGroupCache(code);
       console.log(`[Groups] Created "${cleanName}" -> ${code}`);
       ack && ack({ ok: true, code, name: cleanName });
     } catch (e) {
@@ -2194,6 +2261,7 @@ io.on('connection', (socket) => {
       if (!verifiedUid || group.adminUid !== verifiedUid) throw new Error('Only the person who created this group can rename it.');
 
       await db.collection('groups').doc(clean).set({ name: newName }, { merge: true });
+      invalidateGroupCache(clean);   // or the old name is served for 20s
       const room = rooms.get(clean);
       if (room) { room.groupName = newName; broadcastRoom(room); }
       await broadcastGroup(clean);
@@ -2217,6 +2285,7 @@ io.on('connection', (socket) => {
       if (!verifiedUid || group.adminUid !== verifiedUid) throw new Error('Only the person who created this group can delete it.');
 
       await db.collection('groups').doc(clean).delete();
+      invalidateGroupCache(clean);   // a deleted group must not linger in cache
       clearTable(clean);
       const room = rooms.get(clean);
       // Unbind the live room so a finishing game can't resurrect a marathon
@@ -2250,20 +2319,46 @@ io.on('connection', (socket) => {
   // the remembered-groups list changes.
   socket.on('watch_groups', async ({ codes, name, firebaseIdToken }, ack) => {
     try {
+      if (isRateLimited(socket, 'watch_groups')) throw new Error('Too many requests too quickly. Please wait a moment.');
       const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const list = Array.isArray(codes) ? codes.slice(0, 20) : [];
-      // Drop anything this socket was previously watching -- the client sends
-      // the complete list every time, so this is a replace, not an add.
-      const stale = removePresenceForSocket(socket.id);
+
+      const wanted = new Set();
       for (const raw of list) {
         const c = String(raw || '').trim().toUpperCase();
-        if (!looksLikeGroupCode(c)) continue;
-        socket.join(`g:${c}`);
-        if (verifiedUid) addPresence(c, verifiedUid, cleanName, socket.id);
+        if (looksLikeGroupCode(c)) wanted.add(c);
       }
-      const touched = new Set([...stale, ...list.map((c) => String(c || '').trim().toUpperCase())]);
-      for (const c of touched) if (looksLikeGroupCode(c)) await broadcastGroup(c);
+
+      // ----------------------------------------------------------------
+      // Act on the DIFFERENCE, not a teardown-and-rebuild.
+      //
+      // This used to call removePresenceForSocket() and then re-add every
+      // code, so an identical repeat call registered as a presence change in
+      // every group and broadcast a group_update -- one Firestore read each
+      // -- to every member. Paired with the client re-watching whenever it
+      // received a group_update, that amplified without limit and is what
+      // slowed the whole app down once groups shipped.
+      //
+      // Now nothing is broadcast unless somebody genuinely arrived or left.
+      // ----------------------------------------------------------------
+      const before = socketWatchedGroups.get(socket.id) || new Set();
+      const changed = new Set();
+
+      for (const c of before) {
+        if (wanted.has(c)) continue;
+        socket.leave(`g:${c}`);
+        if (removePresenceFromGroup(c, socket.id)) changed.add(c);
+      }
+      for (const c of wanted) {
+        if (!before.has(c)) socket.join(`g:${c}`);
+        if (verifiedUid && addPresence(c, verifiedUid, cleanName, socket.id)) changed.add(c);
+      }
+
+      if (wanted.size) socketWatchedGroups.set(socket.id, wanted);
+      else socketWatchedGroups.delete(socket.id);
+
+      for (const c of changed) await broadcastGroup(c);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -2342,6 +2437,7 @@ io.on('connection', (socket) => {
           champions,
         }, { merge: true });
       });
+      invalidateGroupCache(clean);   // the countdown must appear immediately
       await broadcastGroup(clean);
       ack && ack({ ok: true });
     } catch (e) {
