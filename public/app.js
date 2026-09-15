@@ -2043,7 +2043,15 @@
     if (!code || code !== groupScreenCode) return;
     const me = myFirebaseUid();
     if (!me || !Array.isArray(seatUids) || seatUids.indexOf(me) < 0) return;
-    if (myRoomCode) return;               // already in a room, nothing to do
+    // Only skip if we are genuinely sitting on a room screen already.
+    //
+    // This used to test `myRoomCode`, which sounds like "am I in a room?" but
+    // isn't: it's seeded from localStorage at page load and survives a FAILED
+    // rejoin, so anyone carrying a stale session was silently skipped and
+    // left behind while the host walked into the game alone. Asking which
+    // screen is actually showing can't go stale.
+    const active = document.querySelector('.screen.active');
+    if (!active || active.id !== 'screen-group') return;
     joinRoomByKey(roomCode || code);
   });
 
@@ -4985,6 +4993,15 @@
     socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId }, (res) => {
       if (!res.ok) {
         localStorage.removeItem('leastcount_session');
+        // ALSO clear the in-memory copies. Removing only the stored session
+        // left myRoomCode holding a dead room code for the rest of the page's
+        // life, and several checks read it as "am I in a room?" -- which it
+        // never meant. That is what stopped a group member being pulled into
+        // a game: the auto-join saw a stale room code and skipped them, while
+        // the manual Join button (no such check) worked, so leaving the table
+        // and rejoining appeared to "fix" it.
+        myRoomCode = null;
+        myPlayerId = null;
         // Same cleanup leaveRoom() already does -- without it, a failed
         // rejoin sent you back to the landing screen but left the red chat
         // FAB (and, if it was open, the whole chat panel) floating on top,
