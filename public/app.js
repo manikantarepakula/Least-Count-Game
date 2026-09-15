@@ -1665,6 +1665,8 @@
     if (!code) return;
     groupScreenCode = code;
     groupBoardTab = 'month';
+    const gErr = document.getElementById('group-error');
+    if (gErr) gErr.textContent = '';   // stale error from a previous visit
     document.getElementById('group-title').textContent = fallbackName || 'Group';
     document.getElementById('group-code-text').textContent = code;
     showScreen('screen-group');
@@ -2040,19 +2042,27 @@
   // aren't seated ignore it; they can still tap "Join the table" afterwards,
   // which is also the fallback if this push is missed entirely.
   socket.on('group_game_starting', ({ code, roomCode, seatUids }) => {
-    if (!code || code !== groupScreenCode) return;
-    const me = myFirebaseUid();
-    if (!me || !Array.isArray(seatUids) || seatUids.indexOf(me) < 0) return;
-    // Only skip if we are genuinely sitting on a room screen already.
-    //
-    // This used to test `myRoomCode`, which sounds like "am I in a room?" but
-    // isn't: it's seeded from localStorage at page load and survives a FAILED
-    // rejoin, so anyone carrying a stale session was silently skipped and
-    // left behind while the host walked into the game alone. Asking which
-    // screen is actually showing can't go stale.
+    const target = roomCode || code;
+    if (!target) return;
+
+    // Already sitting in a room -- the screen is the only honest signal for
+    // that. (An earlier version tested myRoomCode, which does NOT mean "in a
+    // room": it is seeded from localStorage at load and survives a failed
+    // rejoin, so a stale value silently disqualified people.)
     const active = document.querySelector('.screen.active');
-    if (!active || active.id !== 'screen-group') return;
-    joinRoomByKey(roomCode || code);
+    if (active && (active.id === 'screen-lobby' || active.id === 'screen-game')) return;
+
+    // seatUids only arrives on the FALLBACK broadcast. Normally the server
+    // sends this event straight to our socket because it knows we're seated,
+    // and then there is nothing to match -- being sent it is the whole
+    // instruction. Matching on our own Firebase uid was the fragile part:
+    // LCAuth.getUser() can be null on a client that is otherwise fine, and a
+    // null there meant being left behind with no error and no button.
+    if (Array.isArray(seatUids)) {
+      const me = myFirebaseUid();
+      if (!me || seatUids.indexOf(me) < 0) return;
+    }
+    joinRoomByKey(target);
   });
 
   (function wireGroupBoardTabs() {
@@ -2604,6 +2614,13 @@
   function setLandingError(rawMsg) {
     const msg = friendlyError(rawMsg);
     document.getElementById('landing-error').textContent = msg || '';
+    // Mirror onto the group screen. Both surfaces this writes to below live
+    // INSIDE #screen-landing, so anything that failed while the group screen
+    // was up was invisible -- a refused start or a join that didn't take just
+    // looked like the button did nothing. That silence is most of the reason
+    // the group start bug was so hard to pin down.
+    const groupErr = document.getElementById('group-error');
+    if (groupErr) groupErr.textContent = msg || '';
     const toast = document.getElementById('landing-toast-error');
     if (toast) {
       if (msg) {
