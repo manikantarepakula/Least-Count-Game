@@ -299,6 +299,11 @@
       <button id="btn-group-play" class="primary hidden" type="button">Start Game</button>
       <button id="btn-group-standdown" class="secondary hidden" type="button">Leave the table</button>
       <p id="group-bell-hint" class="hint"></p>
+               <!-- Errors raised while this screen is up. setLandingError() writes
+           into #landing-toast-error, which lives inside the LANDING screen --
+           so a failure here (a join that didn't take, a start that was
+           refused) was completely invisible and read as "nothing happened". -->
+      <p id="group-error" class="error"></p>
     </div>
 
     <div class="mode-block">
