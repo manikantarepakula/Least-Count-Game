@@ -676,6 +676,7 @@ const RATE_LIMITS = {
   ring_bell: { max: 6, windowMs: 60000 },
   set_name: { max: 8, windowMs: 60000 },
   start_marathon: { max: 5, windowMs: 60000 },      // starting one is rare and admin-only
+  start_group_game: { max: 10, windowMs: 60000 },
   group_chat_send: { max: 5, windowMs: 10000 },     // same as in-room chat
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
@@ -1299,6 +1300,20 @@ async function groupPayload(code, viewerUid) {
     }
   }
 
+  // Anyone sitting in the group's ROOM, whether or not cards have been dealt.
+  // This is separate from playingUids on purpose: the room exists as a lobby
+  // before any game starts, and reporting only "a game is in progress" is
+  // what stranded the host alone -- everyone else's screen had no way to know
+  // there was a table to walk into, so nobody could join and the host could
+  // never reach the two-player minimum.
+  const inRoom = [];
+  if (room) {
+    for (const pid of room.order) {
+      const p = room.players.get(pid);
+      if (p && !p.isBot && p.connected) inRoom.push({ uid: p.firebaseUid || null, name: p.name });
+    }
+  }
+
   // A member is anyone who's finished a game here, plus anyone present now --
   // so somebody who joins and raises a hand appears immediately rather than
   // only after their first completed game.
@@ -1348,6 +1363,12 @@ async function groupPayload(code, viewerUid) {
     // than letting someone tap it and silently do nothing.
     bellReadyAt: table ? (table.lastBellAt + BELL_COOLDOWN_MS) : 0,
     gameInProgress: playingUids.size > 0,
+    // The room is open (lobby or mid-game). The client uses this to offer
+    // "Join the table" to everyone, which is the safety net if the
+    // group_game_starting push is missed -- and the difference between a
+    // joinable table and a deadlock.
+    roomLive: inRoom.length > 0,
+    inRoom,
     recent: group.recent || [],
     champions: group.champions || [],
     marathon: {
@@ -2568,6 +2589,57 @@ io.on('connection', (socket) => {
       // document read per chat message would be absurd.
       io.to(`g:${clean}`).emit('group_chat', { code: clean, msg });
       ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // ------------------------------------------------------------------
+  // THE MISSING STEP. Raising a hand puts you in the table QUEUE
+  // (groupTables) -- an in-memory list of who wants to play. It does not put
+  // you in the room. Nothing converted one into the other, so "Start Game"
+  // took only the person who tapped it: the host landed in a lobby alone,
+  // below the two-player minimum and unable to start, while everyone else
+  // sat on the group screen with no button, because the "join" branch there
+  // only appears once a game has actually been DEALT. Total deadlock, and
+  // the whole reason groups didn't work.
+  //
+  // This pulls the queue into the room in one move: create the room if it
+  // doesn't exist, then tell every seated member's client to join it. One tap
+  // by the host, everyone arrives together.
+  // ------------------------------------------------------------------
+  socket.on('start_group_game', async ({ code, firebaseIdToken }, ack) => {
+    try {
+      if (isRateLimited(socket, 'start_group_game')) throw new Error('Too many requests too quickly. Please wait a moment.');
+      const clean = (code || '').trim().toUpperCase();
+      if (!looksLikeGroupCode(clean)) throw new Error('Group not found.');
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      if (!verifiedUid) throw new Error('Could not identify you -- try again in a moment.');
+
+      const table = getTable(clean);
+      if (!table || !table.seats.length) throw new Error('Nobody is at the table yet.');
+      // Whoever raised their hand first called the game. Enforced here, not
+      // just hidden in the UI.
+      const hostUid = tableHostUid(clean);
+      if (hostUid && hostUid !== verifiedUid) {
+        throw new Error('Only the person who called the game can start it.');
+      }
+
+      let room = rooms.get(clean);
+      if (!room) room = await createRoomForGroup(clean);
+      if (!room) throw new Error('Group not found.');
+
+      // Broadcast to the whole group room; each client decides whether it was
+      // for them by checking its own uid against seatUids. Sending per-socket
+      // would mean tracking which socket belongs to which member, which
+      // presence already does badly enough for one purpose.
+      io.to(`g:${clean}`).emit('group_game_starting', {
+        code: clean,
+        roomCode: clean,
+        seatUids: table.seats.map((s) => s.uid),
+      });
+      await broadcastGroup(clean);
+      ack && ack({ ok: true, roomCode: clean });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
