@@ -2629,15 +2629,43 @@ io.on('connection', (socket) => {
       if (!room) room = await createRoomForGroup(clean);
       if (!room) throw new Error('Group not found.');
 
-      // Broadcast to the whole group room; each client decides whether it was
-      // for them by checking its own uid against seatUids. Sending per-socket
-      // would mean tracking which socket belongs to which member, which
-      // presence already does badly enough for one purpose.
-      io.to(`g:${clean}`).emit('group_game_starting', {
-        code: clean,
-        roomCode: clean,
-        seatUids: table.seats.map((s) => s.uid),
-      });
+      // ----------------------------------------------------------------
+      // Tell the seated members DIRECTLY, socket by socket.
+      //
+      // The first version broadcast to the whole group room and shipped a
+      // seatUids list so each client could decide "is this for me?" -- which
+      // meant the client had to know its own Firebase uid at that instant.
+      // It often doesn't: LCAuth.getUser() returns whatever the auth state
+      // callback has set so far, and it was observed returning null on a
+      // client that was otherwise working fine. A member in that state was
+      // silently skipped, which is exactly the reported bug -- the host went
+      // in alone while everyone else sat there.
+      //
+      // The server already knows who is seated and which sockets belong to
+      // them (groupPresence). Sending straight to those sockets removes the
+      // guess: receiving the event IS the instruction, no matching needed.
+      // ----------------------------------------------------------------
+      const present = onlineMembers(clean);   // uid -> { name, sockets:Set }
+      let notified = 0;
+      for (const seat of table.seats) {
+        const entry = present.get(seat.uid);
+        if (!entry) continue;
+        for (const sid of entry.sockets) {
+          io.to(sid).emit('group_game_starting', { code: clean, roomCode: clean });
+          notified++;
+        }
+      }
+      // Fallback: presence knows nobody (all seats stale, or everyone
+      // reconnected since raising a hand). A broad nudge with the seat list
+      // is better than nobody moving -- clients match on it as before.
+      if (!notified) {
+        io.to(`g:${clean}`).emit('group_game_starting', {
+          code: clean,
+          roomCode: clean,
+          seatUids: table.seats.map((s) => s.uid),
+        });
+      }
+      console.log(`[Groups] ${clean} start -> notified ${notified} socket(s) of ${table.seats.length} seat(s)`);
       await broadcastGroup(clean);
       ack && ack({ ok: true, roomCode: clean });
     } catch (e) {
