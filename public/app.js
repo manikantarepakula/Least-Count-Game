@@ -1635,6 +1635,11 @@
   let groupBellTimer = null;
   let groupChatMsgs = [];
   let marathonDays = 7;
+  // What the group screen's Play button does right now: 'start' opens the
+  // table and brings everyone seated with you, 'join' walks into one that is
+  // already open. Set by renderGroupScreen alongside the button's label, so
+  // the two can't disagree.
+  let groupPlayMode = 'join';
 
   // Tells the server which groups this client is watching, so it can count us
   // as present and push live updates. Sent on connect and whenever the
@@ -1711,6 +1716,8 @@
     const meAtTable = group.members.some((m) => m.uid === myFirebaseUid() && m.status === 'table');
     const seated = group.atTable || [];
 
+    // groupPlayMode decides what the one Play button does when tapped --
+    // start the table, or walk into one that's already open.
     if (group.gameInProgress) {
       liveText.textContent = 'A game is in progress';
       liveNames.textContent = group.members.filter((m) => m.status === 'playing').map((m) => m.name).join(', ');
@@ -1718,7 +1725,23 @@
       standBtn.classList.add('hidden');
       playBtn.classList.remove('hidden');
       playBtn.textContent = 'Join the game';
+      groupPlayMode = 'join';
       hint.textContent = 'You’ll be dealt in at the start of the next round.';
+    } else if (group.roomLive) {
+      // The room is open but nothing is dealt yet -- somebody is sitting in
+      // the lobby waiting. This branch didn't exist, which is exactly how the
+      // host ended up alone with nobody able to reach them.
+      const names = (group.inRoom || []).map((p) => p.name);
+      liveText.textContent = names.length === 1
+        ? `${names[0]} is waiting to start`
+        : 'Table is open';
+      liveNames.textContent = names.join(', ');
+      bellBtn.classList.add('hidden');
+      standBtn.classList.add('hidden');
+      playBtn.classList.remove('hidden');
+      playBtn.textContent = 'Join the table';
+      groupPlayMode = 'join';
+      hint.textContent = 'Join and the game starts once everyone’s in.';
     } else if (seated.length) {
       liveText.textContent = seated.length === 1
         ? `${seated[0].name} is at the table`
@@ -1731,8 +1754,9 @@
       const iAmHost = group.hostUid && group.hostUid === myFirebaseUid();
       playBtn.classList.toggle('hidden', !(iAmHost && seated.length >= 2));
       playBtn.textContent = 'Start Game';
+      groupPlayMode = 'start';
       hint.textContent = seated.length >= 2
-        ? (iAmHost ? 'You called it — start when you’re ready.' : 'Waiting for the host to start.')
+        ? (iAmHost ? 'Everyone at the table comes with you.' : 'Waiting for the host to start.')
         : 'Waiting for someone else to join.';
     } else {
       liveText.textContent = 'No one at the table';
@@ -1740,6 +1764,10 @@
       bellBtn.classList.remove('hidden');
       standBtn.classList.add('hidden');
       playBtn.classList.add('hidden');
+      // Set even though the button is hidden -- a mode left over from the
+      // previous render is exactly the kind of stale flag that has bitten
+      // this project before.
+      groupPlayMode = 'join';
       hint.textContent = '';
     }
 
@@ -1988,12 +2016,36 @@
     socket.emit('stand_down', { code: groupScreenCode, firebaseIdToken });
   };
 
-  // Start Game and Join the game are the same action -- join the group's
-  // room. The server spins one up if there isn't one, and seats you at the
-  // next round if a game is already running.
-  document.getElementById('btn-group-play').onclick = () => {
-    if (groupScreenCode) joinRoomByKey(groupScreenCode);
+  // Start Game and Join are NOT the same action -- they used to be, and that
+  // was the bug. Joining is local: walk into the room. Starting is a server
+  // action that brings everyone at the table with you.
+  document.getElementById('btn-group-play').onclick = async () => {
+    if (!groupScreenCode) return;
+    if (groupPlayMode !== 'start') { joinRoomByKey(groupScreenCode); return; }
+    if (!getPlayerName()) return setLandingError('Enter your name');
+    // Starting is a SERVER action, not a local navigation. The old code just
+    // called joinRoomByKey here, which walked the host into an empty room on
+    // their own and left everyone else behind with no way in.
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('start_group_game', { code: groupScreenCode, firebaseIdToken }, (res) => {
+      if (!res || !res.ok) return setLandingError((res && res.error) || 'Could not start the game.');
+      logAnalytics('group_game_started');
+      // We're in the group room too, so the group_game_starting broadcast
+      // below brings us in on the same path as everyone else -- one code
+      // path, so the host can't end up somewhere the others aren't.
+    });
   };
+
+  // Everyone seated at the table walks into the room together. Guests who
+  // aren't seated ignore it; they can still tap "Join the table" afterwards,
+  // which is also the fallback if this push is missed entirely.
+  socket.on('group_game_starting', ({ code, roomCode, seatUids }) => {
+    if (!code || code !== groupScreenCode) return;
+    const me = myFirebaseUid();
+    if (!me || !Array.isArray(seatUids) || seatUids.indexOf(me) < 0) return;
+    if (myRoomCode) return;               // already in a room, nothing to do
+    joinRoomByKey(roomCode || code);
+  });
 
   (function wireGroupBoardTabs() {
     const tabs = document.getElementById('group-board-tabs');
