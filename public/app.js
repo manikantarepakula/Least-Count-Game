@@ -35,10 +35,26 @@
   //     their ad-free experience; they simply can't be sold it again, and
   //     nobody new is offered it. Deliberate: monetisation waits until
   //     people are playing regularly.
+  //
+  //   installPrompt -- ON. A card at the foot of the game-over scorecard
+  //     asking website players to install the Android app. Never shows inside
+  //     the app itself (the gate's first line is CLIENT_PLATFORM !== 'web')
+  //     and never on arrival, only after a FINISHED game.
+  //
+  //     Who it actually converts, while the app is in closed testing: people
+  //     already on the tester list who keep playing on the website anyway.
+  //     That is the single biggest risk to the 14-day window, so this is
+  //     aimed straight at it. Anyone NOT on the tester list who taps Install
+  //     will be told they aren't eligible -- unavoidable until the tester
+  //     list is a public Google Group, or production access is granted.
+  //
+  //     After production access: change INSTALL_URL to the /store/apps/details
+  //     link below and it converts everyone. Nothing else needs to move.
   // --------------------------------------------------------------------
   const FEATURES = {
     googleSignIn: false,
     removeAdsPurchase: false,
+    installPrompt: true,
   };
 
   const SUIT_SYMBOL = { S: '♠', H: '♥', D: '♦', C: '♣' };
@@ -1335,6 +1351,23 @@
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   }
+
+  // Landing panes. Four stacked blocks overflowed the viewport; a player
+  // wants either their permanent tables or a one-off game, never both at
+  // once. Invite mode hides the whole .mode-blocks wrapper, so these don't
+  // need to know about it.
+  (function wireLandingTabs() {
+    const tabs = document.getElementById('landing-tabs');
+    if (!tabs) return;
+    tabs.querySelectorAll('.seg').forEach((seg) => {
+      seg.onclick = () => {
+        tabs.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s === seg));
+        const want = seg.dataset.pane;
+        document.getElementById('pane-groups').classList.toggle('hidden', want !== 'groups');
+        document.getElementById('pane-quick').classList.toggle('hidden', want !== 'quick');
+      };
+    });
+  })();
 
   // ---------------- landing screen ----------------
   // Remembers whatever name was last typed/submitted, so returning players
@@ -3298,6 +3331,15 @@
       document.getElementById('overlay-round-result').classList.add('hidden');
     }
 
+    // A leave that was queued mid-round (see btn-leave-game-confirm) fires
+    // the moment the round is over, which is the first point the server will
+    // accept it.
+    if (leaveAfterRound && (game.roundOver || game.gameOver)) {
+      leaveAfterRound = false;
+      leaveRoom();
+      return;
+    }
+
     const isMyTurn = game.currentPlayer === myPlayerId;
     const currentName = playerName(game.currentPlayer);
     // Only on the TRANSITION to your turn, so a chat you deliberately
@@ -3450,6 +3492,9 @@
   // Whose turn it was on the previous render -- used to spot the moment the
   // turn becomes yours (see closeChatForMyTurn).
   let prevCurrentPlayerForChat = null;
+  // Someone tapped Leave mid-round. The server won't remove a player whose
+  // cards are in play, so the departure waits for the round to end.
+  let leaveAfterRound = false;
   let revealTimer = null;
   let revealPendingGame = null;
 
@@ -4214,6 +4259,107 @@
     return 'center';
   }
 
+  // ---------------- install prompt (website -> Play Store) ----------------
+  // 47 of 56 players in the fortnight to 19 Sept were on the website, and Play
+  // can only count app installs -- which is why production access was refused.
+  // This card is the ONLY channel to those players: they're anonymous, so
+  // there is no email, no phone, nothing but a nickname to reach them by.
+  //
+  // Shown only after a FINISHED game, deliberately. A first-time visitor who
+  // bounces is exactly the tester Google later flags as unengaged, so pushing
+  // them to install costs more than it earns; someone who played a game to the
+  // scorecard has already demonstrated the one thing that matters.
+  //
+  // While the app is in CLOSED TESTING this must be the opt-in url, not the
+  // store listing. Verified 19 Sept 2026 from a browser that is not on the
+  // tester list:
+  //   /store/apps/details?id=com.manikanta.leastcount -> "the requested URL
+  //     was not found on this server"  (dead end for every web player)
+  //   /apps/testing/com.manikanta.leastcount -> Google sign-in, then
+  //     "Become a tester"               (works)
+  //
+  // The opt-in page still only admits people whose Google account is on the
+  // tester list, so this link converts nobody unless that list is a Google
+  // Group anyone can join. Swap to the /store/apps/details url once production
+  // access is granted -- that is the only change needed here.
+  const INSTALL_URL = 'https://play.google.com/apps/testing/com.manikanta.leastcount';
+  const INSTALL_CHOICE_KEY = 'leastcount_install_prompt';
+  const INSTALL_SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
+  const INSTALL_DONE = 'installed';
+
+  function installPromptAllowed() {
+    if (!FEATURES.installPrompt) return false;
+    // Already inside the Capacitor app -- nothing to install.
+    if (CLIENT_PLATFORM !== 'web') return false;
+    // There is no iOS or desktop build, so the prompt would be a dead end.
+    if (!/Android/i.test(navigator.userAgent || '')) return false;
+    let stored = null;
+    try { stored = localStorage.getItem(INSTALL_CHOICE_KEY); } catch (e) { stored = null; }
+    if (stored === INSTALL_DONE) return false;
+    const until = Number(stored);
+    if (until && Date.now() < until) return false;
+    return true;
+  }
+
+  function rememberInstallChoice(value) {
+    // Private browsing throws on setItem; the prompt reappearing is a far
+    // smaller problem than the game erroring out on the scorecard.
+    try { localStorage.setItem(INSTALL_CHOICE_KEY, value); } catch (e) { /* ignore */ }
+  }
+
+  function buildInstallCard() {
+    const card = document.createElement('div');
+    card.className = 'install-card';
+
+    const title = document.createElement('div');
+    title.className = 'install-card-title';
+    title.textContent = 'Playing a lot? Get the app';
+
+    const hint = document.createElement('p');
+    hint.className = 'install-card-hint';
+    hint.textContent = 'Opens straight to the table, keeps you signed in, and works better on a phone than the browser does.';
+
+    const actions = document.createElement('div');
+    actions.className = 'install-card-actions';
+
+    const install = document.createElement('a');
+    install.className = 'primary install-card-btn';
+    install.href = INSTALL_URL;
+    install.target = '_blank';
+    install.rel = 'noopener';
+    install.textContent = 'Install';
+    install.addEventListener('click', () => {
+      logAnalytics('install_prompt_accepted', {});
+      rememberInstallChoice(INSTALL_DONE);
+      card.remove();
+    });
+
+    const later = document.createElement('button');
+    later.type = 'button';
+    later.className = 'secondary install-card-btn';
+    later.textContent = 'Not now';
+    later.addEventListener('click', () => {
+      logAnalytics('install_prompt_dismissed', {});
+      // Snooze rather than suppress forever: someone on their third game is a
+      // better prospect than the same person on their first.
+      rememberInstallChoice(String(Date.now() + INSTALL_SNOOZE_MS));
+      card.remove();
+    });
+
+    actions.appendChild(install);
+    actions.appendChild(later);
+    card.appendChild(title);
+    card.appendChild(hint);
+    card.appendChild(actions);
+    return card;
+  }
+
+  function maybeShowInstallCard(container) {
+    if (!container || !installPromptAllowed()) return;
+    logAnalytics('install_prompt_shown', {});
+    container.appendChild(buildInstallCard());
+  }
+
   function showGameOver(game) {
     logAnalytics('game_completed', {
       player_count: latestRoom ? latestRoom.players.length : undefined,
@@ -4248,6 +4394,7 @@
       row.innerHTML = `<span>${escapeHtml(playerName(pid))}</span><span>${deltaHtml}${score} pts total</span>`;
       body.appendChild(row);
     });
+    maybeShowInstallCard(body);
     const isHost = latestRoom && latestRoom.hostPlayerId === myPlayerId;
     document.getElementById('btn-new-game').classList.toggle('hidden', !isHost);
     document.getElementById('gameover-hint').textContent = isHost ? '' : 'Waiting for host to start a new game...';
@@ -4274,6 +4421,7 @@
       myPlayerId = null;
       latestRoom = null;
       latestGame = null;
+      leaveAfterRound = false;   // don't carry a queued leave into the next room
       window.__lastRoundResultShownFor = null;
       // Leaving mid-reveal would otherwise strand the phase flag as true,
       // and the next room's table would render every seat's reveal box
@@ -4311,6 +4459,22 @@
   document.getElementById('btn-leave-game-cancel').onclick = () => leaveDialog().classList.add('hidden');
   document.getElementById('btn-leave-game-confirm').onclick = () => {
     leaveDialog().classList.add('hidden');
+    // ----------------------------------------------------------------
+    // The server refuses to let anyone go mid-round ("Cannot leave in the
+    // middle of a round"), and it always has -- removing a player whose
+    // cards are in play would mean rewriting the turn rotation underneath
+    // everyone. This button was added without checking that, so tapping it
+    // during a hand just produced an error.
+    //
+    // So it queues instead: the intent is recorded, their turns keep being
+    // auto-played as they already would be, and the moment the round ends
+    // they're out. Honest about the wait rather than failing.
+    // ----------------------------------------------------------------
+    if (latestGame && !latestGame.roundOver && !latestGame.gameOver) {
+      leaveAfterRound = true;
+      setGameError('You’ll leave as soon as this round finishes.');
+      return;
+    }
     leaveRoom();
   };
 
