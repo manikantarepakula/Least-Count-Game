@@ -166,7 +166,28 @@
          groups list caps its visible height (see .group-list) rather than
          growing with every group you join.
          ================================================================ -->
+    <!-- Two panes instead of four stacked blocks (Sept 2026). Measured on a
+         375x812 phone, the four blocks came to 840px of content in an 812px
+         viewport, so the Home/Stats/Rules nav sat below the fold -- and with
+         the native AdMob banner drawn over the bottom ~50-64px in the app,
+         it looked like the ad was eating the menu. Two panes bring it to
+         812px exactly, nav included, banner safe zone still reserved.
+
+         A regular player only ever wants one of these two worlds: their
+         permanent tables, or a one-off game. "Join with a code" sits with
+         Groups because a shared code is nearly always a group code -- and
+         its own hint still covers the 4-letter room case.
+
+         Both panes stay in the DOM with every original id intact, so all of
+         app.js's existing handlers are untouched; only visibility switches.
+         See wireLandingTabs() in app.js. -->
+    <div class="segmented landing-tabs" id="landing-tabs">
+      <button type="button" class="seg active" data-pane="groups">Groups</button>
+      <button type="button" class="seg" data-pane="quick">Quick Play</button>
+    </div>
+
     <div class="mode-blocks">
+      <div id="pane-groups" class="landing-pane">
       <div class="mode-block" id="groups-block">
         <h3>Your Groups</h3>
         <!-- Scrolls internally after ~2 rows so a player with eight groups
@@ -195,6 +216,9 @@
         <p class="hint">4 letters for a one-off room, 5 for a group.</p>
       </div>
 
+      </div><!-- /pane-groups -->
+
+      <div id="pane-quick" class="landing-pane hidden">
       <div class="mode-block">
         <h3>Quick Room</h3>
         <p class="mode-block-sub">One-off game, code expires with the session</p>
@@ -232,6 +256,7 @@
           </div>
         </div>
       </div>
+      </div><!-- /pane-quick -->
     </div>
   </div>
 
