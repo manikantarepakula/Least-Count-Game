@@ -99,6 +99,10 @@ class LeastCountGame {
     this.eliminationScore = eliminationScore || ELIMINATION_SCORE;
     this.eliminated = new Set(); // out due to reaching the score limit
     this.quit = new Set(); // voluntarily left between rounds
+    // Players who have already spent their single rejoin this game. One per
+    // player per game -- a second elimination is final, so one person can't
+    // keep a game going indefinitely by coming back over and over.
+    this.rejoinsUsed = new Set();
     // Full round-by-round history, for the "See full scorecard" table --
     // separate from lastRoundResult (which only ever holds the MOST RECENT
     // round, overwritten every declare()). Each entry only lists players who
@@ -243,6 +247,62 @@ class LeastCountGame {
     this.playerIds.push(playerId);
     this.scores[playerId] = startingScore;
     this.log.push({ type: 'joined', round: this.roundNumber, playerId, startingScore });
+    return this.getPublicState();
+  }
+
+  /**
+   * Can this player be offered a way back in right now?
+   *
+   * Deliberately NOT offered once the game is over. An elimination that
+   * leaves only one player standing ends the game and crowns a winner --
+   * re-opening that to let the loser back in would un-declare a result
+   * everyone has already seen. In a two-player game this means elimination
+   * is simply final, which is correct: there was nobody left to play.
+   */
+  canRejoin(playerId) {
+    if (this.gameOver) return false;
+    if (!this.roundOver) return false;              // between rounds only
+    if (!this.eliminated.has(playerId)) return false;
+    if (this.quit.has(playerId)) return false;      // walking out is not elimination
+    if (this.rejoinsUsed.has(playerId)) return false;
+    return true;
+  }
+
+  /**
+   * The score a rejoining player would come back on: the highest score among
+   * players STILL IN the game.
+   *
+   * Note this is deliberately different from addPlayer()'s rule, which takes
+   * the max across every score on the board including eliminated players.
+   * For a brand-new arrival that's arguably fine; for a rejoiner it would be
+   * absurd -- their own 215 is on that board, so they would return already
+   * past the limit and be eliminated again before playing a card.
+   */
+  rejoinScoreFor(playerId) {
+    const others = this.activePlayers().filter((id) => id !== playerId);
+    if (!others.length) return 0;
+    return Math.max(0, ...others.map((id) => this.scores[id] || 0));
+  }
+
+  /**
+   * Puts an eliminated player back in, at rejoinScoreFor(). The engine does
+   * not decide WHETHER this is allowed to happen socially -- the player asks
+   * and the host approves, both in server.js. This only enforces that the
+   * game state permits it.
+   */
+  rejoinEliminated(playerId) {
+    if (this.gameOver) throw new Error('Game already over');
+    if (!this.roundOver) throw new Error('Cannot rejoin in the middle of a round');
+    if (!this.playerIds.includes(playerId)) throw new Error('Not a player in this game.');
+    if (this.quit.has(playerId)) throw new Error('That player left the table.');
+    if (!this.eliminated.has(playerId)) throw new Error('That player is not eliminated.');
+    if (this.rejoinsUsed.has(playerId)) throw new Error('Already rejoined once this game.');
+
+    const score = this.rejoinScoreFor(playerId);
+    this.eliminated.delete(playerId);
+    this.scores[playerId] = score;
+    this.rejoinsUsed.add(playerId);
+    this.log.push({ type: 'rejoin', round: this.roundNumber, playerId, score });
     return this.getPublicState();
   }
 
@@ -624,6 +684,7 @@ class LeastCountGame {
       eliminationScore: this.eliminationScore,
       eliminated: [...this.eliminated],
       quit: [...this.quit],
+      rejoinsUsed: [...this.rejoinsUsed],
       roundOver: this.roundOver,
       gameOver: this.gameOver,
       winner: this.winner,
@@ -637,6 +698,14 @@ class LeastCountGame {
       // have to replay the whole discard pile to know who threw what recently.
       discardHistory: this.discardHistory || {},
     };
+    // Per-viewer, so the client never has to re-derive the eligibility rules
+    // (and can't drift from them). rejoinScore is the number to put in front
+    // of the player -- "come back on 175" is a very different decision from
+    // "come back", so it should not be a surprise after they accept.
+    if (forPlayerId) {
+      state.canRejoin = this.canRejoin(forPlayerId);
+      state.rejoinScore = state.canRejoin ? this.rejoinScoreFor(forPlayerId) : null;
+    }
     if (forPlayerId && this.hands && this.hands[forPlayerId]) {
       state.yourHand = this.hands[forPlayerId];
       state.yourHandValue = handValue(this.hands[forPlayerId], this.roundJokerRank);
