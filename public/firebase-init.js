@@ -29,6 +29,7 @@ import {
 import {
   getAnalytics,
   logEvent,
+  setUserProperties,
   isSupported as analyticsIsSupported,
 } from 'https://www.gstatic.com/firebasejs/12.17.1/firebase-analytics.js';
 
@@ -66,17 +67,51 @@ const auth = isNativeApp
 // can never break sign-in or gameplay, it just means that session's events
 // silently don't get counted. `logEvent` is a no-op safe wrapper so app.js
 // never needs to check whether analytics actually initialized.
+// --------------------------------------------------------------------------
+// App vs website, in Analytics (Sept 2026).
+//
+// capacitor.config.json points the Android WebView at the LIVE SITE
+// (server.url = the Render URL) rather than bundling local files, and this
+// same web SDK runs in both. So to Firebase the app and the website are one
+// origin, one URL, one stream -- identical in every automatic dimension.
+// Device model doesn't separate them either: an Android phone might be in
+// the app or just on the site in Chrome. There was no way to ask "how many
+// of today's new users were the Play build?", which is exactly the question
+// that matters while the closed test is running.
+//
+// isNativeApp (computed above for auth persistence) is the only thing that
+// actually knows, so it's published to Analytics two ways:
+//   * as a USER property, for segmenting users/retention reports;
+//   * stamped on every event, so event-scoped reports can filter too.
+// Mirrors CLIENT_PLATFORM in app.js, which sends the same distinction to our
+// own server -- deliberately the same values, so the two systems agree.
+//
+// NOTE: a user property only shows up in GA4 reports once it's registered as
+// a custom definition (Admin -> Custom definitions -> user-scoped, named
+// client_platform), and only for data collected AFTER that. Registering it
+// is a console step, not a code one.
+// --------------------------------------------------------------------------
+const CLIENT_PLATFORM_VALUE = isNativeApp ? 'android_app' : 'web';
+
 let analytics = null;
 analyticsIsSupported()
   .then((supported) => {
-    if (supported) analytics = getAnalytics(app);
+    if (!supported) return;
+    analytics = getAnalytics(app);
+    try {
+      setUserProperties(analytics, { client_platform: CLIENT_PLATFORM_VALUE });
+    } catch (err) {
+      console.warn('[Analytics] setUserProperties failed:', err.message);
+    }
   })
   .catch((err) => console.warn('[Analytics] not supported in this browser:', err.message));
 
 function logAnalyticsEvent(name, params) {
   if (!analytics) return;
   try {
-    logEvent(analytics, name, params || {});
+    // Spread params last so an explicit caller value always wins -- this
+    // should never silently override something app.js meant to send.
+    logEvent(analytics, name, { client_platform: CLIENT_PLATFORM_VALUE, ...(params || {}) });
   } catch (err) {
     console.warn('[Analytics] logEvent failed:', err.message);
   }
