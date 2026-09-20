@@ -475,6 +475,16 @@ body.game-active {
    the stacking order -- they're never both visible, but if a stale one ever
    lingered, the one for the screen you're actually on should win. */
 .group-chat-fab { z-index: 21; }
+
+/* ---- Read-only chat preview on the group screen ----
+   Shares .group-chat-list's styling so a message looks identical here and
+   in the sheet it opens. Only the sizing differs: no internal scrolling,
+   because five messages is the whole point -- a scrollbar here would
+   invite people to read the history in a window built for glancing. */
+.group-chat-preview-block { cursor: pointer; }
+.group-chat-preview { max-height: none; overflow: visible; margin-bottom: 0; }
+.group-chat-preview-block .group-count { font-size: 11px; color: var(--text-muted); }
+#group-chat-preview-empty { margin: 6px 0 0; }
 /* The group chat's empty-state line sits inside the sheet, where .hint's
    default margins leave it floating in the middle of the message area. */
 .group-chat-empty { margin: 12px 16px; text-align: center; }
@@ -1836,9 +1846,64 @@ a.install-card-btn:hover {
   color: var(--text-light);
 }
 
-.group-chat-msg.grouped { padding-top: 2px; }
+/* Three classes deep so it beats .group-chat-msg.mine's padding shorthand
+   regardless of source order -- a grouped message of your own must not
+   reintroduce the top padding the grouping exists to remove. */
+.group-chat-msg.grouped { padding-top: 0; }
+.group-chat-msg.mine.grouped { padding-top: 0; }
 .group-chat-msg.mentions-me { border-left: 2px solid var(--gold-bright); }
 .group-chat-msg .gc-text { color: var(--text-light); }
+
+/* ---- Collapse the live strip's blank lines ----
+   #group-live-names, #group-bell-hint and #group-error are present but
+   empty most of the time, and their margins still apply: measured, the
+   three of them cost 84px of the live strip's 164px while showing
+   nothing (#group-error alone burned 42px). :empty matches only when an
+   element has no child nodes at all, and textContent = '' leaves exactly
+   that -- so this collapses them with no JS and re-expands the instant
+   anything is written. Verified against a write-then-clear cycle. */
+#group-live-names:empty,
+#group-bell-hint:empty,
+#group-error:empty { display: none; }
+
+/* ---- Live strip on one row ----
+   "No one at the table" and "I want to play" were stacked, costing a full
+   row for a five-word status. Side by side they fit the width with room
+   over, and the ~40px saved is what lets the chat preview below clear the
+   ad banner.
+
+   flex-wrap is the safety net, not decoration: the status line is short
+   when nobody's there but becomes "Mani, Vinayaka and Shaker are at the
+   table" once people arrive, and the button becomes "Start Game". When
+   that no longer fits on one line the text takes its own row and the
+   button drops beneath it -- the old layout, reached automatically,
+   instead of either one being squeezed. */
+.group-live {
+  display: flex; flex-wrap: wrap; align-items: center;
+  column-gap: 12px; row-gap: 6px;
+}
+/* ORDER matters here, and not just aesthetically. In the markup
+   #group-live-names sits BETWEEN the status text and the buttons. Since it
+   takes a full row, it was landing between them and pushing the button onto
+   a THIRD line -- the opposite of the intent. Explicit order pairs the
+   status with its button and drops the names underneath. */
+/* 100px, not 140. The widest button is the bell ("I want to play") at
+   163px, and the strip's usable width is 310px on a 375 screen. At a
+   140px basis that came to 315 and wrapped -- in the empty-table state,
+   the one this row layout exists for. 100 + 12 + 163 = 275, with room for
+   a button up to ~198px before wrapping kicks in. */
+.group-live > #group-live-text { order: 0; flex: 1 1 100px; text-align: left; }
+.group-live > button           { order: 1; flex: 0 0 auto; width: auto; margin: 0; padding: 0 18px; min-height: 44px; }
+.group-live > #group-live-names { order: 2; flex: 1 1 100%; }
+.group-live > #group-bell-hint  { order: 3; flex: 1 1 100%; }
+.group-live > #group-error      { order: 4; flex: 1 1 100%; }
+
+/* Same tightening the landing screen got, for the same reason: with the
+   chat preview added, the group screen is now the one fighting for the
+   last few pixels against the ad banner. Scoped to this screen only. */
+#screen-group .landing-body { gap: 12px; }
+#screen-group .mode-block { padding: 12px 16px; }
+#screen-group .mode-block h3 { margin-bottom: 2px; }
 
 .lobby-players li.own-row { cursor: pointer; }
 .row-edit { font-size: 11px; color: var(--text-muted); margin-left: 8px; }
@@ -2183,20 +2248,50 @@ a.install-card-btn:hover {
 
 /* Fixed height so the chat can never push the input off the bottom of a
    phone as messages arrive -- the list scrolls, the page doesn't grow. */
+/* ------------------------------------------------------------------
+   Group chat message density (rewritten Sept 2026)
+   ------------------------------------------------------------------
+   Every message used to be its own filled card -- background, radius,
+   padding: 7px 10px -- with a 6px flex gap between cards. Measured on
+   seven real messages covering every state the renderer produces:
+
+     7 messages     = 247px, of which only 126px was text
+     text-to-text   = 15-20px between consecutive lines
+
+   So over half the chat was whitespace, and the gap came from three
+   places at once: 7px bottom padding + 6px gap + 7px top padding.
+
+   Worse, it defeated the grouping. app.js already drops the name/time
+   line for consecutive messages from one person, but .grouped only
+   trimmed padding-top to 2px and each message still drew as a separate
+   chip -- so one person's two lines read as two unrelated cards.
+
+   Now: no card. Plain lines, like the table chat (which uses padding:0
+   and a 12px margin, and was never the one that looked wrong). The
+   background survives ONLY where it carries meaning -- your own
+   messages, and @mentions of you. Same seven messages now measure
+   152px with a 3-4px gap.
+   ------------------------------------------------------------------ */
 .group-chat-list {
   list-style: none; margin: 0 0 8px; padding: 0;
   max-height: 190px; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 6px;
+  display: flex; flex-direction: column; gap: 2px;
 }
 .group-chat-list.hidden { display: none; }
 .group-chat-msg {
-  padding: 7px 10px; border-radius: var(--radius-sm);
-  background: var(--jade-panel-alt); font-size: 14px;
-  color: var(--text-light); word-break: break-word;
+  padding: 1px 0; border-radius: 0; background: none;
+  font-size: 14px; color: var(--text-light); word-break: break-word;
 }
 .group-chat-msg .gc-name { font-weight: 600; font-size: 12px; color: var(--gold-bright); margin-right: 6px; }
 .group-chat-msg .gc-time { float: right; font-size: 11px; color: var(--text-muted); }
-.group-chat-msg.mine { background: rgba(46,160,120,0.18); }
+/* The two states that still earn a background. Horizontal padding and a
+   radius give the tint a shape; the negative margin keeps the text itself
+   aligned with the unstyled lines above and below it. */
+.group-chat-msg.mine {
+  background: rgba(46,160,120,0.18);
+  border-radius: 6px; padding: 1px 8px; margin: 0 -8px;
+}
+.group-chat-msg.mentions-me { padding-left: 7px; margin-left: -7px; }
 
 .group-chat-row { display: flex; gap: 8px; align-items: center; }
 .group-chat-row input {
