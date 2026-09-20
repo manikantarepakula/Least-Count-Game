@@ -2587,22 +2587,61 @@
   // than seating you at a table nobody else is at. Joining a group and
   // sitting down to play are separate acts -- typing a code shouldn't skip
   // the first one.
-  document.getElementById('btn-join').onclick = () => {
-    const code = document.getElementById('input-roomcode').value.trim().toUpperCase();
+  // There are TWO of these boxes -- one in each landing pane (Sept 2026).
+  //
+  // The box accepts both kinds of code, but when the landing screen was split
+  // into Groups / Quick Play it ended up filed under Groups only. So someone
+  // sent a 4-letter Quick Room code had to switch to the GROUPS tab to type
+  // it in. Rather than pick a home for it, it now appears in both, and the
+  // code itself decides where you land -- which is what the length already
+  // told us. Same wording in both, so neither reads as the "real" one.
+  //
+  // Both boxes share this handler; only their element ids differ.
+  const JOIN_INPUT_IDS = ['input-roomcode', 'input-roomcode-quick'];
+
+  function clearJoinCodeInputs() {
+    JOIN_INPUT_IDS.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+  }
+
+  function submitJoinCode(inputId) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const code = input.value.trim().toUpperCase();
     if (!code) return setLandingError('Enter a code');
+    // Length is the router. A 5-letter GROUP code opens that group's own
+    // screen rather than seating you at a table nobody else is at -- joining
+    // a group and sitting down to play are separate acts, and typing a code
+    // shouldn't skip the first one. Anything else is a one-off room code and
+    // goes straight in.
     if (code.length === 5) {
-      document.getElementById('input-roomcode').value = '';
+      clearJoinCodeInputs();
       openGroupScreen(code);
       return;
     }
     joinRoomByKey(code);
-  };
-  // Enter key submits -- on a phone the keyboard's Go key is the natural way
-  // to finish typing a code, and reaching for the button instead is friction
-  // on the one screen a brand-new player has to get through.
-  document.getElementById('input-roomcode').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') document.getElementById('btn-join').click();
-  });
+  }
+
+  (function wireJoinCodeBoxes() {
+    [
+      { input: 'input-roomcode', button: 'btn-join' },
+      { input: 'input-roomcode-quick', button: 'btn-join-quick' },
+    ].forEach(({ input, button }) => {
+      const btn = document.getElementById(button);
+      const box = document.getElementById(input);
+      if (btn) btn.onclick = () => submitJoinCode(input);
+      // Enter submits -- on a phone the keyboard's Go key is the natural way
+      // to finish typing a code, and reaching for the button instead is
+      // friction on the one screen a brand-new player has to get through.
+      if (box) {
+        box.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') submitJoinCode(input);
+        });
+      }
+    });
+  })();
 
   // Copy just the code, or share a full join-link that pre-fills the room
   // code on the other end (see prefillRoomCodeFromLink above). Both give a
