@@ -49,7 +49,10 @@ body {
   font-family: Georgia, 'Times New Roman', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: radial-gradient(circle at top, var(--jade-bg), var(--jade-bg-dark));
   color: var(--text-light);
-  min-height: 100vh;
+  /* svh for the same reason as .screen below -- body was the other element
+     still sized to the large viewport, which is what let a 100svh child
+     still sit inside a taller-than-visible parent. */
+  min-height: 100vh; min-height: 100svh;
 }
 .icon {
   width: 18px; height: 18px; display: inline-block; vertical-align: -4px;
@@ -80,7 +83,22 @@ body.game-active {
   overflow: hidden;
 }
 
-.screen { display: none; min-height: 100vh; padding: 16px; }
+/* ------------------------------------------------------------------
+   100svh, not 100vh -- the actual cause of "the ad is covering the menu"
+   (Sept 2026, after two failed attempts at tuning --ad-safe-bottom).
+
+   On Android, 100vh is the LARGE viewport: the height the page would have
+   with system chrome retracted. The visible area is 100svh, which is
+   smaller by the gesture bar. So a 100vh screen extends BELOW what you can
+   see -- and it takes its bottom padding with it. The ad-safe reserve was
+   being applied off-screen, which is why raising it from 50 to 64 changed
+   nothing: the footer nav sat just above padding that wasn't visible.
+
+   #screen-game already had height: 100svh for the same reason (see the
+   comment there about the keyboard); the other screens never got it.
+   The 100vh line stays first as the fallback for anything without svh.
+   ------------------------------------------------------------------ */
+.screen { display: none; min-height: 100vh; min-height: 100svh; padding: 16px; }
 .screen.active { display: block; }
 /* Reserve space for the native AdMob banner (zero footprint in the DOM on
    its own -- see admob-init.js) so it never sits on top of a screen's
@@ -290,7 +308,8 @@ body.game-active {
      scrolling, instead of being cut off with no way to get to it. On normal
      phones nothing scrolls at all, because the content fits. */
   overflow-x: hidden; overflow-y: auto;
-  display: flex; flex-direction: column; min-height: 100vh;
+  display: flex; flex-direction: column;
+  min-height: 100vh; min-height: 100svh;   /* see the note on .screen above */
 }
 #screen-landing.screen.active::before,
 #screen-lobby.screen.active::before,
