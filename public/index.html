@@ -247,6 +247,25 @@
           </div>
         </div>
       </div>
+
+      <!-- The SECOND join box. Identical wording to the one in the Groups
+           pane on purpose -- neither is the "real" one. The box takes both
+           kinds of code and the code's own length decides where you land
+           (see submitJoinCode in app.js), so which tab you happened to be
+           looking at when you typed it doesn't matter. It sits last in this
+           pane exactly as it does in the Groups pane, so its position is
+           predictable when you switch tabs.
+           Different ids from the Groups copy -- duplicate ids would break
+           getElementById for both. -->
+      <div class="mode-block">
+        <h3>Join with a code</h3>
+        <p class="mode-block-sub">Someone sent you a code? Enter it here</p>
+        <div class="mode-block-join-row">
+          <input id="input-roomcode-quick" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
+          <button id="btn-join-quick" class="primary">Join</button>
+        </div>
+        <p class="hint">4 letters for a one-off room, 5 for a group.</p>
+      </div>
       </div><!-- /pane-quick -->
     </div>
   </div>
