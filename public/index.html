@@ -166,21 +166,12 @@
          groups list caps its visible height (see .group-list) rather than
          growing with every group you join.
          ================================================================ -->
-    <!-- Two panes instead of four stacked blocks (Sept 2026). Measured on a
-         375x812 phone, the four blocks came to 840px of content in an 812px
-         viewport, so the Home/Stats/Rules nav sat below the fold -- and with
-         the native AdMob banner drawn over the bottom ~50-64px in the app,
-         it looked like the ad was eating the menu. Two panes bring it to
-         812px exactly, nav included, banner safe zone still reserved.
-
-         A regular player only ever wants one of these two worlds: their
+    <!-- Two panes instead of four stacked blocks (Sept 2026). The landing
+         screen had grown to 830px of content in an 812px viewport, and a
+         regular player only ever wants one of these two worlds: their
          permanent tables, or a one-off game. "Join with a code" sits with
          Groups because a shared code is nearly always a group code -- and
-         its own hint still covers the 4-letter room case.
-
-         Both panes stay in the DOM with every original id intact, so all of
-         app.js's existing handlers are untouched; only visibility switches.
-         See wireLandingTabs() in app.js. -->
+         its own hint still covers the 4-letter room case. -->
     <div class="segmented landing-tabs" id="landing-tabs">
       <button type="button" class="seg active" data-pane="groups">Groups</button>
       <button type="button" class="seg" data-pane="quick">Quick Play</button>
@@ -324,7 +315,7 @@
       <button id="btn-group-play" class="primary hidden" type="button">Start Game</button>
       <button id="btn-group-standdown" class="secondary hidden" type="button">Leave the table</button>
       <p id="group-bell-hint" class="hint"></p>
-               <!-- Errors raised while this screen is up. setLandingError() writes
+      <!-- Errors raised while this screen is up. setLandingError() writes
            into #landing-toast-error, which lives inside the LANDING screen --
            so a failure here (a join that didn't take, a start that was
            refused) was completely invisible and read as "nothing happened". -->
@@ -378,15 +369,30 @@
          what made its keyboard handling so involved. This screen scrolls
          normally, so the browser already does the right thing when the
          keyboard opens -- borrowing the sheet here would import all of that
-         complexity to solve a problem this screen doesn't have. -->
-    <div class="mode-block">
-      <h3>Chat <span class="group-count">· last 30 minutes</span></h3>
-      <ul id="group-chat-list" class="group-chat-list"></ul>
-      <p id="group-chat-empty" class="hint">No messages yet — say when you're free.</p>
-      <div id="group-chat-mention-bar" class="mention-bar hidden"></div>
-      <div class="group-chat-row">
-        <input id="input-group-chat" type="text" maxlength="300" placeholder="Message the group" autocomplete="off" />
-        <button id="btn-group-chat-send" class="primary" type="button" aria-label="Send">Send</button>
+         complexity to solve a problem this screen doesn't have.
+
+         COLLAPSED BY DEFAULT (Sept 2026). It used to be permanently open,
+         and measuring the live screen showed why that was wrong: the block
+         costs 128px, and on a 360x640 phone it sat below the fold anyway.
+         Most visits to a group screen are to see who's around, not to type.
+         The unread count on the header is what makes collapsing safe --
+         without it, a collapsed chat is a chat nobody ever opens again. -->
+    <div class="mode-block group-chat-block">
+      <button id="btn-group-chat-toggle" class="group-chat-toggle" type="button"
+              aria-expanded="false" aria-controls="group-chat-body">
+        <span class="group-chat-toggle-label">Chat</span>
+        <span id="group-chat-unread" class="badge hidden">0</span>
+        <span class="group-chat-toggle-sub">last 30 minutes</span>
+        <svg class="icon group-chat-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div id="group-chat-body" class="group-chat-body hidden">
+        <ul id="group-chat-list" class="group-chat-list"></ul>
+        <p id="group-chat-empty" class="hint">No messages yet — say when you're free.</p>
+        <div id="group-chat-mention-bar" class="mention-bar hidden"></div>
+        <div class="group-chat-row">
+          <input id="input-group-chat" type="text" maxlength="300" placeholder="Message the group" autocomplete="off" enterkeyhint="send" />
+          <button id="btn-group-chat-send" class="primary" type="button" aria-label="Send">Send</button>
+        </div>
       </div>
     </div>
   </div>
