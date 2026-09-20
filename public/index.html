@@ -914,10 +914,18 @@
      the exact thing it exists to prevent. -->
 <!-- Table nickname. Changes what this table sees for this game only; the
      saved profile name and the group marathon board both keep the real one. -->
+<!-- Two states in one dialog (Sept 2026). The server will not remove a
+     player mid-round, so a leave tapped during a hand is QUEUED -- and the
+     only sign of that used to be a line of text written with setGameError(),
+     which the very next state push wiped (it clears the error line on every
+     turn change). So the queue worked and looked like it hadn't: no
+     indication, and no way to change your mind.
+     Second state below is shown once a leave is already queued; app.js
+     swaps the text and the button labels. -->
 <div id="leave-game-dialog" class="overlay hidden">
   <div class="card-panel dialog-panel">
-    <h2>Leave this game?</h2>
-    <p class="hint">You'll forfeit the game and go back to the menu. The others carry on without you.</p>
+    <h2 id="leave-game-title">Leave this game?</h2>
+    <p class="hint" id="leave-game-text">You'll forfeit the game and go back to the menu. The others carry on without you.</p>
     <div class="dialog-actions">
       <button id="btn-leave-game-cancel" class="secondary" type="button">Stay</button>
       <button id="btn-leave-game-confirm" class="primary" type="button">Leave</button>
