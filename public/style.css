@@ -1805,12 +1805,21 @@ a.install-card-btn:hover {
    paragraph on the right -- the Instagram layout, rather than the old
    single "Name: text" line. The avatar is what makes a fast-moving group
    chat scannable at a glance. */
-.chat-msg { display: flex; gap: 9px; margin-bottom: 12px; align-items: flex-start; }
-/* Left at 28px. The density win came from dropping the per-message
-   timestamp line and grouping consecutive messages, not from the avatar --
-   shrinking this further would cost legibility for a few pixels. */
+/* 6px, not 12 (Sept 2026). Measured: a first-message row is 28px tall but
+   its text is only 15px, because the avatar sets the row height and
+   align-items is flex-start -- so 13px of dead space already sits under
+   every first line. Adding 12px on top made the gap between a sender's
+   first and second message ~25px, which read as the grouping not working
+   even though it was. */
+.chat-msg { display: flex; gap: 9px; margin-bottom: 6px; align-items: flex-start; }
+/* 24px, down from 28. The earlier note here said shrinking the avatar
+   "would cost legibility for a few pixels" -- true in isolation, but it
+   misses that the avatar DICTATES the row height next to a 15px line, so
+   those pixels are paid on every single first message. 24px still renders
+   a clear initial and removes 4px of the dead space. Below ~20 the letter
+   genuinely does get hard to read, so this is as far as it should go. */
 .chat-avatar {
-  flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+  flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   font-size: 12px; font-weight: 700; color: #fff; text-transform: uppercase;
   /* hue set inline per player in app.js */
@@ -1827,8 +1836,10 @@ a.install-card-btn:hover {
    line each to tell people who are all playing the same round that a message
    arrived "now". A time is printed only after a real silence (.chat-gap). */
 .chat-msg.grouped { margin-bottom: 3px; }
-/* Lines up under the name when the avatar is omitted: 28px avatar + 9px gap. */
-.chat-msg.grouped .chat-body { padding-left: 37px; }
+/* Lines up under the name when the avatar is omitted: 24px avatar + 9px gap.
+   Must track .chat-avatar's width -- if they drift, grouped messages stop
+   aligning with the name above them. */
+.chat-msg.grouped .chat-body { padding-left: 33px; }
 .chat-msg.mentions-me {
   background: rgba(242,193,78,0.10); border-left: 2px solid var(--gold-bright);
   border-radius: 0; padding: 3px 6px 3px 7px; margin-left: -7px;
