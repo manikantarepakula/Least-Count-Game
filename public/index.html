@@ -409,11 +409,29 @@
       <p class="hint group-scoring-note">One point for every player you finish ahead of, plus one for turning up.</p>
     </div>
 
-    <!-- Group chat is NOT a block in this page any more (Sept 2026). It's a
-         floating button + bottom sheet, the same pattern as the table chat --
-         see #group-chat-fab / #group-chat-panel further down, outside this
-         screen. As an in-page block it cost 128px permanently and still sat
-         below the fold on a 360x640 phone. A FAB costs nothing. -->
+    <!-- Chat PREVIEW -- read-only, last few messages (Sept 2026).
+         The full chat is the FAB + sheet further down; this is a window
+         onto it. A badge on the FAB tells you THAT something was said; on
+         a screen whose whole job is "should I go and play right now?",
+         seeing WHAT was said without tapping is the difference between the
+         group feeling alive and feeling like a menu.
+
+         Deliberately has no input box: two inputs for one chat on one
+         screen is confusing, and the input is what drags the whole
+         keyboard-positioning problem into a page that doesn't need it.
+         Tapping anywhere here opens the real sheet.
+
+         It fits because the chat block's old 128px came back when chat
+         moved to the FAB, and because the live strip above now collapses
+         its blank lines (see :empty rules in style.css). -->
+    <div class="mode-block group-chat-preview-block" id="group-chat-preview-block">
+      <div class="block-heading-row">
+        <h3>Chat</h3>
+        <span class="group-count">tap to open</span>
+      </div>
+      <ul id="group-chat-preview" class="group-chat-list group-chat-preview"></ul>
+      <p id="group-chat-preview-empty" class="hint">No messages yet — say when you're free.</p>
+    </div>
   </div>
 </div>
 
