@@ -253,7 +253,17 @@ app.get('/api/admin/tester-activity', async (req, res) => {
       if (d.mode === 'multiplayer') p.multiplayer++; else p.solo++;
       if (d.platform === 'android-app') p.appGames++;
       else if (d.platform === 'web') p.webGames++;
-      if (d.day) p.days.add(d.day);
+      // Bucket active days by IST, not UTC. The UTC day rolls over at 05:30
+      // IST, so a game played at 1am IST counted toward the PREVIOUS day --
+      // and these testers play late at night, which is exactly when that
+      // misfires. Two separate late sessions could collapse into one "active
+      // day" and quietly undercount the Play closed-test figure.
+      // Derived from `at` at read time rather than trusting the stored `day`
+      // (written as UTC, line ~494), so historical rows re-bucket correctly
+      // too. Same rule as the daily board -- see istDayKey().
+      const atMs = Date.parse(d.at);
+      const activeDay = Number.isNaN(atMs) ? d.day : istDayKey(atMs);
+      if (activeDay) p.days.add(activeDay);
       if (d.at > p.lastSeen) p.lastSeen = d.at;
       if (d.at < p.firstSeen) p.firstSeen = d.at;
     });
@@ -338,7 +348,16 @@ app.get('/api/admin/tester-activity', async (req, res) => {
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => (
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
     ));
-    const shortTime = (iso) => (iso ? esc(String(iso).replace('T', ' ').slice(0, 16)) + ' UTC' : '-');
+    // Everyone reading this report is in India, so show IST throughout.
+    // Stored timestamps stay UTC ISO strings (they have to, for the
+    // lexicographic range query at the top) -- this converts on the way out.
+    // istKey() takes epoch millis, hence the Date.parse.
+    const shortTime = (iso) => {
+      if (!iso) return '-';
+      const ms = Date.parse(iso);
+      if (Number.isNaN(ms)) return '-';
+      return esc(istKey(ms, 16).replace('T', ' ')) + ' IST';
+    };
     const platformTag = (p) => {
       if (p.platform === 'android-app') return '<span class="tag app">App</span>';
       if (p.platform === 'web') return '<span class="tag web">Web</span>';
@@ -410,7 +429,7 @@ app.get('/api/admin/tester-activity', async (req, res) => {
   .aka { font-size: 11px; color: #8fae9c; margin-top: 2px; font-style: italic; }
 </style></head><body>
 <h1>Tester activity — last ${days} days</h1>
-<div class="sub">Since ${esc(cutoff.slice(0, 16).replace('T', ' '))} UTC · generated ${esc(new Date().toISOString().slice(0, 16).replace('T', ' '))} UTC</div>
+<div class="sub">Since ${esc(istKey(Date.parse(cutoff), 16).replace('T', ' '))} IST · generated ${esc(istKey(Date.now(), 16).replace('T', ' '))} IST<br>All times IST · active days counted on IST calendar days</div>
 
 <h2>Android app testers <span class="note">— the Play closed-test numbers</span></h2>
 <div class="cards app">
