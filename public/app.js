@@ -2007,15 +2007,16 @@
     return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
   }
 
-  function renderGroupChat(list) {
-    const ul = document.getElementById('group-chat-list');
-    const empty = document.getElementById('group-chat-empty');
-    if (!ul || !empty) return;
-    groupChatMsgs = list || [];
+  // Renders `msgs` into `ul`. Used by BOTH the chat sheet and the read-only
+  // preview block on the group screen, so the two can never drift apart in
+  // grouping, mention highlighting or clock format -- the preview showing a
+  // message differently from the sheet it opens would be its own small bug.
+  function paintGroupChatInto(ul, msgs) {
+    if (!ul) return;
     ul.innerHTML = '';
     const me = myFirebaseUid();
     let prevUid = null;
-    groupChatMsgs.forEach((m) => {
+    msgs.forEach((m) => {
       // Same grouping as the table chat. The TIME stays, though -- opposite
       // decision, for a reason: with only 30 minutes of history, "25 minutes
       // ago" versus "just now" is how you tell whether somebody is still
@@ -2045,11 +2046,36 @@
       ul.appendChild(li);
       prevUid = m.uid || null;
     });
+  }
+
+  // How many messages the read-only preview on the group screen shows.
+  const GROUP_CHAT_PREVIEW_COUNT = 5;
+
+  function renderGroupChat(list) {
+    const ul = document.getElementById('group-chat-list');
+    const empty = document.getElementById('group-chat-empty');
+    if (!ul || !empty) return;
+    groupChatMsgs = list || [];
+
+    // The sheet: everything.
+    paintGroupChatInto(ul, groupChatMsgs);
     empty.classList.toggle('hidden', groupChatMsgs.length > 0);
     ul.classList.toggle('hidden', groupChatMsgs.length === 0);
     ul.scrollTop = ul.scrollHeight;
-    // Keeps the header's unread count in step with every incoming batch.
-    // Declared below this function but hoisted, so the order is fine.
+
+    // The preview: the last few, same renderer. slice(-N) is safe on a list
+    // shorter than N, so no length check is needed.
+    const pv = document.getElementById('group-chat-preview');
+    const pvEmpty = document.getElementById('group-chat-preview-empty');
+    if (pv) {
+      const recent = groupChatMsgs.slice(-GROUP_CHAT_PREVIEW_COUNT);
+      paintGroupChatInto(pv, recent);
+      pv.classList.toggle('hidden', recent.length === 0);
+      if (pvEmpty) pvEmpty.classList.toggle('hidden', recent.length > 0);
+      pv.scrollTop = pv.scrollHeight;
+    }
+
+    // Keeps the FAB's unread count in step with every incoming batch.
     updateGroupChatUnread();
   }
 
@@ -2309,6 +2335,10 @@
     const closeBtn = document.getElementById('btn-group-chat-close');
     const backdrop = document.getElementById('group-chat-backdrop');
     if (fab) fab.onclick = () => setGroupChatExpanded(true);
+    // The whole preview block is the tap target, not a small "Open" link --
+    // it's read-only, so there is nothing else you could be reaching for.
+    const preview = document.getElementById('group-chat-preview-block');
+    if (preview) preview.onclick = () => setGroupChatExpanded(true);
     if (closeBtn) closeBtn.onclick = () => setGroupChatExpanded(false);
     if (backdrop) backdrop.onclick = () => setGroupChatExpanded(false);
     const input = document.getElementById('input-group-chat');
