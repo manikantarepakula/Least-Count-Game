@@ -103,7 +103,19 @@
   // instant the banner is requested so there's no flash of unprotected UI
   // while we wait for AdMob to report the real adaptive height, which then
   // corrects it.
-  const FALLBACK_BANNER_HEIGHT_PX = 50;
+  // 64, not 50 (Sept 2026). 50 was the height of a CLASSIC banner; an
+  // ADAPTIVE_BANNER -- which is what we request -- is taller on a wider
+  // screen, typically 60-64dp on a 400-420dp phone. Reserving 50 for a
+  // 62px banner leaves the bottom ~12px of every screen underneath it,
+  // reported twice as "the ad is blocking the menu options".
+  //
+  // This is the FLOOR, not a guess at the real height: bannerAdSizeChanged
+  // corrects it upward when it fires. But that event name was never
+  // verified against the installed plugin (see ensureSizeListener below),
+  // so if it silently never fires, this number is the only thing standing
+  // between the banner and the footer nav. The landing screen was measured
+  // to fit with a 90px reserve, so erring high costs nothing.
+  const FALLBACK_BANNER_HEIGHT_PX = 64;
 
   function setSafeBottom(px) {
     document.documentElement.style.setProperty('--ad-safe-bottom', px + 'px');
@@ -129,7 +141,15 @@
     try {
       const result = AdMob.addListener('bannerAdSizeChanged', (size) => {
         if (appliedKind === BANNER_BOTTOM && size && typeof size.height === 'number' && size.height > 0) {
-          setSafeBottom(size.height);
+          // Logged so the real reported height is visible in a device log --
+          // this is the one number that would settle whether the event fires
+          // at all, and what units it reports in.
+          console.log('[AdMob] banner size reported:', size.height);
+          // Never go BELOW the floor. A plugin reporting a stale or partial
+          // height (0 is already excluded above, but small values have been
+          // seen from adaptive banners mid-layout) would otherwise shrink the
+          // safe zone and put content back under the ad.
+          setSafeBottom(Math.max(size.height, FALLBACK_BANNER_HEIGHT_PX));
         }
       });
       if (result && typeof result.catch === 'function') {
