@@ -227,7 +227,14 @@ app.get('/api/admin/tester-activity', async (req, res) => {
       if (!byPlayer.has(d.uid)) {
         byPlayer.set(d.uid, {
           uid: d.uid,
+          // The query is ordered `at desc`, so the FIRST doc seen for a uid is
+          // that player's most recent game -- which makes this their current
+          // nickname. Table nicknames are per-room and people change them
+          // constantly for a laugh, so this label is a moving target: the same
+          // person reads as a different name in every report. `names` below
+          // keeps the rest so they stay recognisable.
           displayName: d.displayName || '(unknown)',
+          names: new Set(),
           games: 0,
           wins: 0,
           solo: 0,
@@ -240,6 +247,7 @@ app.get('/api/admin/tester-activity', async (req, res) => {
         });
       }
       const p = byPlayer.get(d.uid);
+      if (d.displayName) p.names.add(d.displayName);
       p.games++;
       if (d.won) p.wins++;
       if (d.mode === 'multiplayer') p.multiplayer++; else p.solo++;
@@ -254,6 +262,12 @@ app.get('/api/admin/tester-activity', async (req, res) => {
       .map((p) => ({
         uid: p.uid,
         displayName: p.displayName,
+        // Every OTHER name this same uid played under in the window. Grouping
+        // was always by uid, so these were never separate rows -- but with
+        // only the latest name shown, one person read as a stranger in each
+        // report and there was no way to match them up across two. The uid is
+        // the identity; the names are costume changes.
+        aka: [...p.names].filter((n) => n !== p.displayName),
         games: p.games,
         wins: p.wins,
         solo: p.solo,
@@ -331,9 +345,20 @@ app.get('/api/admin/tester-activity', async (req, res) => {
       if (p.platform === 'both') return '<span class="tag app">App</span> <span class="tag web">Web</span>';
       return '<span class="tag unk">?</span>';
     };
+    // The uid is the only stable handle on a person here: nicknames change
+    // per room, so a short prefix of it is what lets you say "this is the
+    // same player as last week". Shown as a monospace chip under the name.
+    const shortUid = (uid) => esc(String(uid || '').slice(0, 8));
+    const nameCell = (p) => {
+      const aka = p.aka && p.aka.length
+        ? `<div class="aka">also: ${p.aka.map(esc).join(' · ')}</div>`
+        : '';
+      return `<td><div class="pname">${esc(p.displayName)}</div>
+        <div class="uid">${shortUid(p.uid)}</div>${aka}</td>`;
+    };
     const rowFor = (p) => `
       <tr>
-        <td>${esc(p.displayName)}</td>
+        ${nameCell(p)}
         <td>${platformTag(p)}</td>
         <td class="n">${p.games}</td>
         <td class="n">${p.appGames}</td>
@@ -347,7 +372,8 @@ app.get('/api/admin/tester-activity', async (req, res) => {
     const appRows = appPlayers.map(rowFor).join('');
     const quietRows = quiet.map((q) => `
       <tr>
-        <td>${esc(q.displayName)}</td>
+        <td><div class="pname">${esc(q.displayName)}</div>
+            <div class="uid">${shortUid(q.uid)}</div></td>
         <td class="n">${q.gamesPlayedAllTime}</td>
         <td>${shortTime(q.lastPlayedAt)}</td>
       </tr>`).join('');
@@ -376,6 +402,12 @@ app.get('/api/admin/tester-activity', async (req, res) => {
   .tag.web { background: #3a3f5c; color: #c3c8f0; }
   .tag.unk { background: #4a4a4a; color: #bbb; }
   .cards.app .card { border-color: #2f7a4f; }
+  .pname { font-weight: 600; }
+  /* The stable identity. Monospace so two uids can be compared at a glance,
+     which is the whole point of showing it -- nicknames can't be. */
+  .uid { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px;
+         color: #6f9080; letter-spacing: .02em; margin-top: 1px; }
+  .aka { font-size: 11px; color: #8fae9c; margin-top: 2px; font-style: italic; }
 </style></head><body>
 <h1>Tester activity — last ${days} days</h1>
 <div class="sub">Since ${esc(cutoff.slice(0, 16).replace('T', ' '))} UTC · generated ${esc(new Date().toISOString().slice(0, 16).replace('T', ' '))} UTC</div>
