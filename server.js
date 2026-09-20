@@ -3257,9 +3257,24 @@ io.on('connection', (socket) => {
       if (room.phase === 'starting') {
         throw new Error('Cannot leave while the game is starting. Wait for it to finish.');
       }
-      if (room.phase === 'playing' && room.game && !room.game.roundOver) {
+      // The mid-round hold applies only to players actually IN the hand.
+      // An eliminated player is a spectator: no cards dealt, not in the turn
+      // rotation, nothing about the round depends on them -- so making them
+      // sit through a hand they aren't playing was pure obstruction. They
+      // were the people most likely to want out, and the only ones who
+      // couldn't go. (isSpectator covers quit too, though that one can't
+      // reach here.)
+      const spectating = room.game && room.game.isSpectator(playerId);
+      if (room.phase === 'playing' && room.game && !room.game.roundOver && !spectating) {
         throw new Error('Cannot leave in the middle of a round. Wait for it to finish.');
       }
+
+      // A pending rejoin offer belonging to someone who is walking out has to
+      // go with them, or rejoinRequestsPending() keeps returning true and
+      // startNextRound() refuses to fire -- the table would sit frozen
+      // waiting on a decision from a player who has already left. Safe to
+      // call unconditionally; it's a no-op when there's nothing pending.
+      clearRejoinRequest(room, playerId);
 
       // Only ask the game engine to remove the player if the game is still
       // going - if it already ended (e.g. because the last leave dropped the
@@ -3295,6 +3310,13 @@ io.on('connection', (socket) => {
 
       broadcastRoom(room);
       if (room.game) broadcastGameState(room);
+      // Refresh the host's pending-request list (the leaver's row has to
+      // disappear from it) and re-arm the countdown if theirs was the last
+      // decision the table was waiting on. scheduleAutoNextRound() no-ops
+      // unless the round is genuinely over, so this is safe on both the
+      // mid-round spectator exit and the ordinary between-rounds one.
+      notifyHostOfRejoinRequests(room);
+      if (!rejoinRequestsPending(room)) scheduleAutoNextRound(room);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
