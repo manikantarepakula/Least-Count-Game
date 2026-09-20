@@ -57,6 +57,14 @@
     installPrompt: true,
   };
 
+  // Group chat sheet state. Declared HERE, at the very top, rather than with
+  // the rest of the group state further down: showScreen() reads
+  // groupChatExpanded, and showScreen is defined (and can be called) well
+  // above that point. `let` is not hoisted, so declaring it lower down would
+  // leave a temporal-dead-zone window where an early showScreen() throws.
+  let groupChatExpanded = false;
+  let groupChatSeenAt = 0;
+
   const SUIT_SYMBOL = { S: '♠', H: '♥', D: '♦', C: '♣' };
   const RED_SUITS = new Set(['H', 'D']);
   const RANK_ORDER = ['A','2','3','4','5','6','7','8','9','10','J','Q','K','JOKER'];
@@ -839,6 +847,25 @@
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
     document.getElementById(id).classList.add('active');
+    // The group chat button belongs to the group screen only. Handled here
+    // rather than in each navigation path because there are several ways off
+    // that screen (back, joining a room, a game starting under you), and a
+    // chat button left floating over the table or the landing screen would
+    // open a sheet for a group you're no longer looking at.
+    (function syncGroupChatChrome() {
+      const onGroup = id === 'screen-group';
+      const fab = document.getElementById('group-chat-fab');
+      const panel = document.getElementById('group-chat-panel');
+      const backdrop = document.getElementById('group-chat-backdrop');
+      if (!fab || !panel || !backdrop) return;
+      if (!onGroup) {
+        panel.classList.add('hidden');
+        backdrop.classList.add('hidden');
+        groupChatExpanded = false;
+      }
+      // Never show the button while the sheet itself is open.
+      fab.classList.toggle('hidden', !onGroup || !panel.classList.contains('hidden'));
+    })();
     // The game screen locks the page to one viewport (no drag/scroll needed);
     // other screens (lobby, overlays) are allowed to scroll normally.
     document.body.classList.toggle('game-active', id === 'screen-game');
@@ -1027,8 +1054,18 @@
     ) || 0;
   }
 
+  // Which sheet the positioner below is currently driving. There are two
+  // chat sheets -- the table chat (#chat-panel) and the group chat
+  // (#group-chat-panel) -- but they live on different screens and only one
+  // can ever be open, so they share this one implementation rather than
+  // carrying two copies of the keyboard maths. Everything below was tuned
+  // against a real Android WebView over several rounds; duplicating it would
+  // mean every future fix has to be made twice and one copy would drift.
+  let activeChatPanelId = 'chat-panel';
+  let activeChatListId = 'chat-messages';
+
   function positionChatSheet() {
-    const panel = document.getElementById('chat-panel');
+    const panel = document.getElementById(activeChatPanelId);
     if (!panel || panel.classList.contains('hidden')) return;
 
     const vv = window.visualViewport;
@@ -1069,7 +1106,7 @@
   // Keeps the newest message in view when the keyboard steals list height
   // -- otherwise opening the keyboard scrolls the conversation "away".
   function scrollChatToLatest() {
-    const container = document.getElementById('chat-messages');
+    const container = document.getElementById(activeChatListId);
     if (container) container.scrollTop = container.scrollHeight;
   }
 
@@ -1718,15 +1755,8 @@
   // ====================================================================
   let groupScreenCode = null;
   let groupScreenData = null;
-  let groupBoardTab = 'month';
   let groupBellTimer = null;
   let groupChatMsgs = [];
-  // Chat starts collapsed; see the block further down for why, and why
-  // "unread" is tracked by timestamp rather than count. Declared up here
-  // with the rest of the group state so renderGroupChat() can never reach
-  // them before they're initialised.
-  let groupChatExpanded = false;
-  let groupChatSeenAt = 0;
   let marathonDays = 7;
   // What the group screen's Play button does right now: 'start' opens the
   // table and brings everyone seated with you, 'join' walks into one that is
@@ -1757,7 +1787,6 @@
   async function openGroupScreen(code, fallbackName) {
     if (!code) return;
     groupScreenCode = code;
-    groupBoardTab = 'month';
     const gErr = document.getElementById('group-error');
     if (gErr) gErr.textContent = '';   // stale error from a previous visit
     // Collapse chat and treat the whole 30-minute history as unread, so
@@ -1908,6 +1937,20 @@
   // this strip has three states rather than one: running (with a countdown),
   // just ended (with the winner), and none at all. Between marathons games
   // still count on the daily board -- the group isn't dead in the gaps.
+  // "Sat 27 Sep". Locale-aware, and wrapped because toLocaleDateString can
+  // throw on some older WebViews for option combinations it doesn't support
+  // -- a missing date is fine, a crashed render of the whole group screen is
+  // not.
+  function marathonEndLabel(ts) {
+    try {
+      return new Date(ts).toLocaleDateString(undefined, {
+        weekday: 'short', day: 'numeric', month: 'short',
+      });
+    } catch (e) {
+      return '';
+    }
+  }
+
   function renderMarathonStrip(group) {
     const state = document.getElementById('group-marathon-state');
     const sub = document.getElementById('group-marathon-sub');
@@ -1916,10 +1959,16 @@
     const m = (group && group.marathon) || {};
 
     if (m.running) {
+      // The marathon's "name" is its length -- there's no naming step, so the
+      // duration is the identity: "7-day marathon". The end DATE goes
+      // underneath alongside the countdown, because "ends in 5 days" alone
+      // makes people do the arithmetic to work out whether they can play on
+      // the last day.
       const days = Math.ceil((m.msLeft || 0) / 86400000);
-      state.textContent = days <= 1 ? 'Marathon ends today' : 'Marathon ends in ' + days + ' days';
-      sub.textContent = (m.days ? m.days + '-day marathon · ' : '') +
-        'whoever leads at the end takes the crown';
+      state.textContent = m.days ? m.days + '-day marathon' : 'Marathon';
+      const when = marathonEndLabel(Date.now() + (m.msLeft || 0));
+      sub.textContent = (days <= 1 ? 'Ends today' : 'Ends in ' + days + ' days')
+        + (when ? ' · ' + when : '');
       startBtn.classList.add('hidden');
       return;
     }
@@ -2007,6 +2056,10 @@
   // Champions rows used to be keyed by calendar month. They now record when
   // the marathon ended and how long it ran -- but old rows are still sitting
   // in Firestore, so both shapes have to render.
+  // Currently UNUSED: its only caller was the Champions board tab, removed
+  // Sept 2026. Kept deliberately -- the server still sends g.champions, so
+  // this is the other half of bringing that view back as a pure UI change.
+  // Delete both together if champions are dropped for good.
   function championLabel(c) {
     if (c && c.endedAt) {
       const d = new Date(c.endedAt);
@@ -2016,71 +2069,43 @@
     return (c && c.month) || '';
   }
 
+  // One board now: the standings for the current marathon. The Today /
+  // Recent / Champions tabs were removed in Sept 2026 -- see the comment in
+  // index.html where the tab row used to be. g.daily, g.recent and
+  // g.champions still arrive in the payload and are simply not rendered;
+  // left alone deliberately, so bringing any of them back is a UI change
+  // rather than a server one.
   function renderGroupBoard() {
     const g = groupScreenData;
     if (!g) return;
     const board = document.getElementById('group-board');
     const empty = document.getElementById('group-board-empty');
     board.innerHTML = '';
-    let rows = [];
-    if (groupBoardTab === 'month') rows = g.marathon.standings || [];
-    else if (groupBoardTab === 'today') rows = g.daily.standings || [];
-    else if (groupBoardTab === 'recent') rows = g.recent || [];
-    else rows = (g.champions || []).slice().reverse();
+    const rows = (g.marathon && g.marathon.standings) || [];
 
-    // The heading follows the tab, so it never says "Marathon" over a list
-    // of recent games.
-    const title = document.getElementById('group-board-title');
-    if (title) {
-      title.textContent = groupBoardTab === 'recent' ? 'Recent games'
-        : groupBoardTab === 'champions' ? 'Champions'
-        : 'Marathon';
-    }
+    const me = myFirebaseUid();
+    rows.forEach((s, i) => {
+      const li = document.createElement('li');
+      // Your own row is marked, so you can find yourself without reading
+      // every name -- the whole point of a standings table is "where am I".
+      li.className = 'standings-row' + (me && s.uid === me ? ' is-me' : '');
+      li.innerHTML =
+        `<span class="st-rank">${i + 1}</span>` +
+        `<span class="st-name">${escapeHtml(s.name)}</span>` +
+        `<span class="st-wins">${s.points}</span>`;
+      board.appendChild(li);
+    });
 
-    if (groupBoardTab === 'recent') {
-      rows.forEach((r) => {
-        const li = document.createElement('li');
-        li.className = 'group-recent-row';
-        li.innerHTML =
-          `<span class="gr-when">${escapeHtml(relativeDay(r.at))}</span>` +
-          `<span class="gr-who">${escapeHtml(r.winnerName || 'Nobody')} won</span>` +
-          `<span class="gr-n">${r.players} played</span>`;
-        board.appendChild(li);
-      });
-    } else if (groupBoardTab === 'champions') {
-      rows.forEach((c) => {
-        const li = document.createElement('li');
-        li.className = 'standings-row';
-        li.innerHTML =
-          `<span class="st-rank">👑</span>` +
-          `<span class="st-name">${escapeHtml(c.name)}</span>` +
-          `<span class="st-wins">${c.points}</span>` +
-          `<span class="st-meta">${escapeHtml(championLabel(c))}</span>`;
-        board.appendChild(li);
-      });
-    } else {
-      rows.forEach((s, i) => {
-        const li = document.createElement('li');
-        li.className = 'standings-row';
-        li.innerHTML =
-          `<span class="st-rank">${i + 1}</span>` +
-          `<span class="st-name">${escapeHtml(s.name)}</span>` +
-          `<span class="st-wins">${s.points}</span>`;
-        board.appendChild(li);
-      });
-    }
     empty.classList.toggle('hidden', rows.length > 0);
+    // The scoring note explains the points in the table above it, so it only
+    // earns its space when there IS a table.
     const note = document.querySelector('.group-scoring-note');
-    if (note) note.classList.toggle('hidden', groupBoardTab === 'recent' || groupBoardTab === 'champions');
-    empty.textContent = groupBoardTab === 'champions'
-      ? 'No marathons finished yet.'
-      : groupBoardTab === 'recent' ? 'No games yet.'
-      // The marathon tab's empty state has two quite different causes, and
-      // "nothing scored yet" for the second one reads as though the app has
-      // lost your points.
-      : (groupBoardTab === 'month' && !(g.marathon && (g.marathon.running || g.marathon.ended)))
-        ? 'No marathon running. Games still count on Today.'
-        : 'Nothing scored yet.';
+    if (note) note.classList.toggle('hidden', rows.length === 0);
+    // Two quite different empty states. "Nothing scored yet" for the
+    // no-marathon case reads as though the app has lost your points.
+    empty.textContent = !(g.marathon && (g.marathon.running || g.marathon.ended))
+      ? 'No marathon running yet.'
+      : 'Nothing scored yet — play a game to get on the board.';
   }
 
   document.getElementById('btn-group-back').onclick = () => {
@@ -2166,17 +2191,6 @@
     joinRoomByKey(target);
   });
 
-  (function wireGroupBoardTabs() {
-    const tabs = document.getElementById('group-board-tabs');
-    if (!tabs) return;
-    tabs.querySelectorAll('.seg').forEach((seg) => {
-      seg.onclick = () => {
-        groupBoardTab = seg.dataset.board;
-        tabs.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s === seg));
-        renderGroupBoard();
-      };
-    });
-  })();
 
   // ---- start a marathon ----
   document.getElementById('btn-start-marathon').onclick = () => {
@@ -2249,26 +2263,59 @@
     badge.classList.toggle('hidden', n === 0);
   }
 
+  // Open/close the group chat sheet. Mirrors the table chat's handlers
+  // deliberately, including NOT auto-focusing the input on open -- focusing
+  // it forces the keyboard up the instant the sheet appears, which on a real
+  // Android WebView broke the panel's position:fixed layout outright (see
+  // the long comment on the table chat's FAB handler).
   function setGroupChatExpanded(open) {
+    const panel = document.getElementById('group-chat-panel');
+    const backdrop = document.getElementById('group-chat-backdrop');
+    const fab = document.getElementById('group-chat-fab');
+    if (!panel || !backdrop || !fab) return;
     groupChatExpanded = !!open;
-    const body = document.getElementById('group-chat-body');
-    const btn = document.getElementById('btn-group-chat-toggle');
-    if (!body || !btn) return;
-    body.classList.toggle('hidden', !groupChatExpanded);
-    btn.setAttribute('aria-expanded', groupChatExpanded ? 'true' : 'false');
-    btn.classList.toggle('open', groupChatExpanded);
+
     if (groupChatExpanded) {
+      activeChatPanelId = 'group-chat-panel';
+      activeChatListId = 'group-chat-list';
+      panel.classList.remove('hidden');
+      backdrop.classList.remove('hidden');
+      fab.classList.add('hidden');
       groupChatSeenAt = Date.now();
-      const ul = document.getElementById('group-chat-list');
-      if (ul) ul.scrollTop = ul.scrollHeight;
+      // Re-derive the top anchor from scratch on every open -- the one
+      // moment the keyboard is definitionally closed.
+      chatSheetTopPx = null;
+      positionChatSheet();
+      scrollChatToLatest();
+    } else {
+      // Drop focus FIRST so the keyboard closes with the sheet, otherwise it
+      // outlives the panel and the next viewport resize applies an offset to
+      // something that's no longer there.
+      const input = document.getElementById('input-group-chat');
+      if (input) input.blur();
+      panel.classList.add('hidden');
+      backdrop.classList.add('hidden');
+      // Only re-show the button if we're still on the group screen -- backing
+      // out to the landing screen closes the sheet too, and a chat button
+      // floating over the landing screen would be nonsense.
+      fab.classList.toggle('hidden', !groupScreenCode);
+      chatSheetTopPx = null;
     }
     updateGroupChatUnread();
   }
 
-  (function wireGroupChatToggle() {
-    const btn = document.getElementById('btn-group-chat-toggle');
-    if (!btn) return;
-    btn.onclick = () => setGroupChatExpanded(!groupChatExpanded);
+  (function wireGroupChatSheet() {
+    const fab = document.getElementById('group-chat-fab');
+    const closeBtn = document.getElementById('btn-group-chat-close');
+    const backdrop = document.getElementById('group-chat-backdrop');
+    if (fab) fab.onclick = () => setGroupChatExpanded(true);
+    if (closeBtn) closeBtn.onclick = () => setGroupChatExpanded(false);
+    if (backdrop) backdrop.onclick = () => setGroupChatExpanded(false);
+    const input = document.getElementById('input-group-chat');
+    if (input) {
+      input.addEventListener('focus', () => setTimeout(positionChatSheet, 120));
+      input.addEventListener('blur', () => setTimeout(positionChatSheet, 120));
+    }
   })();
 
   async function sendGroupChat() {
@@ -5053,6 +5100,11 @@
   });
 
   document.getElementById('chat-fab').onclick = () => {
+    // Point the shared positioner at THIS sheet -- the group chat may have
+    // been the last one open, and a stale id here would leave this panel
+    // unpositioned while silently resizing one that isn't on screen.
+    activeChatPanelId = 'chat-panel';
+    activeChatListId = 'chat-messages';
     document.getElementById('chat-panel').classList.remove('hidden');
     document.getElementById('chat-backdrop').classList.remove('hidden');
     document.getElementById('chat-fab').classList.add('hidden');
