@@ -440,31 +440,27 @@ body.game-active {
    were given one then), so it was sized purely by its 12px padding. */
 .dd-toggle { min-height: 44px; }
 
-/* ---- Group chat: collapsible header (Sept 2026) ----
-   Replaces the <h3> the chat block used to have. Styled to read as the same
-   heading, because it IS the same heading -- it just also toggles now. */
-.group-chat-toggle {
-  display: flex; align-items: center; gap: 8px;
-  width: 100%; min-height: 44px;          /* the 44px floor, as a real control */
-  background: none; border: none; padding: 0; margin: 0;
-  cursor: pointer; text-align: left; font-family: inherit;
+/* ---- A block heading with an action on the same row (Sept 2026) ----
+   Used by Members + Invite. A secondary action doesn't need a full-width
+   button and a whole row of its own. */
+.block-heading-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
 }
-.group-chat-toggle-label { font-size: 15px; font-weight: 700; color: var(--red); }
-.group-chat-toggle-sub { font-size: 11px; color: #9a9aa2; margin-left: auto; }
-/* .badge is position:absolute (it hangs off the chat FAB on the game
-   screen). Here it's a flex child in a row, so it has to sit in flow --
-   without this it detaches and lands on top of the label. */
-.group-chat-toggle .badge { position: static; margin: 0; }
-.group-chat-chevron {
-  width: 18px; height: 18px; margin: 0; flex: 0 0 auto;
-  color: var(--text-muted); transition: transform 0.18s ease;
+.block-heading-row h3 { margin: 0; }
+.block-heading-row button {
+  width: auto; margin: 0; padding: 0 14px; min-height: 36px;
+  white-space: nowrap; flex: 0 0 auto;
 }
-.group-chat-toggle.open .group-chat-chevron { transform: rotate(180deg); }
-.group-chat-body { margin-top: 10px; }
-.group-chat-body.hidden { display: none; }
-@media (prefers-reduced-motion: reduce) {
-  .group-chat-chevron { transition: none; }
-}
+
+/* ---- Group chat FAB ----
+   Reuses .chat-fab wholesale (position, size, colour, the --ad-safe-bottom
+   offset). This rule exists only to sit it ABOVE the table chat's own fab in
+   the stacking order -- they're never both visible, but if a stale one ever
+   lingered, the one for the screen you're actually on should win. */
+.group-chat-fab { z-index: 21; }
+/* The group chat's empty-state line sits inside the sheet, where .hint's
+   default margins leave it floating in the middle of the message area. */
+.group-chat-empty { margin: 12px 16px; text-align: center; }
 .mode-block h3 { margin: 0 0 4px; font-size: 15px; color: var(--red); }
 .mode-block-sub { margin: 0 0 8px; font-size: 11px; color: #9a9aa2; }
 .mode-block .row { margin-top: 10px; }
