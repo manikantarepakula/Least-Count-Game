@@ -3575,8 +3575,14 @@
     // A leave that was queued mid-round (see btn-leave-game-confirm) fires
     // the moment the round is over, which is the first point the server will
     // accept it.
-    if (leaveAfterRound && (game.roundOver || game.gameOver)) {
-      leaveAfterRound = false;
+    // ...or sooner, if this state push is the one that knocked them out:
+    // an eliminated player holds no cards, so the server will take the leave
+    // right now and there's nothing left to wait for.
+    const nowSpectating =
+      myPlayerId &&
+      (game.eliminated || []).concat(game.quit || []).indexOf(myPlayerId) !== -1;
+    if (leaveAfterRound && (game.roundOver || game.gameOver || nowSpectating)) {
+      setLeavePending(false);   // clears the flag AND the button's pending look
       leaveRoom();
       return;
     }
@@ -4662,7 +4668,7 @@
       myPlayerId = null;
       latestRoom = null;
       latestGame = null;
-      leaveAfterRound = false;   // don't carry a queued leave into the next room
+      setLeavePending(false);   // don't carry a queued leave into the next room
       window.__lastRoundResultShownFor = null;
       // Leaving mid-reveal would otherwise strand the phase flag as true,
       // and the next room's table would render every seat's reveal box
@@ -4696,23 +4702,106 @@
   // auto-rejoins the stored room there was no way back to the menu either.
   // Confirmed, because it forfeits the game.
   const leaveDialog = () => document.getElementById('leave-game-dialog');
-  document.getElementById('btn-leave-game').onclick = () => leaveDialog().classList.remove('hidden');
-  document.getElementById('btn-leave-game-cancel').onclick = () => leaveDialog().classList.add('hidden');
+
+  // ------------------------------------------------------------------
+  // Queued-leave state (fixed Sept 2026).
+  //
+  // The server refuses to let anyone go mid-round ("Cannot leave in the
+  // middle of a round"), and it always has -- removing a player whose cards
+  // are in play would mean rewriting the turn rotation underneath everyone.
+  // So a mid-round leave is QUEUED: the intent is recorded, their turns keep
+  // being auto-played as they already would be, and the moment the round
+  // ends renderGame() calls leaveRoom() for them.
+  //
+  // That part worked. What didn't was telling them. The only feedback was
+  // setGameError('You'll leave as soon as this round finishes.') -- and the
+  // game_state handler clears the error line on every turn change:
+  //
+  //     if (prev.currentPlayer !== game.currentPlayer || ...) setGameError('');
+  //
+  // Turns change every few seconds, so the message was gone almost at once
+  // and nothing replaced it. Tap, brief flash, silence -- indistinguishable
+  // from a dead button, which is exactly how it was reported. There was also
+  // no way to change your mind once queued.
+  //
+  // Now the state lives on the button itself (a class, so it survives every
+  // state push) and tapping again offers to cancel.
+  // ------------------------------------------------------------------
+  function setLeavePending(on) {
+    leaveAfterRound = !!on;
+    const btn = document.getElementById('btn-leave-game');
+    if (!btn) return;
+    btn.classList.toggle('leave-pending', !!on);
+    // The control is a bare icon, so the accessible name is the only label it
+    // has. Keep title in step too -- it's what a long-press surfaces.
+    const label = on ? 'Leaving when this round ends — tap to stay' : 'Leave game';
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', label);
+  }
+
+  // Am I out of the game but still sitting at the table? Mirrors the engine's
+  // isSpectator(): eliminated or quit. Such a player holds no cards and isn't
+  // in the rotation, so the server now lets them go mid-round -- there's no
+  // hand of theirs to wait for. Without this the person most likely to want
+  // out (they've just been knocked out and the table plays on for another
+  // ten minutes) was the only one who couldn't.
+  function amSpectator() {
+    if (!latestGame || !myPlayerId) return false;
+    const out = (latestGame.eliminated || []).concat(latestGame.quit || []);
+    return out.indexOf(myPlayerId) !== -1;
+  }
+
+  document.getElementById('btn-leave-game').onclick = () => {
+    const t = document.getElementById('leave-game-title');
+    const p = document.getElementById('leave-game-text');
+    const cancel = document.getElementById('btn-leave-game-cancel');
+    const confirm = document.getElementById('btn-leave-game-confirm');
+    if (amSpectator()) {
+      // No "you'll forfeit the game" here -- they already lost it. And no
+      // queueing: this leaves at once, so the copy shouldn't imply a wait.
+      t.textContent = 'Leave the table?';
+      p.textContent = 'You’re out of this game, so you can go now. You’ll head back to the menu.';
+      cancel.textContent = 'Keep watching';
+      confirm.textContent = 'Leave';
+      leaveDialog().classList.remove('hidden');
+      return;
+    }
+    if (leaveAfterRound) {
+      // Already queued -- this dialog is now "do you want to call it off?"
+      t.textContent = 'Leaving when this round ends';
+      p.textContent = 'You’ll go back to the menu as soon as this hand finishes. Your turns are being played for you until then.';
+      cancel.textContent = 'Stay in the game';
+      confirm.textContent = 'Keep leaving';
+    } else {
+      t.textContent = 'Leave this game?';
+      p.textContent = 'You’ll forfeit the game and go back to the menu. The others carry on without you.';
+      cancel.textContent = 'Stay';
+      confirm.textContent = 'Leave';
+    }
+    leaveDialog().classList.remove('hidden');
+  };
+
+  document.getElementById('btn-leave-game-cancel').onclick = () => {
+    leaveDialog().classList.add('hidden');
+    // In the queued state the secondary button means "call it off", so it has
+    // to actually clear the queue -- otherwise they'd be dropped anyway and
+    // rightly think the game ignored them.
+    if (leaveAfterRound) {
+      setLeavePending(false);
+      setGameError('You’re staying in the game.');
+    }
+  };
+
   document.getElementById('btn-leave-game-confirm').onclick = () => {
     leaveDialog().classList.add('hidden');
-    // ----------------------------------------------------------------
-    // The server refuses to let anyone go mid-round ("Cannot leave in the
-    // middle of a round"), and it always has -- removing a player whose
-    // cards are in play would mean rewriting the turn rotation underneath
-    // everyone. This button was added without checking that, so tapping it
-    // during a hand just produced an error.
-    //
-    // So it queues instead: the intent is recorded, their turns keep being
-    // auto-played as they already would be, and the moment the round ends
-    // they're out. Honest about the wait rather than failing.
-    // ----------------------------------------------------------------
+    // Spectators go immediately -- checked BEFORE the queued-leave branch, so
+    // a leave queued while still playing turns into an instant exit the
+    // moment they're knocked out, rather than making them sit through the
+    // rest of a hand they're no longer in.
+    if (amSpectator()) { setLeavePending(false); leaveRoom(); return; }
+    if (leaveAfterRound) return;   // "Keep leaving" -- nothing to change
     if (latestGame && !latestGame.roundOver && !latestGame.gameOver) {
-      leaveAfterRound = true;
+      setLeavePending(true);
       setGameError('You’ll leave as soon as this round finishes.');
       return;
     }
