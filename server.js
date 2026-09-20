@@ -681,6 +681,9 @@ const RATE_LIMITS = {
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
   report_player: { max: 5, windowMs: 60000 },
+  // Asking to rejoin holds up everyone else's next round, so it's kept
+  // deliberately tight -- one rejoin is allowed per game anyway.
+  request_rejoin: { max: 4, windowMs: 60000 },
   get_my_stats: { max: 10, windowMs: 30000 },
   get_player_stats: { max: 20, windowMs: 30000 },
 };
@@ -1543,6 +1546,119 @@ function denyJoinRequest(room, playerId, reason) {
   notifyHostOfJoinRequest(room);
 }
 
+// ---------------------------------------------------------------------------
+// Rejoin after elimination
+//
+// An eliminated player is offered one way back in. THEY ask, the HOST decides,
+// and they return on the highest score among players still in the game (see
+// rejoinEliminated in gameLogic.js). One rejoin per player per game.
+//
+// Two rules make this more than a socket event:
+//
+//   * The next round must not start while a request is unresolved -- otherwise
+//     the host is answering about a game that has already moved on, and the
+//     rejoiner would return a round late at a score that is no longer right.
+//     scheduleAutoNextRound() and startNextRound() both refuse to run while
+//     anything is pending.
+//
+//   * ...but not forever. A host who puts their phone down would otherwise
+//     freeze the table for everyone with no way out. After 30 seconds an
+//     unanswered request resolves itself as a decline and play continues.
+// ---------------------------------------------------------------------------
+const REJOIN_DECISION_MS = 30000;
+
+function rejoinRequestsPending(room) {
+  return !!(room && room.pendingRejoins && room.pendingRejoins.size > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Who has played in THIS game, by account -- kept for the life of the room,
+// not just while someone is sitting in it.
+//
+// findExistingSeat() only searches room.order, so it stops recognising anyone
+// who actually left. That is fine for a stranger, but not for someone who was
+// eliminated: leaving and re-entering would mint them a NEW playerId, and a
+// new id is not in game.playerIds, so startNextRound()'s add-loop would seat
+// them in the running game -- no host approval, and their one-rejoin-per-game
+// limit reset. Leaving to dodge elimination would have been the reliable way
+// back in, which is the opposite of the rule.
+//
+// LIMIT, stated plainly: this is keyed on the Firebase uid, and guests get a
+// fresh anonymous uid after a reinstall or cleared data. Someone determined
+// enough to reinstall mid-game will still come back as a new person. Google
+// Sign-In (built, currently behind FEATURES.googleSignIn) is what would close
+// that; for a family game this is already far past the honesty threshold.
+// ---------------------------------------------------------------------------
+function rememberPlayerUid(room, firebaseUid, playerId) {
+  if (!firebaseUid || !playerId) return;
+  if (!room.playerUids) room.playerUids = new Map();
+  room.playerUids.set(firebaseUid, playerId);
+}
+
+// The playerId this account already holds in the running game, if any --
+// even when their chair has been cleared away.
+function knownPlayerIdFor(room, firebaseUid) {
+  if (!firebaseUid || !room.playerUids || !room.game || room.game.gameOver) return null;
+  const pid = room.playerUids.get(firebaseUid);
+  if (!pid) return null;
+  return room.game.playerIds.includes(pid) ? pid : null;
+}
+
+// Rejoin needs somebody to approve it, so it only exists where there is
+// another human at the table -- never in solo-vs-bots.
+function hasAnotherHuman(room) {
+  let humans = 0;
+  for (const pid of room.order) {
+    const p = room.players.get(pid);
+    if (p && !p.isBot) humans += 1;
+  }
+  return humans > 1;
+}
+
+function notifyHostOfRejoinRequests(room) {
+  const host = room.players.get(room.hostPlayerId);
+  if (!host || !host.connected || !host.socketId) return;
+  const pending = room.pendingRejoins
+    ? Array.from(room.pendingRejoins.entries()).map(([playerId, r]) => ({
+        playerId, name: r.name, score: r.score,
+      }))
+    : [];
+  io.to(host.socketId).emit('rejoin_requests', { pending });
+}
+
+function clearRejoinRequest(room, playerId) {
+  if (!room.pendingRejoins) return null;
+  const entry = room.pendingRejoins.get(playerId);
+  if (!entry) return null;
+  clearTimeout(entry.timer);
+  room.pendingRejoins.delete(playerId);
+  return entry;
+}
+
+// Wipes every pending request and its timer. Called wherever the game they
+// belonged to stops existing -- a new game, or a player walking out. A
+// leftover entry would otherwise keep startNextRound() returning false and
+// freeze a table over a decision about a game that has already gone.
+function clearAllRejoinRequests(room) {
+  if (!room || !room.pendingRejoins) return;
+  for (const [, entry] of room.pendingRejoins) clearTimeout(entry.timer);
+  room.pendingRejoins.clear();
+}
+
+// One exit for every "no": host declined, player changed their mind, or the
+// 30 seconds ran out. In all three the player leaves the game, exactly as
+// agreed -- so there is a single place that can get that wrong.
+function denyRejoin(room, playerId, reason) {
+  const entry = clearRejoinRequest(room, playerId);
+  if (!entry) return;
+  const p = room.players.get(playerId);
+  if (p && p.socketId) io.to(p.socketId).emit('rejoin_result', { ok: false, reason });
+  notifyHostOfRejoinRequests(room);
+  // Held only while SOMETHING is pending -- with several eliminated in one
+  // round, the table waits for the last of them, not the first.
+  if (!rejoinRequestsPending(room)) scheduleAutoNextRound(room);
+}
+
 function broadcastGameState(room) {
   if (!room.game) return;
   for (const pid of room.order) {
@@ -1599,6 +1715,7 @@ function startMatchedRoom(entries) {
     if (s) s.join(code);
   }
   rooms.set(code, room);
+  clearAllRejoinRequests(room);
   room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
   room.game.startRound();
   for (const e of entries) {
@@ -1728,6 +1845,9 @@ function clearAutoNextRoundTimer(room) {
 // Returns false (rather than throwing) when the round can't legitimately
 // start, so the timer callback doesn't need its own error handling.
 function startNextRound(room, eliminationScore) {
+  // Blocks the host's "Start Now" too, not just the countdown -- otherwise
+  // the one person who must answer the rejoin request could skip past it.
+  if (rejoinRequestsPending(room)) return false;
   if (!room || !room.game) return false;
   if (!room.game.roundOver || room.game.gameOver) return false;
   clearAutoNextRoundTimer(room);
@@ -1765,6 +1885,11 @@ function scheduleAutoNextRound(room) {
   clearAutoNextRoundTimer(room);
   if (!room || !room.game) return;
   if (!room.game.roundOver || room.game.gameOver) return;
+  // Somebody eliminated this round has asked to come back and the host hasn't
+  // answered. Dealing now would strand that decision against a game that has
+  // moved on. denyRejoin()/approve re-arm this once the last one resolves,
+  // and the request's own 30s timer guarantees that happens.
+  if (rejoinRequestsPending(room)) return;
 
   room.autoNextRoundAt = Date.now() + AUTO_NEXT_ROUND_MS;
   room.autoNextTimer = setTimeout(() => {
@@ -2039,6 +2164,7 @@ io.on('connection', (socket) => {
       };
       room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
       room.order.push(playerId);
+      rememberPlayerUid(room, verifiedUid, playerId);
       rooms.set(code, room);
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
@@ -2091,6 +2217,7 @@ io.on('connection', (socket) => {
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
 
+      clearAllRejoinRequests(room);
       room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
       room.game.startRound();
       beginStartSequence(room, code);
@@ -2176,6 +2303,7 @@ io.on('connection', (socket) => {
         botNum += 1;
       }
       rooms.set(code, room);
+      clearAllRejoinRequests(room);
       room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
       room.game.startRound();
       for (const e of entries) {
@@ -2229,12 +2357,44 @@ io.on('connection', (socket) => {
         if (!p.hasNickname) p.name = cleanName;
         p.platform = cleanPlatform(platform);
         room.allHumansDisconnectedAt = null; // a human is back
+        rememberPlayerUid(room, verifiedUid, existingId);
         socketIndex.set(socket.id, { roomCode: code, playerId: existingId });
         socket.join(code);
         repairHost(room);
         ack && ack({ ok: true, roomCode: code, playerId: existingId, chatHistory: room.chatHistory });
         broadcastRoom(room);
         if (room.game) broadcastGameState(room);
+        return;
+      }
+
+      // No chair, but this account is already a player in the game that's
+      // running -- an eliminated player who declined a rejoin and walked out
+      // is the case this exists for. Put them back in their OWN seat rather
+      // than minting a new one (see knownPlayerIdFor). They come back exactly
+      // as they left: still eliminated, and still holding their one rejoin if
+      // they never spent it, so they can ask the host again.
+      const returningId = knownPlayerIdFor(room, verifiedUid);
+      if (returningId) {
+        let rp = room.players.get(returningId);
+        if (!rp) {
+          rp = { name: cleanName, isBot: false, firebaseUid: verifiedUid };
+          room.players.set(returningId, rp);
+        }
+        if (!room.order.includes(returningId)) room.order.push(returningId);
+        rp.socketId = socket.id;
+        rp.connected = true;
+        rp.profileName = cleanName;
+        if (!rp.hasNickname) rp.name = cleanName;
+        rp.platform = cleanPlatform(platform);
+        rp.firebaseUid = verifiedUid;
+        clearAbsenceStrikes(room, returningId);
+        room.allHumansDisconnectedAt = null;
+        socketIndex.set(socket.id, { roomCode: code, playerId: returningId });
+        socket.join(code);
+        repairHost(room);
+        ack && ack({ ok: true, roomCode: code, playerId: returningId, chatHistory: room.chatHistory });
+        broadcastRoom(room);
+        broadcastGameState(room);
         return;
       }
 
@@ -2246,6 +2406,7 @@ io.on('connection', (socket) => {
         const playerId = makePlayerId();
         room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
         room.order.push(playerId);
+        rememberPlayerUid(room, verifiedUid, playerId);
         // A freshly-spun-up group room has no host yet (createRoomForGroup
         // leaves it null, since nobody was in it). repairHost also rescues
         // the case where the recorded host is an offline ghost, which is how
@@ -2273,6 +2434,7 @@ io.on('connection', (socket) => {
         const playerId = makePlayerId();
         room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
         room.order.push(playerId);
+        rememberPlayerUid(room, verifiedUid, playerId);
         repairHost(room);
         socketIndex.set(socket.id, { roomCode: code, playerId });
         socket.join(code);
@@ -2686,6 +2848,104 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ---- rejoin after elimination: the player asks ----
+  socket.on('request_rejoin', ({ roomCode }, ack) => {
+    try {
+      if (isRateLimited(socket, 'request_rejoin')) throw new Error('Too many requests too quickly. Please wait a moment.');
+      const room = rooms.get(roomCode);
+      if (!room || !room.game) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.roomCode !== roomCode) throw new Error('Not in this room.');
+      const playerId = entry.playerId;
+
+      // Solo-vs-bots has nobody who could approve it.
+      if (!hasAnotherHuman(room)) throw new Error('Rejoining needs another player at the table.');
+      // The engine owns the eligibility rules -- eliminated, between rounds,
+      // not already used up, game still running.
+      if (!room.game.canRejoin(playerId)) throw new Error('You cannot rejoin this game.');
+
+      if (!room.pendingRejoins) room.pendingRejoins = new Map();
+      if (room.pendingRejoins.has(playerId)) { ack && ack({ ok: true }); return; }
+
+      const p = room.players.get(playerId);
+      const score = room.game.rejoinScoreFor(playerId);
+      room.pendingRejoins.set(playerId, {
+        name: (p && p.name) || 'Player',
+        score,
+        askedAt: Date.now(),
+        timer: setTimeout(() => {
+          denyRejoin(room, playerId, 'No answer from the host.');
+        }, REJOIN_DECISION_MS),
+      });
+
+      // Freeze the countdown NOW, before the host has even seen it -- the
+      // scorecard hold is short and the decision must not race it.
+      clearAutoNextRoundTimer(room);
+      room.autoNextRoundAt = null;
+      notifyHostOfRejoinRequests(room);
+      broadcastRoom(room);
+      broadcastGameState(room);
+      ack && ack({ ok: true, score });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // ---- the player changes their mind ----
+  socket.on('decline_rejoin', ({ roomCode }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.roomCode !== roomCode) throw new Error('Not in this room.');
+      denyRejoin(room, entry.playerId, 'You chose to leave the game.');
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // ---- the host decides ----
+  socket.on('respond_rejoin', ({ roomCode, playerId, accept }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room || !room.game) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can answer that.');
+      if (!room.pendingRejoins || !room.pendingRejoins.has(playerId)) {
+        throw new Error('That request is no longer waiting.');
+      }
+
+      if (!accept) {
+        denyRejoin(room, playerId, 'The host declined.');
+        ack && ack({ ok: true });
+        return;
+      }
+
+      // Re-check rather than trusting the request: rounds, eliminations and
+      // players can all have moved between asking and answering.
+      if (!room.game.canRejoin(playerId)) {
+        denyRejoin(room, playerId, 'That is no longer possible.');
+        throw new Error('That player can no longer rejoin.');
+      }
+
+      room.game.rejoinEliminated(playerId);
+      clearRejoinRequest(room, playerId);
+      const p = room.players.get(playerId);
+      if (p && p.socketId) {
+        io.to(p.socketId).emit('rejoin_result', { ok: true, score: room.game.scores[playerId] });
+      }
+      notifyHostOfRejoinRequests(room);
+      broadcastRoom(room);
+      broadcastGameState(room);
+      // Play resumes only once nothing else is still waiting.
+      if (!rejoinRequestsPending(room)) scheduleAutoNextRound(room);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
   socket.on('admit_join_request', ({ roomCode, playerId }, ack) => {
     try {
       const room = rooms.get(roomCode);
@@ -2699,6 +2959,10 @@ io.on('connection', (socket) => {
 
       room.players.set(playerId, { name: req.name, socketId: req.socketId, connected: true, isBot: false, firebaseUid: req.firebaseUid, platform: req.platform || 'unknown' });
       room.order.push(playerId);
+      // Admitted mid-game -- record the account here too, or this player
+      // would be the one person who could still leave and come back as
+      // somebody new (see knownPlayerIdFor).
+      rememberPlayerUid(room, req.firebaseUid, playerId);
       const sockEntry = socketIndex.get(req.socketId);
       if (sockEntry) sockEntry.pending = false;
       // Actual game-engine entry (addPlayer) happens in next_round, right
@@ -2712,6 +2976,12 @@ io.on('connection', (socket) => {
       // messages and show the chat FAB; this path was missing it, which is
       // why someone admitted mid-game never got a chat option at all.
       io.to(req.socketId).emit('join_admitted', { roomCode, playerId, chatHistory: room.chatHistory });
+      // Tell the host their list changed. This was missing, and it is why the
+      // "X wants to join" banner stayed on screen after tapping Admit until
+      // something else happened to refresh it (usually the next round).
+      // ignore_join_request never had the bug because it goes through
+      // denyJoinRequest(), which has always called this.
+      notifyHostOfJoinRequest(room);
       broadcastRoom(room);
       ack && ack({ ok: true });
     } catch (e) {
@@ -2827,6 +3097,7 @@ io.on('connection', (socket) => {
       // "not yet dealt"), but we deliberately withhold the full game_state
       // broadcast -- which is what actually reveals hands/joker/open card to
       // clients -- until the countdown + live-deal animation has played out.
+      clearAllRejoinRequests(room);
       room.game = new LeastCountGame(room.order.slice(), maxScore);
       room.statsRecorded = false;
       room.game.startRound();
