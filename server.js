@@ -236,6 +236,9 @@ app.get('/api/admin/tester-activity', async (req, res) => {
           displayName: d.displayName || '(unknown)',
           names: new Set(),
           games: 0,
+          partials: 0,
+          appAny: 0,
+          webAny: 0,
           wins: 0,
           solo: 0,
           multiplayer: 0,
@@ -248,11 +251,28 @@ app.get('/api/admin/tester-activity', async (req, res) => {
       }
       const p = byPlayer.get(d.uid);
       if (d.displayName) p.names.add(d.displayName);
-      p.games++;
-      if (d.won) p.wins++;
-      if (d.mode === 'multiplayer') p.multiplayer++; else p.solo++;
-      if (d.platform === 'android-app') p.appGames++;
-      else if (d.platform === 'web') p.webGames++;
+      // A partial row means "played real rounds, didn't finish the game".
+      // It proves presence on a day, which is what the Play evidence needs,
+      // but it is not a game -- so it stays out of every games/wins/mode
+      // total and is shown in its own column.
+      // Rows predating the `completed` field have it undefined, which is
+      // correctly NOT false: those were all finished games.
+      const partial = d.completed === false;
+      if (partial) {
+        p.partials++;
+      } else {
+        p.games++;
+        if (d.won) p.wins++;
+        if (d.mode === 'multiplayer') p.multiplayer++; else p.solo++;
+        if (d.platform === 'android-app') p.appGames++;
+        else if (d.platform === 'web') p.webGames++;
+      }
+      // Platform presence counts partials too -- otherwise somebody who has
+      // only ever abandoned games would be filed as 'unknown' and dropped
+      // from the Android table entirely, which is the exact person this
+      // whole change exists to make visible.
+      if (d.platform === 'android-app') p.appAny++;
+      else if (d.platform === 'web') p.webAny++;
       // Bucket active days by IST, not UTC. The UTC day rolls over at 05:30
       // IST, so a game played at 1am IST counted toward the PREVIOUS day --
       // and these testers play late at night, which is exactly when that
@@ -279,6 +299,7 @@ app.get('/api/admin/tester-activity', async (req, res) => {
         // the identity; the names are costume changes.
         aka: [...p.names].filter((n) => n !== p.displayName),
         games: p.games,
+        partials: p.partials,
         wins: p.wins,
         solo: p.solo,
         multiplayer: p.multiplayer,
@@ -288,7 +309,7 @@ app.get('/api/admin/tester-activity', async (req, res) => {
         // who's played on both (e.g. tried the site, then installed the test
         // build) is labelled 'both' rather than being silently filed under
         // whichever happened to be first.
-        platform: p.appGames && p.webGames ? 'both' : (p.appGames ? 'android-app' : (p.webGames ? 'web' : 'unknown')),
+        platform: p.appAny && p.webAny ? 'both' : (p.appAny ? 'android-app' : (p.webAny ? 'web' : 'unknown')),
         activeDays: p.days.size,
         firstSeen: p.firstSeen,
         lastSeen: p.lastSeen,
@@ -298,7 +319,10 @@ app.get('/api/admin/tester-activity', async (req, res) => {
     // The number that actually answers "are my Play testers playing?" --
     // anyone who has finished at least one game inside the native Android
     // build during the window.
-    const appPlayers = players.filter((p) => p.appGames > 0);
+    // Anyone with ANY android-app row, finished or not -- a tester who plays
+    // nightly but never plays a game to the end is still a tester using the
+    // app, and filtering on completed games alone hid them completely.
+    const appPlayers = players.filter((p) => p.platform === 'android-app' || p.platform === 'both');
 
     // Anyone whose stats doc shows they've played, but who has no rows in the
     // window -- either they went quiet, or they last played before the
@@ -380,6 +404,7 @@ app.get('/api/admin/tester-activity', async (req, res) => {
         ${nameCell(p)}
         <td>${platformTag(p)}</td>
         <td class="n">${p.games}</td>
+        <td class="n">${p.partials ? `<span class="part">+${p.partials}</span>` : '<span class="zero">0</span>'}</td>
         <td class="n">${p.appGames}</td>
         <td class="n">${p.activeDays}</td>
         <td class="n">${p.multiplayer}</td>
@@ -426,6 +451,10 @@ app.get('/api/admin/tester-activity', async (req, res) => {
      which is the whole point of showing it -- nicknames can't be. */
   .uid { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px;
          color: #6f9080; letter-spacing: .02em; margin-top: 1px; }
+  /* Partial sessions: played real rounds, didn't finish the game. Shown
+     muted and prefixed with + so it never reads as part of the games count. */
+  .part { color: #d9b45c; font-weight: 600; }
+  .zero { color: #4d6659; }
   .aka { font-size: 11px; color: #8fae9c; margin-top: 2px; font-style: italic; }
 </style></head><body>
 <h1>Tester activity — last ${days} days</h1>
@@ -439,7 +468,7 @@ app.get('/api/admin/tester-activity', async (req, res) => {
   <div class="card"><div class="v">${summary.appPlayersActive3PlusDays}</div><div class="k">Active 3+ days</div></div>
 </div>
 ${appPlayers.length ? `<table>
-  <tr><th>Player</th><th>Platform</th><th class="n">Games</th><th class="n">In app</th><th class="n">Active days</th><th class="n">Multi</th><th class="n">Solo</th><th class="n">Wins</th><th>Last played</th></tr>
+  <tr><th>Player</th><th>Platform</th><th class="n">Games</th><th class="n">Part</th><th class="n">In app</th><th class="n">Active days</th><th class="n">Multi</th><th class="n">Solo</th><th class="n">Wins</th><th>Last played</th></tr>
   ${appRows}
 </table>` : '<p class="empty">No games finished from the Android app in this window yet.</p>'}
 
@@ -451,7 +480,7 @@ ${appPlayers.length ? `<table>
   <div class="card"><div class="v">${summary.webOnlyPlayers}</div><div class="k">Web only</div></div>
 </div>
 ${players.length ? `<table>
-  <tr><th>Player</th><th>Platform</th><th class="n">Games</th><th class="n">In app</th><th class="n">Active days</th><th class="n">Multi</th><th class="n">Solo</th><th class="n">Wins</th><th>Last played</th></tr>
+  <tr><th>Player</th><th>Platform</th><th class="n">Games</th><th class="n">Part</th><th class="n">In app</th><th class="n">Active days</th><th class="n">Multi</th><th class="n">Solo</th><th class="n">Wins</th><th>Last played</th></tr>
   ${rows}
 </table>` : '<p class="empty">No finished games recorded in this window yet. Note the activity log only starts from the deploy that added it — earlier games are in the section below.</p>'}
 <h2>Played before, but not in this window</h2>
@@ -476,6 +505,73 @@ ${quiet.length ? `<table>
 // never actually got a Firebase account linked (firebaseUid missing) are
 // silently skipped -- there's nowhere to save their stats yet.
 // --------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Records that a player was genuinely PLAYING, for a game they didn't finish.
+//
+// recordGameResult() below only writes when room.game.gameOver is true -- the
+// whole game decided, everyone but one eliminated. That is the right bar for
+// a "game played" statistic, but it made the tester-activity report blind to
+// the most ordinary behaviour there is: open the app, play a few rounds, put
+// the phone down. Those sessions wrote nothing at all, so a tester who played
+// every single evening could show up with a last-played date from last week
+// and zero solo games. For a report whose entire job is evidencing that real
+// people use the app, that is the wrong kind of wrong.
+//
+// Deliberately narrower than recordGameResult():
+//   * Only the `activity` row + lastPlayedAt. NOT gamesPlayed/wins -- those
+//     are the player's own lifetime stats, shown to them in the app, and
+//     "games played" should keep meaning games actually played to the end.
+//   * Requires at least one COMPLETED round (roundHistory), so opening a room
+//     and backing out immediately doesn't count as playing.
+//   * completed:false, so the report can count it toward active days without
+//     letting it inflate the games column.
+//
+// Guarded per-uid per-room, and skipped entirely once the game is over, so a
+// player can never produce both a partial and a completed row for one game.
+// ---------------------------------------------------------------------------
+function recordPartialActivity(room, playerId) {
+  try {
+    if (!db || !room || !room.game) return;
+    if (room.game.gameOver || room.statsRecorded) return;  // the real recorder owns this game
+    if (!Array.isArray(room.game.roundHistory) || room.game.roundHistory.length < 1) return;
+    const player = room.players.get(playerId);
+    if (!player || player.isBot || !player.firebaseUid) return;
+
+    if (!room.partialRecorded) room.partialRecorded = new Set();
+    if (room.partialRecorded.has(player.firebaseUid)) return;
+    room.partialRecorded.add(player.firebaseUid);
+
+    const at = new Date().toISOString();
+    const humanCount = room.game.playerIds.filter((id) => {
+      const p = room.players.get(id);
+      return p && !p.isBot;
+    }).length;
+
+    // Fire-and-forget: every caller is a leave/disconnect path that must not
+    // wait on Firestore, and a lost row here costs a line in a report, not
+    // anything the player can see.
+    Promise.all([
+      db.collection('users').doc(player.firebaseUid)
+        .set({ displayName: player.name, lastPlayedAt: at }, { merge: true }),
+      db.collection('activity').add({
+        uid: player.firebaseUid,
+        displayName: player.name,
+        at,
+        day: istDayKey(Date.parse(at)),
+        roomCode: room.code,
+        won: false,
+        completed: false,
+        roundsPlayed: room.game.roundHistory.length,
+        mode: humanCount > 1 ? 'multiplayer' : 'solo-vs-bots',
+        humanCount,
+        platform: player.platform || 'unknown',
+      }),
+    ]).catch((e) => console.error(`[Firebase] partial activity failed for ${room.code}:`, e.message));
+  } catch (e) {
+    console.error('[Firebase] recordPartialActivity threw:', e.message);
+  }
+}
+
 async function recordGameResult(room) {
   if (!db || !room.game || !room.game.gameOver || room.statsRecorded) return;
   room.statsRecorded = true;
@@ -513,6 +609,11 @@ async function recordGameResult(room) {
       day: finishedAt.slice(0, 10), // YYYY-MM-DD, for counting distinct active days
       roomCode: room.code,
       won: isWinner,
+      // A game played to the end. Partial rows (see recordPartialActivity)
+      // carry completed:false. Rows written before this field existed have no
+      // `completed` at all, and the report treats those as completed -- which
+      // they were, since nothing else could be recorded back then.
+      completed: true,
       mode: humanCount > 1 ? 'multiplayer' : 'solo-vs-bots',
       humanCount,
       // 'android-app' vs 'web' -- the whole point of the split in the report.
@@ -3327,6 +3428,12 @@ io.on('connection', (socket) => {
       // call unconditionally; it's a no-op when there's nothing pending.
       clearRejoinRequest(room, playerId);
 
+      // Before anything is torn down: if they played real rounds and are
+      // walking out of an unfinished game, leave a trace. Solo rooms are
+      // deleted a few lines below, so this is the last moment the evidence
+      // exists at all.
+      recordPartialActivity(room, playerId);
+
       // Only ask the game engine to remove the player if the game is still
       // going - if it already ended (e.g. because the last leave dropped the
       // active count to 1), removePlayer() would throw and wrongly block
@@ -3571,6 +3678,13 @@ io.on('connection', (socket) => {
     }
     const p = room.players.get(entry.playerId);
     if (p) {
+      // Closing the app is how most sessions actually end -- far more common
+      // than tapping Leave. Recorded here too, or the report would still miss
+      // the ordinary case. Safe if they reconnect and go on to finish: the
+      // per-uid guard means at most one partial row, and once the game
+      // reaches game-over recordGameResult() writes the completed row on its
+      // own separate track.
+      recordPartialActivity(room, entry.playerId);
       p.connected = false;
       p.socketId = null;
       // If the disconnected player was the host, hand hosting off to an
