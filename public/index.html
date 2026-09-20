@@ -172,13 +172,96 @@
          permanent tables, or a one-off game. "Join with a code" sits with
          Groups because a shared code is nearly always a group code -- and
          its own hint still covers the 4-letter room case. -->
+    <!-- Quick Play is FIRST and is the tab that opens on load (Sept 2026).
+         A brand-new visitor has no groups, so landing them on an empty
+         "Your Groups" list is a dead first impression -- Quick Play gives
+         them something to do immediately. Deliberately NOT adaptive: the
+         first tab is always the open one, which costs a regular one tap but
+         means the app never opens somewhere they didn't expect.
+         wireLandingTabs() in app.js switches on data-pane, not on position,
+         so reordering these needs no JS change. -->
     <div class="segmented landing-tabs" id="landing-tabs">
-      <button type="button" class="seg active" data-pane="groups">Groups</button>
-      <button type="button" class="seg" data-pane="quick">Quick Play</button>
+      <button type="button" class="seg active" data-pane="quick">Quick Play</button>
+      <button type="button" class="seg" data-pane="groups">Groups</button>
     </div>
 
     <div class="mode-blocks">
-      <div id="pane-groups" class="landing-pane">
+      <!-- ============ Quick Play pane ============
+           Order matters and is deliberate:
+             1. Quick Play  -- the tab's namesake, and the only one that needs
+                               nobody else; it should lead.
+             2. Quick Room  -- create a table, then go and invite someone.
+             3. Join        -- someone else's code. LAST in both panes, so it
+                               doesn't move when you switch tabs. -->
+      <div id="pane-quick" class="landing-pane">
+      <!-- Play Online and Play with Bots merged behind one toggle. Both
+           blocks stay in the DOM with their original ids so app.js's
+           existing handlers are untouched -- only visibility switches. -->
+      <div class="mode-block">
+        <h3>Quick Play</h3>
+        <!-- vs Bots is FIRST and is the mode selected on load (Sept 2026).
+             Online matchmaking only works if other strangers happen to be
+             waiting at that moment -- at current traffic that's usually a
+             long wait or a dead end, which is a poor first thirty seconds
+             for someone who just installed the app. Bots start instantly,
+             every time. Same reasoning as putting Quick Play before Groups:
+             a newcomer should hit something that works, not something that
+             depends on other people showing up.
+             wireQuickPlayToggle() in app.js switches on data-mode, not
+             position, so this reorder needs no JS change. -->
+        <div class="segmented" id="quickplay-toggle">
+          <button type="button" class="seg active" data-mode="bots">vs Bots</button>
+          <button type="button" class="seg" data-mode="online">Online</button>
+        </div>
+        <div id="quickplay-bots">
+          <label for="input-bot-count">No. of bots</label>
+          <select id="input-bot-count"></select>
+          <div class="row">
+            <button id="btn-solo-start" class="primary">Start</button>
+          </div>
+        </div>
+        <div id="quickplay-online" class="hidden">
+          <label for="input-online-playercount">No. of players</label>
+          <select id="input-online-playercount">
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+          </select>
+          <div class="row">
+            <button id="btn-play-online" class="primary">Find Match</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="mode-block">
+        <h3>Quick Room</h3>
+        <p class="mode-block-sub">One-off game, code expires with the session</p>
+        <div class="row">
+          <button id="btn-create" class="secondary">Create Room</button>
+        </div>
+      </div>
+
+      <!-- The SECOND join box. Identical wording to the one in the Groups
+           pane on purpose -- neither is the "real" one. The box takes both
+           kinds of code and the code's own length decides where you land
+           (see submitJoinCode in app.js), so which tab you happened to be
+           looking at when you typed it doesn't matter.
+           Different ids from the Groups copy -- duplicate ids would break
+           getElementById for both. -->
+      <div class="mode-block">
+        <h3>Join with a code</h3>
+        <p class="mode-block-sub">Someone sent you a code? Enter it here</p>
+        <div class="mode-block-join-row">
+          <input id="input-roomcode-quick" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
+          <button id="btn-join-quick" class="primary">Join</button>
+        </div>
+        <p class="hint">4 letters for a one-off room, 5 for a group.</p>
+      </div>
+      </div><!-- /pane-quick -->
+
+      <!-- ============ Groups pane ============ -->
+      <div id="pane-groups" class="landing-pane hidden">
       <div class="mode-block" id="groups-block">
         <h3>Your Groups</h3>
         <!-- Scrolls internally after ~2 rows so a player with eight groups
@@ -208,65 +291,6 @@
       </div>
 
       </div><!-- /pane-groups -->
-
-      <div id="pane-quick" class="landing-pane hidden">
-      <div class="mode-block">
-        <h3>Quick Room</h3>
-        <p class="mode-block-sub">One-off game, code expires with the session</p>
-        <div class="row">
-          <button id="btn-create" class="secondary">Create Room</button>
-        </div>
-      </div>
-
-      <!-- Play Online and Play with Bots merged behind one toggle. Both
-           blocks stay in the DOM with their original ids so app.js's
-           existing handlers are untouched -- only visibility switches. -->
-      <div class="mode-block">
-        <h3>Quick Play</h3>
-        <div class="segmented" id="quickplay-toggle">
-          <button type="button" class="seg active" data-mode="online">Online</button>
-          <button type="button" class="seg" data-mode="bots">vs Bots</button>
-        </div>
-        <div id="quickplay-online">
-          <label for="input-online-playercount">No. of players</label>
-          <select id="input-online-playercount">
-            <option value="3">3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
-            <option value="6">6</option>
-          </select>
-          <div class="row">
-            <button id="btn-play-online" class="primary">Find Match</button>
-          </div>
-        </div>
-        <div id="quickplay-bots" class="hidden">
-          <label for="input-bot-count">No. of bots</label>
-          <select id="input-bot-count"></select>
-          <div class="row">
-            <button id="btn-solo-start" class="primary">Start</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- The SECOND join box. Identical wording to the one in the Groups
-           pane on purpose -- neither is the "real" one. The box takes both
-           kinds of code and the code's own length decides where you land
-           (see submitJoinCode in app.js), so which tab you happened to be
-           looking at when you typed it doesn't matter. It sits last in this
-           pane exactly as it does in the Groups pane, so its position is
-           predictable when you switch tabs.
-           Different ids from the Groups copy -- duplicate ids would break
-           getElementById for both. -->
-      <div class="mode-block">
-        <h3>Join with a code</h3>
-        <p class="mode-block-sub">Someone sent you a code? Enter it here</p>
-        <div class="mode-block-join-row">
-          <input id="input-roomcode-quick" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
-          <button id="btn-join-quick" class="primary">Join</button>
-        </div>
-        <p class="hint">4 letters for a one-off room, 5 for a group.</p>
-      </div>
-      </div><!-- /pane-quick -->
     </div>
   </div>
 
