@@ -145,7 +145,21 @@ body.game-active {
    which ended up sitting exactly underneath the banner and unreachable.
    Keeping the horizontal/top padding at 0 but restoring the bottom safe zone
    fixes it without touching the full-bleed look. */
-#screen-landing.screen.active, #screen-lobby.screen.active {
+/* ---------------------------------------------------------------------
+   #screen-group was added in the Sept 2026 groups rebuild and was never
+   added to ANY of these shared landing/lobby selector lists -- this rule
+   and the six below. It uses the same .landing-topbar / .landing-body
+   markup, so it looked like it should inherit the same layout, but matched
+   none of it. The visible result, confirmed by measuring the live DOM:
+     - the screen was display:block, not a flex column
+     - the topbar was display:block too, so Back / title / the "..." menu
+       stacked VERTICALLY, putting the overflow menu below-left instead of
+       top-right
+     - the body had no gap, so all four blocks sat flush with no spacing
+     - no max-width, so it stretched edge to edge on desktop
+   Adding #screen-group to each list is the whole fix; no new rules needed.
+   --------------------------------------------------------------------- */
+#screen-landing.screen.active, #screen-lobby.screen.active, #screen-group.screen.active {
   padding: 0 0 var(--ad-safe-bottom, 0px);
 }
 
@@ -263,7 +277,8 @@ body.game-active {
    bleed under 1024px, capped to a centered phone-width column above that
    so it doesn't stretch edge-to-edge on a wide monitor. ---- */
 #screen-landing.screen.active,
-#screen-lobby.screen.active {
+#screen-lobby.screen.active,
+#screen-group.screen.active {
   background: var(--jade-bg-dark); position: relative;
   /* Horizontal overflow stays hidden -- that's what keeps the decorative
      suit-pattern ::before layer from widening the page. Vertical, though,
@@ -278,20 +293,26 @@ body.game-active {
   display: flex; flex-direction: column; min-height: 100vh;
 }
 #screen-landing.screen.active::before,
-#screen-lobby.screen.active::before {
+#screen-lobby.screen.active::before,
+#screen-group.screen.active::before {
   content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
   background:
     radial-gradient(circle at 50% 8%, rgba(var(--red-rgb),0.22), transparent 55%),
     repeating-linear-gradient(135deg, rgba(255,255,255,0.02) 0 2px, transparent 2px 34px);
 }
+/* z-index:1 lifts these above the ::before pattern layer -- required, not
+   decorative: without it the pattern paints over the content. */
 #screen-landing .landing-topbar,
 #screen-landing .landing-body,
 #screen-landing .landing-footer-nav,
 #screen-lobby .landing-topbar,
-#screen-lobby .landing-body { position: relative; z-index: 1; }
+#screen-lobby .landing-body,
+#screen-group .landing-topbar,
+#screen-group .landing-body { position: relative; z-index: 1; }
 
 #screen-landing .landing-topbar,
-#screen-lobby .landing-topbar {
+#screen-lobby .landing-topbar,
+#screen-group .landing-topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.08);
 }
@@ -358,7 +379,8 @@ body.game-active {
 }
 
 #screen-landing .landing-body,
-#screen-lobby .landing-body {
+#screen-lobby .landing-body,
+#screen-group .landing-body {
   flex: 1; display: flex; flex-direction: column; gap: 14px;
   padding: 14px 16px 10px; max-width: 480px; width: 100%; margin: 0 auto; box-sizing: border-box;
 }
@@ -370,6 +392,79 @@ body.game-active {
 }
 
 .mode-blocks { display: flex; flex-direction: column; gap: 12px; }
+
+/* ---- Landing tabs: Groups | Quick Play (Sept 2026) ----
+   The landing screen had grown to 840px of content in an 812px viewport, so
+   the Home/Stats/Rules nav sat below the fold -- and with the native AdMob
+   banner drawn over the bottom ~50-64px on the app, it looked like the ad was
+   eating the menu. Splitting four blocks across two panes brings it to 812px
+   exactly, nav included, with the banner's safe zone still reserved.
+
+   .mode-blocks supplies the 12px gap between blocks, but its children are now
+   the two PANES rather than the blocks themselves -- so without this rule the
+   two blocks inside a pane would sit flush against each other. */
+.landing-pane { display: flex; flex-direction: column; gap: 12px; }
+/* Two classes, so this beats .landing-pane's display:flex above. A bare
+   .hidden would tie on specificity and lose on source order. */
+.landing-pane.hidden { display: none; }
+/* .landing-body is already a flex column with its own 14px gap; .segmented's
+   default bottom margin would stack on top of that. */
+.landing-tabs { margin-bottom: 0; }
+
+/* ---- Short screens (<=700px tall: 360x640-class phones) ----
+   Measured on 360x640 with the tabs in place: the layout survives a 50px and
+   a 64px banner, but an adaptive banner of 90px pushes the footer nav 22px
+   under it and 120px pushes it 51px under. AdMob picks the banner height at
+   request time from the device, so we can't assume the small one.
+
+   This claws back ~80px from padding, gaps and the groups list -- enough to
+   clear the worst case with room to spare. Deliberately NOT touched: any
+   button or nav-item height, all of which are held at the 44px minimum from
+   the Sept 11 audit. Cramped is recoverable; untappable is not. */
+@media (max-height: 700px) {
+  #screen-landing .landing-topbar { padding: 8px 16px; }
+  #screen-landing .landing-body { padding: 8px 12px 6px; gap: 10px; }
+  #screen-landing .mode-block { padding: 10px 14px; }
+  #screen-landing .mode-blocks,
+  #screen-landing .landing-pane { gap: 8px; }
+  #screen-landing .group-list { max-height: 96px; }
+  #screen-landing .mode-block h3 { font-size: 14px; }
+  #screen-landing .mode-block .row { margin-top: 6px; }
+  #screen-landing .mode-block-sub { margin-bottom: 6px; }
+  #screen-landing label { margin-bottom: 2px; }
+}
+
+/* The custom dropdown's own button measured 42px -- the only control on the
+   landing screen still under the 44px floor the Sept 11 audit set. It has no
+   min-height of its own (unlike .segmented .seg and .footer-nav-item, which
+   were given one then), so it was sized purely by its 12px padding. */
+.dd-toggle { min-height: 44px; }
+
+/* ---- Group chat: collapsible header (Sept 2026) ----
+   Replaces the <h3> the chat block used to have. Styled to read as the same
+   heading, because it IS the same heading -- it just also toggles now. */
+.group-chat-toggle {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; min-height: 44px;          /* the 44px floor, as a real control */
+  background: none; border: none; padding: 0; margin: 0;
+  cursor: pointer; text-align: left; font-family: inherit;
+}
+.group-chat-toggle-label { font-size: 15px; font-weight: 700; color: var(--red); }
+.group-chat-toggle-sub { font-size: 11px; color: #9a9aa2; margin-left: auto; }
+/* .badge is position:absolute (it hangs off the chat FAB on the game
+   screen). Here it's a flex child in a row, so it has to sit in flow --
+   without this it detaches and lands on top of the label. */
+.group-chat-toggle .badge { position: static; margin: 0; }
+.group-chat-chevron {
+  width: 18px; height: 18px; margin: 0; flex: 0 0 auto;
+  color: var(--text-muted); transition: transform 0.18s ease;
+}
+.group-chat-toggle.open .group-chat-chevron { transform: rotate(180deg); }
+.group-chat-body { margin-top: 10px; }
+.group-chat-body.hidden { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .group-chat-chevron { transition: none; }
+}
 .mode-block h3 { margin: 0 0 4px; font-size: 15px; color: var(--red); }
 .mode-block-sub { margin: 0 0 8px; font-size: 11px; color: #9a9aa2; }
 .mode-block .row { margin-top: 10px; }
@@ -394,13 +489,20 @@ body.game-active {
   background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: #e8e8ec;
 }
 #screen-landing .mode-block select,
-#screen-lobby .mode-block select {
+#screen-lobby .mode-block select,
+#screen-group .mode-block select {
   background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.14); color: #fff;
 }
+/* #screen-group added here too: the group screen is full of .hint text
+   (bell hint, empty board, scoring note, empty chat) and an .error line,
+   all of which were falling back to defaults meant for a light surface. */
 #screen-landing .mode-block label,
 #screen-lobby .mode-block label,
-#screen-lobby .mode-block .hint { color: #9a9aa2; }
-#screen-lobby .mode-block .error { color: #ff8a80; }
+#screen-group .mode-block label,
+#screen-lobby .mode-block .hint,
+#screen-group .mode-block .hint { color: #9a9aa2; }
+#screen-lobby .mode-block .error,
+#screen-group .mode-block .error { color: #ff8a80; }
 
 /* Lobby-specific content that isn't shared with the landing screen's
    mode-blocks -- room code, player list. */
@@ -436,7 +538,8 @@ body.game-active {
    scales naturally since it's already flex-based rather than fixed px. ---- */
 @media (min-width: 768px) {
   #screen-landing .landing-body,
-  #screen-lobby .landing-body { max-width: 560px; padding: 20px 24px 14px; gap: 18px; }
+  #screen-lobby .landing-body,
+  #screen-group .landing-body { max-width: 560px; padding: 20px 24px 14px; gap: 18px; }
   #screen-landing .landing-footer-nav { max-width: 560px; }
   .mode-block { padding: 18px 20px; }
 }
