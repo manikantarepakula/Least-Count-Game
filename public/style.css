@@ -2357,6 +2357,33 @@ a.install-card-btn:hover {
 .leave-btn { color: var(--text-muted); }
 .leave-btn:active { color: var(--red); }
 
+/* --- Queued leave (Sept 2026) ---------------------------------------------
+   A leave tapped mid-round can't be honoured until the hand ends, so it's
+   held. The old build said so once, in the #game-error line, which the next
+   turn change wiped -- after that nothing on screen knew a leave was coming
+   and the button looked broken.
+   This state lives on the button, so it survives every state push, and the
+   dot gives it a glance-readable "something is queued" that the label alone
+   (a bare icon) can't. Cancelling is a second tap; the dialog offers it. */
+.leave-btn.leave-pending {
+  color: var(--red);
+  position: relative;
+}
+.leave-btn.leave-pending::after {
+  content: '';
+  position: absolute; top: 4px; right: 4px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--red);
+  animation: leave-pending-pulse 1.6s ease-in-out infinite;
+}
+@keyframes leave-pending-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .leave-btn.leave-pending::after { animation: none; }
+}
+
 /* The round advances by itself, so the countdown is the actual news on this
    screen -- it sat as small grey text at the very bottom while "Start Now"
    shouted above it. #round-result-hint is the element that carries it. */
