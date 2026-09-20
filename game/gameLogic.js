@@ -179,9 +179,32 @@ class LeastCountGame {
    * Voluntarily remove a player from the game. Only allowed between rounds
    * (i.e. while roundOver is true), so nobody's mid-hand cards vanish.
    */
+  /**
+   * Is this player merely watching -- out of the game, but still sitting in
+   * the room?
+   *
+   * The between-rounds-only restriction on removePlayer() exists for one
+   * reason: a player whose cards are in the live hand cannot be pulled out
+   * without rewriting the turn rotation underneath everyone. Someone already
+   * eliminated (or who has quit) has no cards dealt, no place in the
+   * rotation, and no effect on the hand in progress. Nothing about the round
+   * depends on them, so nothing about the round needs to hold them.
+   *
+   * Note removePlayer() itself already treats these two exactly as no-ops
+   * (see the early return below) -- this predicate just lets callers ask
+   * BEFORE they hit the roundOver guard that would otherwise throw first.
+   */
+  isSpectator(playerId) {
+    return this.eliminated.has(playerId) || this.quit.has(playerId);
+  }
+
   removePlayer(playerId) {
     if (this.gameOver) throw new Error('Game already over');
-    if (!this.roundOver) throw new Error('Cannot leave in the middle of a round');
+    // Spectators are exempt: there is no hand of theirs to protect, and the
+    // line below would make this a no-op anyway.
+    if (!this.roundOver && !this.isSpectator(playerId)) {
+      throw new Error('Cannot leave in the middle of a round');
+    }
     if (this.eliminated.has(playerId) || this.quit.has(playerId)) return this.getPublicState();
 
     this.quit.add(playerId);
