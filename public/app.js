@@ -134,8 +134,62 @@
     return user ? user.uid : null;
   }
 
+  // --------------------------------------------------------------------
+  // WAIT for sign-in rather than giving up on it.
+  //
+  // Firebase's anonymous sign-in is asynchronous, and LCAuth.getUser() is
+  // null until it resolves. This function used to return null in that
+  // window -- and the server turns a null token into
+  //   "Could not identify you -- try again in a moment."
+  // for EVERY group action (join/raise hand, chat, start marathon, start
+  // game; see verifyFirebaseToken in server.js). Reported by real players
+  // who entered a group code and were refused.
+  //
+  // First-time visitors are hit hardest: they need a full anonymous
+  // SIGN-UP round trip, not a cached-token refresh -- which is exactly the
+  // person arriving from a shared WhatsApp link on mobile data. A returning
+  // player's session is already in IndexedDB and resolves almost at once,
+  // which is why this looked like "works for some people, not others".
+  //
+  // This is very likely the same root cause as the group-start deadlock
+  // hunt, where LCAuth.getUser() was found returning null inside a client
+  // that was otherwise working. That one was worked around by removing the
+  // dependency; this fixes the cause.
+  // --------------------------------------------------------------------
+  const AUTH_WAIT_MS = 8000;
+  let authReadyPromise = null;
+
+  function whenFirebaseUser() {
+    const existing = window.LCAuth && window.LCAuth.getUser();
+    if (existing) return Promise.resolve(existing);
+    if (!window.LCAuth) return Promise.resolve(null);
+    if (!authReadyPromise) {
+      authReadyPromise = new Promise((resolve) => {
+        let settled = false;
+        const finish = (u) => {
+          if (settled) return;
+          settled = true;
+          resolve(u || null);
+        };
+        // Bounded. A sign-in that never completes must not leave a button
+        // dead forever -- after the timeout we hand back null, the server
+        // refuses with its own message, and the player can retry. Clearing
+        // the cached promise is what makes that retry a FRESH wait rather
+        // than an instant replay of this null.
+        const timer = setTimeout(() => { authReadyPromise = null; finish(null); }, AUTH_WAIT_MS);
+        window.LCAuth.onUserChange((u) => {
+          if (!u) return;
+          clearTimeout(timer);
+          finish(u);
+        });
+      });
+    }
+    return authReadyPromise;
+  }
+
   async function currentFirebaseIdToken() {
-    const user = window.LCAuth && window.LCAuth.getUser();
+    let user = window.LCAuth && window.LCAuth.getUser();
+    if (!user) user = await whenFirebaseUser();
     if (!user) return null;
     try {
       return await user.getIdToken();
@@ -1667,6 +1721,12 @@
   let groupBoardTab = 'month';
   let groupBellTimer = null;
   let groupChatMsgs = [];
+  // Chat starts collapsed; see the block further down for why, and why
+  // "unread" is tracked by timestamp rather than count. Declared up here
+  // with the rest of the group state so renderGroupChat() can never reach
+  // them before they're initialised.
+  let groupChatExpanded = false;
+  let groupChatSeenAt = 0;
   let marathonDays = 7;
   // What the group screen's Play button does right now: 'start' opens the
   // table and brings everyone seated with you, 'join' walks into one that is
@@ -1700,6 +1760,11 @@
     groupBoardTab = 'month';
     const gErr = document.getElementById('group-error');
     if (gErr) gErr.textContent = '';   // stale error from a previous visit
+    // Collapse chat and treat the whole 30-minute history as unread, so
+    // arriving tells you there's something to read rather than hiding it.
+    // Also stops one group's messages being counted as "seen" in another.
+    groupChatSeenAt = 0;
+    setGroupChatExpanded(false);
     document.getElementById('group-title').textContent = fallbackName || 'Group';
     document.getElementById('group-code-text').textContent = code;
     showScreen('screen-group');
@@ -1934,6 +1999,9 @@
     empty.classList.toggle('hidden', groupChatMsgs.length > 0);
     ul.classList.toggle('hidden', groupChatMsgs.length === 0);
     ul.scrollTop = ul.scrollHeight;
+    // Keeps the header's unread count in step with every incoming batch.
+    // Declared below this function but hoisted, so the order is fine.
+    updateGroupChatUnread();
   }
 
   // Champions rows used to be keyed by calendar month. They now record when
@@ -2158,7 +2226,51 @@
     });
   };
 
-  // ---- group chat ----
+  // ---- group chat: collapsed by default ----
+  // The unread count is what makes collapsing safe. A collapsed section with
+  // no signal is a section nobody opens twice, and the whole point of this
+  // chat is arranging a game -- it has to be able to interrupt you.
+  //
+  // "Unread" is measured by TIMESTAMP, not by a message count. History only
+  // lives 30 minutes server-side, so the list shrinks on its own as messages
+  // expire; a count-based marker would go negative and under-report.
+  // (groupChatExpanded / groupChatSeenAt are declared with the rest of the
+  // group state above.)
+
+  function updateGroupChatUnread() {
+    const badge = document.getElementById('group-chat-unread');
+    if (!badge) return;
+    const me = myFirebaseUid();
+    // Your own messages never count as unread.
+    const n = groupChatExpanded ? 0 : groupChatMsgs.filter(
+      (m) => m && m.at > groupChatSeenAt && m.uid !== me
+    ).length;
+    badge.textContent = n > 99 ? '99+' : String(n);
+    badge.classList.toggle('hidden', n === 0);
+  }
+
+  function setGroupChatExpanded(open) {
+    groupChatExpanded = !!open;
+    const body = document.getElementById('group-chat-body');
+    const btn = document.getElementById('btn-group-chat-toggle');
+    if (!body || !btn) return;
+    body.classList.toggle('hidden', !groupChatExpanded);
+    btn.setAttribute('aria-expanded', groupChatExpanded ? 'true' : 'false');
+    btn.classList.toggle('open', groupChatExpanded);
+    if (groupChatExpanded) {
+      groupChatSeenAt = Date.now();
+      const ul = document.getElementById('group-chat-list');
+      if (ul) ul.scrollTop = ul.scrollHeight;
+    }
+    updateGroupChatUnread();
+  }
+
+  (function wireGroupChatToggle() {
+    const btn = document.getElementById('btn-group-chat-toggle');
+    if (!btn) return;
+    btn.onclick = () => setGroupChatExpanded(!groupChatExpanded);
+  })();
+
   async function sendGroupChat() {
     const input = document.getElementById('input-group-chat');
     const text = (input.value || '').trim();
