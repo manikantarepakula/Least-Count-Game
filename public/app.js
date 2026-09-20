@@ -2835,10 +2835,23 @@
       row.innerHTML = `<span class="jr-text"><b>${escapeHtml(req.name)}</b> wants to join</span>
         <button class="jr-admit" type="button">Admit</button>
         <button class="jr-ignore" type="button">Ignore</button>`;
+      // Both buttons clear their own row immediately rather than waiting for
+      // the server's refreshed list. The server does send one (and it will
+      // overwrite this), but a dropped packet or a slow round trip used to
+      // leave the banner sitting there as though the tap hadn't registered --
+      // so the host taps again, and the second tap errors with "that request
+      // is no longer waiting". Removing the row on tap makes the control feel
+      // answered and removes the reason to tap twice.
+      const settle = () => {
+        row.remove();
+        if (!banner.children.length) banner.classList.add('hidden');
+      };
       row.querySelector('.jr-admit').onclick = () => {
+        settle();
         socket.emit('admit_join_request', { roomCode: myRoomCode, playerId: req.playerId });
       };
       row.querySelector('.jr-ignore').onclick = () => {
+        settle();
         socket.emit('ignore_join_request', { roomCode: myRoomCode, playerId: req.playerId });
       };
       banner.appendChild(row);
