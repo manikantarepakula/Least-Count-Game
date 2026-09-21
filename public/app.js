@@ -1149,7 +1149,7 @@
     if (dealAnimationCancel) { dealAnimationCancel(); dealAnimationCancel = null; }
     document.getElementById('overlay-gameover').classList.add('hidden');
     document.getElementById('overlay-round-result').classList.add('hidden');
-    document.getElementById('overlay-scores').classList.add('hidden');
+    document.getElementById('overlay-scorecard').classList.add('hidden');
 
     // The solid full-screen overlay is reserved for the joker/open-card
     // reveal step only -- during countdown + dealing, the real oval table
@@ -4392,20 +4392,99 @@
     refreshMuteBtn();
   };
 
-  document.getElementById('btn-scores').onclick = () => {
-    if (!latestGame) return;
-    const body = document.getElementById('scores-body');
+  // ------------------------------------------------------------------
+  // Standings pane of the scorecard sheet.
+  //
+  // Every row carries a bar showing the player's score against the
+  // elimination limit, because that is the actual question this screen
+  // answers. "Bot 2: 120" means nothing on its own; "Bot 2 is 60% of the way
+  // to out" is the thing you change your play over. Three states match the
+  // table's own colour language -- safe, close, gone -- so the sheet and the
+  // seats never disagree.
+  // ------------------------------------------------------------------
+  function renderScorecardTotals() {
+    const body = document.getElementById('scorecard-totals');
     body.innerHTML = '';
-    (latestRoom.players || []).slice().sort((a,b) => (latestGame.scores[a.playerId]||0) - (latestGame.scores[b.playerId]||0)).forEach((p) => {
+    if (!latestGame || !latestRoom) return;
+    const limit = latestGame.eliminationScore || 200;
+    const players = (latestRoom.players || []).slice()
+      .sort((a, b) => (latestGame.scores[a.playerId] || 0) - (latestGame.scores[b.playerId] || 0));
+
+    players.forEach((p, i) => {
+      const score = latestGame.scores[p.playerId] ?? 0;
+      const isOut = (latestGame.eliminated || []).includes(p.playerId)
+        || (latestGame.quit || []).includes(p.playerId);
+      const pct = Math.max(0, Math.min(100, Math.round((score / limit) * 100)));
+
       const row = document.createElement('div');
-      row.className = 'result-row';
-      const elim = latestGame.eliminated.includes(p.playerId) ? ' (out)' : '';
-      row.innerHTML = `<span>${escapeHtml(p.name)}${elim}</span><span>${latestGame.scores[p.playerId] ?? 0} pts</span>`;
+      row.className = 'sc-row'
+        + (isOut ? ' out' : (pct >= 60 ? ' warn' : ''))
+        + (p.playerId === myPlayerId ? ' is-me' : '');
+
+      const top = document.createElement('div');
+      top.className = 'sc-row-top';
+      // Text nodes, not innerHTML -- player names are user-supplied and this
+      // is the one place they'd otherwise be interpolated into markup.
+      const rank = document.createElement('span');
+      rank.className = 'sc-rank'; rank.textContent = String(i + 1);
+      const name = document.createElement('span');
+      name.className = 'sc-name'; name.textContent = p.name;
+      top.appendChild(rank); top.appendChild(name);
+      if (isOut) {
+        const tag = document.createElement('span');
+        tag.className = 'sc-tag'; tag.textContent = 'OUT';
+        top.appendChild(tag);
+      }
+      const val = document.createElement('span');
+      val.className = 'sc-score'; val.textContent = String(score);
+      top.appendChild(val);
+
+      const bar = document.createElement('div');
+      bar.className = 'sc-bar';
+      const fill = document.createElement('span');
+      fill.style.width = pct + '%';
+      bar.appendChild(fill);
+
+      row.appendChild(top); row.appendChild(bar);
       body.appendChild(row);
     });
-    document.getElementById('overlay-scores').classList.remove('hidden');
+
+    document.getElementById('scorecard-foot').textContent = 'Out at ' + limit;
+  }
+
+  // One sheet, two panes. `view` is 'totals' or 'rounds' -- the round-result
+  // screen's link opens straight onto the round-by-round grid, the top bar's
+  // Scores button onto the standings, but it's the same sheet either way so
+  // nothing ever stacks on top of anything else.
+  function setScorecardView(view) {
+    const rounds = view === 'rounds';
+    document.getElementById('scorecard-totals').classList.toggle('hidden', rounds);
+    document.getElementById('scorecard-rounds').classList.toggle('hidden', !rounds);
+    document.getElementById('seg-scorecard-totals').classList.toggle('active', !rounds);
+    document.getElementById('seg-scorecard-rounds').classList.toggle('active', rounds);
+    const body = document.querySelector('#overlay-scorecard .sheet-body');
+    if (body) body.scrollTop = 0;
+  }
+
+  function openScorecard(view) {
+    if (!latestGame) return;
+    renderScorecardTotals();
+    renderFullScorecard();
+    setScorecardView(view || 'totals');
+    document.getElementById('overlay-scorecard').classList.remove('hidden');
+  }
+  function closeScorecard() {
+    document.getElementById('overlay-scorecard').classList.add('hidden');
+  }
+
+  document.getElementById('btn-scores').onclick = () => openScorecard('totals');
+  document.getElementById('btn-close-scorecard').onclick = closeScorecard;
+  document.getElementById('seg-scorecard-totals').onclick = () => setScorecardView('totals');
+  document.getElementById('seg-scorecard-rounds').onclick = () => setScorecardView('rounds');
+  // Tap the dimmed area above the sheet to dismiss, like the chat sheet.
+  document.getElementById('overlay-scorecard').onclick = (e) => {
+    if (e.target.id === 'overlay-scorecard') closeScorecard();
   };
-  document.getElementById('btn-close-scores').onclick = () => document.getElementById('overlay-scores').classList.add('hidden');
 
   // Full round-by-round scorecard -- players as rows (capped at 10, so this
   // axis never needs scrolling), rounds as columns (a long game scrolls
@@ -4415,7 +4494,8 @@
   // same authoritative cumulative total elimination is based on) rather than
   // summing history client-side, so it can never drift out of sync.
   //
-  // This lives on its own dedicated overlay (#overlay-full-scorecard),
+  // This is now the "By round" pane of #overlay-scorecard (was its own
+  // dedicated overlay (#overlay-full-scorecard),
   // opened from either the in-game Scores overlay or the round-result
   // screen's own link -- previously this expanded INLINE underneath
   // whichever screen opened it, which made an already-tall round-result
@@ -4451,14 +4531,12 @@
     document.getElementById('scorecard-swipe-hint').classList.toggle('hidden', history.length <= 3);
   }
 
-  function openFullScorecard() {
-    renderFullScorecard();
-    document.getElementById('overlay-full-scorecard').classList.remove('hidden');
-  }
-  document.getElementById('btn-open-full-scorecard').onclick = openFullScorecard;
-  document.getElementById('btn-open-full-scorecard-rr').onclick = openFullScorecard;
-  document.getElementById('btn-close-full-scorecard').onclick = () =>
-    document.getElementById('overlay-full-scorecard').classList.add('hidden');
+  // The round-result screen's "See full scorecard" link now opens the shared
+  // sheet straight onto its By round tab, instead of a second overlay that
+  // used to stack on top of the Scores one. #btn-open-full-scorecard (the
+  // link that lived inside the old Scores dialog) is gone with that dialog --
+  // the segmented control replaces it.
+  document.getElementById('btn-open-full-scorecard-rr').onclick = () => openScorecard('rounds');
 
   document.getElementById('btn-game-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
   document.getElementById('btn-close-rules').onclick = () => document.getElementById('overlay-rules').classList.add('hidden');
@@ -4718,7 +4796,7 @@
       hideChatUI();
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
-      document.getElementById('overlay-scores').classList.add('hidden');
+      document.getElementById('overlay-scorecard').classList.add('hidden');
       showScreen('screen-landing');
       // Full-screen interstitial on the way out of a room -- a natural
       // stopping point, never mid-game. Deliberately fired AFTER the leave
