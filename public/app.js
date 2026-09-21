@@ -3343,6 +3343,39 @@
     const n = seatOrder.length;
     if (n === 0) return;
 
+    // ------------------------------------------------------------------
+    // Fluid table furniture (Sept 2026).
+    //
+    // The oval was the ONLY thing on this screen sized from the viewport
+    // (max-height: 56vh), so it absorbed every bit of device variation on
+    // its own: measured 513px tall on a 412x915 phone but crushed to 286px
+    // on a 360x640 one. Meanwhile the seats stayed pinned at 96px and the
+    // centre cards at 58px, so a chair went from 19% of the table's height
+    // to 34% of it, and on the narrow table the side seats overlapped the
+    // open/joker cards by 27px on BOTH sides:
+    //
+    //   seat 96 + centre (58 + 18 + 58) + seat 96 = 326px of furniture
+    //   ...into a table only 273px wide.
+    //
+    // Those numbers were never wrong, just tuned for the ~372px table a
+    // Pixel gives you (326 fits in 372 with room to spare). Expressed as
+    // fractions of the table's OWN width they hold everywhere, and on a
+    // big phone they resolve to the same values as before -- so nothing
+    // changes on the devices where this already looked right.
+    //
+    // Floors stop it collapsing into unreadability on a 320px screen; the
+    // caps are today's values, so this can only ever shrink, never inflate.
+    // ------------------------------------------------------------------
+    const tableW = oval.getBoundingClientRect().width || 1;
+    const px = (v) => Math.round(v) + 'px';
+    const seatW = Math.round(Math.max(62, Math.min(SEAT_WIDTH_PX, tableW * 0.26)));
+    const centreCardW = Math.round(Math.max(34, Math.min(58, tableW * 0.155)));
+    const centreGap = Math.round(Math.max(8, Math.min(18, tableW * 0.04)));
+    oval.style.setProperty('--table-w', px(tableW));
+    oval.style.setProperty('--seat-w', px(seatW));
+    oval.style.setProperty('--centre-card-w', px(centreCardW));
+    oval.style.setProperty('--centre-gap', px(centreGap));
+
     seatOrder.forEach((p, i) => {
       const angle = Math.PI / 2 + (i / n) * 2 * Math.PI;
       const left = 50 + 43 * Math.cos(angle);
@@ -3360,8 +3393,11 @@
       // 5px off each edge on a 375px phone -- measured on the live build,
       // both sides, every game. Clamping against the table's real width
       // fixes it at any screen size instead of nudging the radius by feel.
-      const tableW = oval.getBoundingClientRect().width || 1;
-      const halfSeatPct = (SEAT_WIDTH_PX / 2) / tableW * 100;
+      // Clamp against the seat's ACTUAL rendered width (which now shrinks
+      // with the table), not the 96px maximum -- otherwise a 71px seat on a
+      // narrow table gets pushed 12px further inboard than it needs to be,
+      // straight back into the centre cards this change exists to clear.
+      const halfSeatPct = (seatW / 2) / tableW * 100;
       seatEl.style.left = Math.min(100 - halfSeatPct, Math.max(halfSeatPct, left)) + '%';
       seatEl.style.top = top + '%';
 
@@ -4823,11 +4859,17 @@
 
   function updateChatBadge() {
     const badge = document.getElementById('chat-badge');
+    // The toggle is a quiet outlined button on the hand-header row now, not a
+    // red floating circle, so unread needs to register on the button itself
+    // -- at that size the little badge alone is easy to miss mid-turn.
+    const fab = document.getElementById('chat-fab');
     if (chatUnread > 0) {
       badge.textContent = chatUnread > 9 ? '9+' : chatUnread;
       badge.classList.remove('hidden');
+      if (fab) fab.classList.add('has-unread');
     } else {
       badge.classList.add('hidden');
+      if (fab) fab.classList.remove('has-unread');
     }
   }
 
