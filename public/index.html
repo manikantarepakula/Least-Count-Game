@@ -549,7 +549,18 @@
     <div class="top-actions top-actions-left">
       <button id="btn-scores" class="tiny">Scores</button>
     </div>
-    <div id="game-round" class="game-round"></div>
+    <!-- Timer and round number share the centre column, stacked.
+         The timer was position:fixed at top:8px, left:50% -- the exact spot
+         the round number moved into when this bar became three columns, so
+         they overlapped (measured: 46px across, 6px down). Stacking them in
+         flow fixes it without costing height: 26px timer + 14px round is
+         40px, and the bar is already 58px tall because of the buttons.
+         justify-content:flex-end keeps the round number still, so it doesn't
+         hop up and down as the timer shows and hides between turns. -->
+    <div class="game-top-centre">
+      <div id="turn-timer" class="turn-timer hidden">⏱ <span id="timer-seconds">30</span>s</div>
+      <div id="game-round" class="game-round"></div>
+    </div>
     <div class="top-actions top-actions-right">
       <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
       <!-- The only mid-round exit. Without it the table had no way out at
@@ -559,7 +570,9 @@
     </div>
   </div>
 
-  <div id="turn-timer" class="turn-timer hidden">⏱ <span id="timer-seconds">30</span>s</div>
+  <!-- The turn timer moved up into .game-top-centre, stacked above the round
+       number -- as a fixed, viewport-centred pill down here it landed on top
+       of the round number once that moved to the middle of the bar. -->
 
   <div class="oval-table" id="oval-table">
     <div class="table-felt"></div>
