@@ -451,6 +451,17 @@ class LeastCountGame {
     return r === 'JOKER' || (this.roundJokerRank !== null && r === this.roundJokerRank);
   }
 
+  /**
+   * Is this specific card a joker -- printed, or this round's wild rank?
+   * Both are worth zero (see cardValue), which is why playTurn() refuses to
+   * discard either of them.
+   */
+  _isJokerCard(card) {
+    if (!card) return false;
+    return card.rank === 'JOKER'
+      || (this.roundJokerRank !== null && card.rank === this.roundJokerRank);
+  }
+
   _drawFromStock(count) {
     const drawn = [];
     for (let i = 0; i < count; i++) {
@@ -494,11 +505,42 @@ class LeastCountGame {
     }
     if (!cardIds || cardIds.length === 0) throw new Error('Must discard at least one card');
 
-    const discarded = this._removeCardsFromHand(playerId, cardIds);
-    const rank = discarded[0].rank;
-    if (!discarded.every((c) => c.rank === rank)) {
+    // ------------------------------------------------------------------
+    // Validate against the hand BEFORE touching it.
+    //
+    // The same-rank check used to run AFTER _removeCardsFromHand(), so a
+    // rejected mixed-rank discard threw with the cards already pulled out of
+    // the hand and never pushed onto the discard pile -- i.e. deleted.
+    // _playDuring2Chain() had always restored them on its own failure path;
+    // this one never did. The UI won't let you select mixed ranks, so it
+    // isn't reachable in normal play, but the engine is the authority and a
+    // hand-crafted payload would have destroyed cards.
+    // ------------------------------------------------------------------
+    const hand = this.hands[playerId] || [];
+    const idSet = new Set(cardIds);
+    const picked = hand.filter((c) => idSet.has(c.id));
+    if (picked.length !== cardIds.length) {
+      throw new Error('One or more cards not found in hand');
+    }
+    const rank = picked[0].rank;
+    if (!picked.every((c) => c.rank === rank)) {
       throw new Error('All discarded cards must share the same rank');
     }
+
+    // Jokers are worth zero, so throwing one away is never a move anyone
+    // means to make -- it's the single most damaging misclick available.
+    // Both kinds are protected, because a printed Joker and this round's
+    // wild rank are worth exactly the same (nothing) and it would be odd for
+    // one to be throwable and the other not.
+    //
+    // The exception matters: if a hand is nothing BUT jokers there'd be no
+    // legal discard at all and the turn could never be completed, so the
+    // block only applies while the player still holds something else.
+    if (this._isJokerCard(picked[0]) && hand.some((c) => !this._isJokerCard(c))) {
+      throw new Error('Jokers are worth zero — keep them, discard something else');
+    }
+
+    const discarded = this._removeCardsFromHand(playerId, cardIds);
 
     const openRank = this._openRank();
     const matchesOpen = rank === openRank;
@@ -577,8 +619,15 @@ class LeastCountGame {
       return two ? [two.id] : []; // [] means: accept the +2 penalty
     }
 
+    // Jokers can't be discarded any more (see playTurn), so the auto-play
+    // must never choose one -- it would throw on the player's behalf and
+    // burn their turn. Falls back to the whole hand only when there is
+    // nothing else, which is the same all-jokers escape playTurn allows.
+    const discardable = hand.filter((c) => !this._isJokerCard(c));
+    const pool = discardable.length ? discardable : hand;
+
     const openRank = this._openRank();
-    const matching = hand.filter((c) => c.rank === openRank);
+    const matching = pool.filter((c) => c.rank === openRank);
     if (matching.length > 0) return matching.map((c) => c.id);
 
     // No direct match to the open card. Whether or not this incurs a
@@ -589,7 +638,7 @@ class LeastCountGame {
     // lowest single card. E.g. releasing three 10s for one penalty card is
     // strictly better than giving up one low card and keeping the 10s.
     const groups = new Map();
-    for (const c of hand) {
+    for (const c of pool) {
       if (!groups.has(c.rank)) groups.set(c.rank, []);
       groups.get(c.rank).push(c);
     }
