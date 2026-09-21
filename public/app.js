@@ -3579,12 +3579,30 @@
     const hintCardIds = (currentHint && currentHint.type !== 'declare') ? currentHint.cardIds : null;
     groups.forEach((g) => {
       const rep = g.cards[0];
-      let selectable = isMyTurn && !game.roundOver;
+      // Printed Joker or this round's wild rank -- both score zero, and the
+      // engine now refuses to discard either (see playTurn). Blocking the
+      // tap here means a player never triggers that error in the first
+      // place: the rule shows up as a card you can't pick, not a telling-off
+      // after you've picked it.
+      const isJoker = rep.rank === 'JOKER' || (wildRank && rep.rank === wildRank);
+      // The engine's one exception: a hand holding nothing BUT jokers has to
+      // be able to play something, or the turn can never end.
+      const hasNonJoker = (game.yourHand || []).some(
+        (c) => c.rank !== 'JOKER' && !(wildRank && c.rank === wildRank)
+      );
+      let selectable = isMyTurn && !game.roundOver && !(isJoker && hasNonJoker);
       if (duringChain) selectable = selectable && g.rank === '2';
       const allSelected = g.cards.every((c) => selectedIds.has(c.id));
       const isWild = rep.rank !== 'JOKER' && wildRank && rep.rank === wildRank;
       const hinted = !!(hintCardIds && hintCardIds.length && g.cards.some((c) => hintCardIds.includes(c.id)));
       const el = cardEl(rep, { selectable, selected: allSelected, wild: isWild, hinted });
+      if (isJoker) {
+        // Marks BOTH kinds, so the printed Joker and the wild rank read as
+        // one category. Previously only the wild rank got a gold border and
+        // the printed Joker looked like any other card.
+        el.classList.add('is-joker');
+        el.title = 'Worth 0 — jokers can’t be discarded';
+      }
       if (g.cards.length > 1) {
         const badge = document.createElement('span');
         badge.className = 'card-count-badge';
