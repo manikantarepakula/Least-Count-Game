@@ -952,10 +952,29 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 .game-top > .top-actions { flex: 1 1 0; min-width: 0; }
 .game-top > .top-actions-left { justify-content: flex-start; }
 .game-top > .top-actions-right { justify-content: flex-end; }
-.game-round {
+/* Buttons carry a 10px vertical margin from the base button rule. In a 58px
+   bar that makes the leave button's margin box 64px -- taller than the row,
+   so align-items:center can't centre it and it drops to top+10, landing 5px
+   below Scores and mute. Scores and mute happen to have their margin zeroed
+   elsewhere, which is why only one of the three looked wrong. */
+.game-top .tiny { margin: 0; }
+.game-top-centre {
   flex: 0 0 auto;
+  display: flex; flex-direction: column; align-items: center;
+  /* Bottom-aligned so the round number holds its position when the timer
+     above it appears and disappears each turn. */
+  justify-content: flex-end; gap: 2px;
+  min-width: 0;
+}
+.game-round {
   font-size: 12px; color: var(--text-muted); letter-spacing: 0.02em;
   text-align: center; white-space: nowrap;
+}
+/* In the top bar the timer is a normal flex child, not the fixed, centred
+   pill it used to be -- see the markup comment for why. */
+.game-top .turn-timer {
+  position: static; transform: none; z-index: auto;
+  box-shadow: none; padding: 3px 10px;
 }
 .round-result-round { font-size: 12px; color: var(--text-muted); margin-bottom: 2px; }
 .top-actions { display: flex; gap: 6px; align-items: center; }
@@ -1418,6 +1437,35 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
    position on the joker side of the divider is enough of a cue on its own,
    and the Rules screen covers the mechanic in full for anyone new. */
 .card.wild-zero { border-color: var(--gold); }
+
+/* ---- Jokers in hand (Sept 2026) ------------------------------------------
+   Covers BOTH kinds -- the printed Joker and this round's wild rank. They
+   score the same (zero) and the engine now refuses to discard either, so
+   they need to read as one category. Before this, only the wild rank got a
+   gold border and a printed Joker was visually just another card, which is
+   why they were easy to throw away by mistake.
+   Gold is already this app's "this is special" colour (round joker slot,
+   active seat), so it carries the meaning without a new convention. The
+   0 badge states the value outright rather than expecting players to
+   remember it. ------------------------------------------------------- */
+.card.is-joker {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px rgba(212,175,55,0.45), 0 2px 6px rgba(0,0,0,0.3);
+}
+.card.is-joker::after {
+  content: '0';
+  position: absolute; top: -5px; left: -5px;
+  min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: 50%;
+  background: var(--gold); color: #1a1a1a;
+  font-size: 10px; font-weight: 700; line-height: 16px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+/* Not selectable, and it should look it: no lift, no pointer, slightly
+   receded so the eye goes to the cards you CAN play. Deliberately not
+   greyed out -- these are your best cards, not disabled junk. */
+.card.is-joker:not(.selectable) { cursor: default; opacity: 0.92; }
 
 .hand-header {
   font-size: 12px; margin-top: 2px; margin-bottom: 2px; flex-shrink: 0;
