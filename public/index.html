@@ -599,9 +599,23 @@
     <span id="hint-text"></span>
   </div>
 
+  <!-- The chat toggle lives on this row (Sept 2026), not floating in the
+       bottom-right corner any more. As a position:fixed button it was
+       anchored to the VIEWPORT while the game content overflowed past the
+       bottom on short phones, so on a 360x640 screen it sat squarely on top
+       of the player's cards (measured: a full 52x52 overlap with #hand).
+       This row already had ~282px of empty space to the right of the label,
+       so putting it here costs no vertical height, can never overlap
+       anything at any screen size, and lands right above Least Count!
+       where the thumb already is. -->
   <div class="hand-header">
     <span>Your cards (Value: <b id="hand-value">0</b>)</span>
-    <button id="btn-show-hint" class="hint-btn hidden" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 21h6v-1.5H9V21ZM12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2v.3h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg> Show hint</button>
+    <div class="hand-header-actions">
+      <button id="btn-show-hint" class="hint-btn hidden" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 21h6v-1.5H9V21ZM12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2v.3h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg> Show hint</button>
+      <button id="chat-fab" class="chat-fab hidden" type="button" aria-label="Open chat">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg><span id="chat-badge" class="badge hidden">0</span>
+      </button>
+    </div>
   </div>
   <!-- Joker/wild and normal cards used to be two separate stacked sections,
        each with its own label line -- that cost real vertical height on top
@@ -779,10 +793,6 @@
     <div class="draw-reveal-label" id="draw-reveal-label">You drew...</div>
     <div id="draw-reveal-cards" class="draw-reveal-cards"></div>
   </div>
-</div>
-
-<div id="chat-fab" class="chat-fab hidden">
-  <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg><span id="chat-badge" class="badge hidden">0</span>
 </div>
 
 <!-- Tap-to-close target behind the chat sheet. Deliberately transparent
