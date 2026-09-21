@@ -179,6 +179,44 @@ body.game-active {
    --------------------------------------------------------------------- */
 #screen-landing.screen.active, #screen-lobby.screen.active, #screen-group.screen.active {
   padding: 0 0 var(--ad-safe-bottom, 0px);
+  /* --------------------------------------------------------------------
+     Pin the chrome, scroll the middle (Sept 2026).
+
+     These screens are topbar / body / footer-nav, and .landing-body had no
+     height constraint and overflow-y: visible -- so when the content didn't
+     fit, it didn't scroll, it simply pushed the footer nav off the bottom
+     of the screen. Measured on the live build: 61 + 556 + 61 = 678px of
+     content on a 640-tall phone, so Home/Stats/Rules sat 38px below the
+     fold and looked, once again, like the ad was eating the menu.
+
+     Height (not min-height) plus a scrollable body means the topbar and the
+     nav are always reachable on ANY screen, and only the middle moves. The
+     fluid sizing elsewhere keeps most phones from needing to scroll at all;
+     this is the guarantee for the ones that still do -- tiny screens, or a
+     user with large system font sizes, which no amount of tuning can plan
+     for.
+     -------------------------------------------------------------------- */
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100svh;
+  overflow: hidden;
+}
+#screen-landing.screen.active > .landing-topbar,
+#screen-lobby.screen.active > .landing-topbar,
+#screen-group.screen.active > .landing-topbar,
+#screen-landing.screen.active > .landing-footer-nav {
+  flex: 0 0 auto;
+}
+#screen-landing.screen.active > .landing-body,
+#screen-lobby.screen.active > .landing-body,
+#screen-group.screen.active > .landing-body {
+  flex: 1 1 auto;
+  /* Without min-height:0 a flex child refuses to shrink below its content,
+     which would put the overflow straight back where it started. */
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .hero-landing { position: relative; height: 210px; overflow: hidden; }
@@ -493,7 +531,28 @@ body.game-active {
    offset). This rule exists only to sit it ABOVE the table chat's own fab in
    the stacking order -- they're never both visible, but if a stale one ever
    lingered, the one for the screen you're actually on should win. */
-.group-chat-fab { z-index: 21; }
+/* The GROUP screen keeps a real floating action button, and deliberately so.
+   The game screen's chat toggle moved into the hand-header row because that
+   screen is a fixed, non-scrolling board where a floating button could only
+   ever sit on top of the cards. This screen is the opposite: a scrolling
+   feed of members and messages, which is exactly the layout a FAB was
+   designed for, and there are no cards underneath it to cover.
+   These rules restore the floating look on top of the now-in-flow .chat-fab
+   base -- they must stay in sync if that base changes again. */
+.group-chat-fab {
+  position: fixed;
+  bottom: calc(16px + var(--ad-safe-bottom, 0px));
+  right: 16px;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, var(--red), var(--red-dark));
+  color: #fff;
+  box-shadow: var(--shadow-md);
+  z-index: 21;
+}
+.group-chat-fab .icon { width: 24px; height: 24px; }
+.group-chat-fab::before { content: none; }   /* the 44px tap pad is redundant at 52px */
 
 /* ---- Read-only chat preview on the group screen ----
    Shares .group-chat-list's styling so a message looks identical here and
@@ -883,7 +942,8 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 /* ---------------- Game screen ---------------- */
 .game-top {
   display: flex; justify-content: space-between; align-items: center;
-  font-size: 13px; padding: 3px 4px; flex-shrink: 0;
+  /* Caps at the original 13px/3px on any phone 394px wide or more. */
+  font-size: clamp(11px, 3.3vw, 13px); padding: 2px 4px; flex-shrink: 0;
 }
 .game-round { font-size: 12px; color: var(--text-muted); padding-left: 6px; letter-spacing: 0.02em; }
 .round-result-round { font-size: 12px; color: var(--text-muted); margin-bottom: 2px; }
@@ -949,21 +1009,38 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
      broadcast by the server as normal, just not shown in the UI. */
   display: none;
 }
+/* The open card and the joker sit at the exact vertical midpoint of the
+   oval -- which is precisely where the east and west chairs also sit. At a
+   fixed 58px each plus an 18px gap they needed 134px of the table's middle,
+   and on a 273px-wide table that left the side seats nowhere to go: 27px of
+   overlap on each side, measured. Sizing them from the table's width keeps
+   the open card and the chairs out of each other's way at every screen
+   size, and resolves to the original 58px on a full-size table. */
 .table-center {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  display: flex; gap: 18px; align-items: center; z-index: 2;
+  display: flex; gap: var(--centre-gap, 18px); align-items: center; z-index: 2;
 }
 .table-center .pile-label { font-size: 11px; }
-.table-center .card { width: 58px; height: 82px; }
+.table-center .card {
+  width: var(--centre-card-w, 58px);
+  /* 82/58 -- keeps the real playing-card proportion at any width. */
+  height: calc(var(--centre-card-w, 58px) * 1.414);
+}
 .table-center .card .card-corner { display: none; }
-.table-center .card .center-rank { font-size: 20px; }
-.table-center .card .center-suit { font-size: 26px; }
+/* Ratios taken from the original 58px card (20/58 and 26/58) so the rank
+   and suit keep filling the same share of the face as it shrinks. */
+.table-center .card .center-rank { font-size: calc(var(--centre-card-w, 58px) * 0.345); }
+.table-center .card .center-suit { font-size: calc(var(--centre-card-w, 58px) * 0.448); }
 #joker-indicator { display: flex; }
 
+/* Width now comes from renderOvalTable(), derived from the table's own
+   measured width (~26% of it, floored at 62px, capped at the old 96px).
+   The fallback is the previous fixed value, so if the JS ever fails to run
+   the seats simply look exactly as they did before rather than collapsing. */
 .seat {
   position: absolute; transform: translate(-50%, -50%);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 3px; z-index: 3; width: 96px; text-align: center;
+  gap: 3px; z-index: 3; width: var(--seat-w, 96px); text-align: center;
 }
 .seat-chip {
   background: rgba(255,255,255,0.14); border-radius: var(--radius-sm); padding: 5px 9px;
@@ -1369,11 +1446,36 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
      turn to turn on the same device. Rare huge hands (after several
      stacked +2 penalties) scroll within this fixed box instead of pushing
      the action buttons off-screen or growing the tray itself. */
-  flex: 0 0 auto; height: 148px; overflow-y: auto;
+  /* Still a FIXED height on any given device (the reasoning above holds --
+     the table must not grow and shrink turn to turn), but that height is now
+     a share of the viewport rather than 148px everywhere. At 148px flat, the
+     tray plus the rest of the fixed chrome came to 288px, which on a 320x568
+     phone left the oval just 214px -- smaller than the furniture around it.
+     21svh gives the table 40px back there while resolving to the same 148px
+     cap on anything 705px tall or more, so nothing changes on a normal
+     phone. Floor of 84px keeps two rows of cards visible. */
+  flex: 0 0 auto; height: clamp(84px, 21svh, 148px); overflow-y: auto;
 }
 
-.action-bar { display: flex; gap: 8px; padding: 4px; flex-shrink: 0; }
-.action-bar button { padding: 10px; font-size: 14px; }
+/* ---- Fluid game chrome (Sept 2026) --------------------------------------
+   The oval table was the only element on this screen sized from the
+   viewport, so it absorbed every device difference alone: 513px tall on a
+   412x915 phone, 214px on a 320x568 one, while the furniture around it
+   stayed a constant 288px. These clamps let the chrome give a little on
+   small screens (worth +40px of table, measured) and every one of them
+   resolves to its existing value at 412x915 -- 11.5vw = 47px capped to 44,
+   21svh = 192px capped to 148 -- so nothing moves on a normal phone.
+   Scoped to #hand so the reveal/centre/start-sequence cards, which have
+   their own deliberate sizes, are untouched. -------------------------- */
+#hand .card {
+  width: clamp(32px, 11.5vw, 44px);
+  height: calc(clamp(32px, 11.5vw, 44px) * 1.409);   /* 62/44 */
+}
+.action-bar { display: flex; gap: 6px; padding: 2px; flex-shrink: 0; }
+.action-bar button {
+  padding: clamp(5px, 1.4svh, 10px);
+  font-size: clamp(12px, 3.5vw, 14px);
+}
 
 .overlay {
   position: fixed; top: 0; left: 0; right: 0;
@@ -1692,17 +1794,40 @@ a.install-card-btn:hover {
 .start-seq-reveal-row .card-center .center-suit { font-size: 32px; }
 
 /* ---- Chat ---- */
+/* Chat toggle -- an in-flow control on the hand-header row (Sept 2026).
+   It used to be position:fixed in the bottom-right corner, which meant it
+   was anchored to the viewport while the game content overflowed past the
+   bottom of short screens: on a 360x640 phone it landed exactly on top of
+   the player's cards. Being a normal flex child of .hand-header-actions,
+   it now cannot overlap anything on any screen, and the ad-safe-bottom
+   offset it used to need is irrelevant -- the row is inside the layout,
+   which already sits above the banner.
+   Also no longer a solid red circle: red is reserved here for the
+   irreversible controls (Leave), and a chat button shouldn't outrank
+   Discard / Least Count! for attention. */
 .chat-fab {
-  position: fixed;
-  /* Offset above the native banner (0 when none is showing) so the fab
-     never ends up sitting half-underneath it -- this now matters on the
-     game screen too, since the banner shows there as well. */
-  bottom: calc(16px + var(--ad-safe-bottom, 0px));
-  right: 16px; width: 52px; height: 52px; border-radius: 50%;
-  background: linear-gradient(135deg, var(--red), var(--red-dark)); color: white; display: flex; align-items: center; justify-content: center;
-  box-shadow: var(--shadow-md); cursor: pointer; z-index: 20;
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0;
+  border: 1px solid var(--jade-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.10); color: var(--text-light);
+  cursor: pointer; flex: 0 0 auto;
 }
-.chat-fab .icon { width: 24px; height: 24px; margin: 0; }
+.chat-fab:active { background: rgba(255,255,255,0.2); }
+/* Unread is the one state worth shouting about, so the accent goes here
+   rather than on the resting button. */
+.chat-fab.has-unread { border-color: var(--gold); color: var(--gold); }
+.chat-fab .icon { width: 19px; height: 19px; margin: 0; }
+/* Keeps the row compact while still giving the button a full 44px touch
+   target, by letting the tap area spill outside the painted box instead of
+   growing it -- vertical space is the scarcest thing on a short phone. */
+.chat-fab::before {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px; height: 44px;
+}
+.hand-header-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .chat-fab.hidden { display: none; }
 .badge {
   position: absolute; top: -4px; right: -4px; background: var(--red); color: white;
@@ -2345,7 +2470,11 @@ a.install-card-btn:hover {
    Measured on the live build at 375x812. Discard and Least Count! were 37px
    tall -- the two most-tapped controls in the game were the smallest things
    on screen that mattered. 44px is the platform minimum for a finger. */
-#btn-discard, #btn-declare { min-height: 44px; }
+/* 44px is the platform minimum for a finger and stays the target on any
+   normal phone (6.8svh clears 44px from 647px tall upward). It relaxes only
+   on genuinely tiny screens, where an untappable-but-visible button is
+   still better than one pushed off the bottom entirely. */
+#btn-discard, #btn-declare { min-height: clamp(38px, 6.8svh, 44px); }
 #btn-profile-menu { min-width: 44px; min-height: 44px; }
 #btn-mute, #btn-scores, #btn-leave-game { min-height: 44px; min-width: 44px; }
 #btn-game-rules { min-height: 44px; }
