@@ -945,7 +945,18 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
   /* Caps at the original 13px/3px on any phone 394px wide or more. */
   font-size: clamp(11px, 3.3vw, 13px); padding: 2px 4px; flex-shrink: 0;
 }
-.game-round { font-size: 12px; color: var(--text-muted); padding-left: 6px; letter-spacing: 0.02em; }
+/* Equal-weight side columns (flex:1 1 0) are what actually centre the round
+   number: with plain space-between it would only look centred when the two
+   button groups happened to be the same width, which they never are. The
+   centre column doesn't grow, so it stays put as button labels change. */
+.game-top > .top-actions { flex: 1 1 0; min-width: 0; }
+.game-top > .top-actions-left { justify-content: flex-start; }
+.game-top > .top-actions-right { justify-content: flex-end; }
+.game-round {
+  flex: 0 0 auto;
+  font-size: 12px; color: var(--text-muted); letter-spacing: 0.02em;
+  text-align: center; white-space: nowrap;
+}
 .round-result-round { font-size: 12px; color: var(--text-muted); margin-bottom: 2px; }
 .top-actions { display: flex; gap: 6px; align-items: center; }
 .mute-btn { padding: 6px 9px !important; font-size: 13px !important; line-height: 1; }
@@ -2204,6 +2215,66 @@ a.install-card-btn:hover {
 .st-meta { grid-column: 2 / -1; font-size: 11px; color: var(--text-muted); }
 
 /* ---- Landing: Quick Play segmented toggle (Online / vs Bots) ---- */
+/* ---- Bottom sheet (Sept 2026) --------------------------------------------
+   For content you READ rather than answer: standings, tables, lists. A
+   .card-panel dialog shrinks to its content (no width, only max-width), so
+   a four-row scorecard rendered as a 158px sliver floating in the middle of
+   a 360px screen with 252px of dead space above and below -- measured. That
+   shape says "confirm this", not "here are the standings".
+   Anchored to the bottom, full width, capped at 82% height so the table
+   underneath stays partly visible. Head and foot are pinned; only .sheet-body
+   scrolls, so the tabs and close button never scroll away.
+   -------------------------------------------------------------------- */
+.sheet-overlay { align-items: flex-end; padding: 0; }
+.sheet-panel {
+  width: 100%;
+  max-height: 82svh;
+  display: flex;
+  flex-direction: column;
+  background: var(--jade-panel);
+  color: var(--text-light);
+  border-top: 1px solid var(--jade-border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding: 14px 16px calc(12px + var(--ad-safe-bottom, 0px));
+  box-shadow: var(--shadow-lg);
+}
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex: 0 0 auto; margin-bottom: 10px;
+}
+.sheet-head h2 { margin: 0; font-size: 17px; }
+/* min-height:0 or the flex child refuses to shrink and the sheet grows past
+   its own max-height instead of scrolling -- same trap as .landing-body. */
+.sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.sheet-foot { flex: 0 0 auto; margin: 10px 0 0; font-size: 11.5px; color: var(--text-muted); }
+.sheet-foot:empty { display: none; }
+.scorecard-tabs { flex: 0 0 auto; }
+
+/* Standings row: rank, name, score, and a bar showing how close this player
+   is to the elimination score. The bar is the point -- in Least Count what
+   matters is not that someone has 120, it's that they're 80 away from out. */
+.sc-row { padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,0.07); }
+.sc-row:last-child { border-bottom: none; }
+.sc-row-top {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 14px; margin-bottom: 6px;
+}
+.sc-rank { color: var(--text-muted); font-size: 12px; min-width: 14px; }
+.sc-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-score { font-weight: 700; flex: 0 0 auto; }
+.sc-bar { height: 5px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; }
+.sc-bar span { display: block; height: 100%; border-radius: 3px; background: var(--jade-accent, #5dcaa5); }
+/* Amber from 60% of the limit, red once out -- the same three-state read as
+   the seat colours, so the sheet and the table agree at a glance. */
+.sc-row.warn .sc-bar span { background: #ef9f27; }
+.sc-row.out .sc-bar span { background: var(--red); }
+.sc-row.out .sc-name, .sc-row.out .sc-score { color: var(--text-muted); }
+.sc-row.is-me .sc-name { font-weight: 700; }
+.sc-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  color: var(--red); flex: 0 0 auto;
+}
+
 .segmented { display: flex; gap: 6px; margin-bottom: 10px; }
 .segmented .seg {
   flex: 1; padding: 9px 8px; border-radius: var(--radius-md);
