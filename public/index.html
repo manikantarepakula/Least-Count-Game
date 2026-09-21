@@ -539,13 +539,19 @@
 <div id="join-requests-banner" class="join-requests-banner hidden"></div>
 
 <div id="screen-game" class="screen">
+  <!-- Three columns: Scores | Round | mute + leave (Sept 2026).
+       This bar used to be [round].................[mute][Scores][leave],
+       which left a measured 115px hole in the middle of a 344px bar and put
+       a 14px-tall text label next to a 54px-tall button cluster. Splitting
+       the buttons either side lets the round number sit in the true centre
+       and balances the weight across the bar. -->
   <div class="game-top">
-    <!-- Left side of this bar was empty (justify-content:flex-end), so the
-         round number costs nothing here. -->
-    <div id="game-round" class="game-round"></div>
-    <div class="top-actions">
-      <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
+    <div class="top-actions top-actions-left">
       <button id="btn-scores" class="tiny">Scores</button>
+    </div>
+    <div id="game-round" class="game-round"></div>
+    <div class="top-actions top-actions-right">
+      <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
       <!-- The only mid-round exit. Without it the table had no way out at
            all, and a refresh auto-rejoins the room, so there was no way back
            to the menu either. -->
@@ -686,9 +692,8 @@
 
     <div id="round-result-hands" class="reveal-rows"></div>
 
-    <!-- Same "See full scorecard" link as the in-game Scores overlay --
-         opens the dedicated #overlay-full-scorecard on top of this screen
-         (a separate screen, not an inline expansion here) so this
+    <!-- Opens the shared #overlay-scorecard sheet straight onto its "By
+         round" tab -- a sheet rather than an inline expansion, so this
          already-tall round-result panel doesn't get taller/more cluttered. -->
     <button id="btn-open-full-scorecard-rr" class="link-btn" type="button">See full scorecard</button>
 
@@ -740,16 +745,8 @@
   </div>
 </div>
 
-<div id="overlay-scores" class="overlay hidden">
-  <div class="card-panel">
-    <h2>Scores</h2>
-    <div id="scores-body"></div>
-    <!-- Opens the dedicated #overlay-full-scorecard on top of this one,
-         instead of expanding the round-by-round table inline here. -->
-    <button id="btn-open-full-scorecard" class="link-btn" type="button">See full scorecard</button>
-    <button id="btn-close-scores" class="secondary">Close</button>
-  </div>
-</div>
+<!-- #overlay-scores and its "See full scorecard" link were merged into
+     #overlay-scorecard below -- one sheet, two tabs, no stacking. -->
 
 <!-- Full round-by-round scorecard, its own separate screen (not an inline
      expansion) opened from either the Scores overlay above or the
@@ -759,14 +756,40 @@
      rounds as columns (a long game scrolls sideways instead, with the
      player-name column frozen via CSS position:sticky so it stays visible
      while scrolling sideways). -->
-<div id="overlay-full-scorecard" class="overlay hidden">
-  <div class="card-panel">
-    <h2>Full Scorecard</h2>
-    <p class="scorecard-hint hidden" id="scorecard-swipe-hint">swipe for more rounds →</p>
-    <div class="scorecard-scroll">
-      <table id="scorecard-table"></table>
+<!-- Scorecard sheet (Sept 2026) -- replaces the old #overlay-scores and
+     #overlay-full-scorecard pair.
+     Those were two separate dialogs showing the same standings, and the
+     second opened ON TOP of the first (both left open), which is two taps,
+     two backdrops, and the overlay-on-overlay stacking that caused the
+     backdrop bug fixed in an earlier pass. Measured at 360x800 they filled
+     37% and 36% of the screen with ~252px of dead space above and below,
+     because .card-panel has a max-width but no width, so a four-player
+     table collapsed to a 158px sliver.
+     One bottom sheet, full width, ~80% height, with a segmented toggle
+     instead of a second overlay. Geometry follows the chat sheet, which
+     already solves the on-screen-keyboard case. -->
+<div id="overlay-scorecard" class="overlay sheet-overlay hidden">
+  <div class="sheet-panel">
+    <div class="sheet-head">
+      <h2>Scorecard</h2>
+      <button id="btn-close-scorecard" class="icon-btn" type="button" aria-label="Close scorecard">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
     </div>
-    <button id="btn-close-full-scorecard" class="secondary">Close</button>
+    <div class="segmented scorecard-tabs">
+      <button class="seg active" id="seg-scorecard-totals" type="button">Totals</button>
+      <button class="seg" id="seg-scorecard-rounds" type="button">By round</button>
+    </div>
+    <div class="sheet-body">
+      <div id="scorecard-totals"></div>
+      <div id="scorecard-rounds" class="hidden">
+        <p class="scorecard-hint hidden" id="scorecard-swipe-hint">swipe for more rounds →</p>
+        <div class="scorecard-scroll">
+          <table id="scorecard-table"></table>
+        </div>
+      </div>
+    </div>
+    <p class="sheet-foot" id="scorecard-foot"></p>
   </div>
 </div>
 
