@@ -1150,6 +1150,12 @@
     document.getElementById('overlay-gameover').classList.add('hidden');
     document.getElementById('overlay-round-result').classList.add('hidden');
     document.getElementById('overlay-scorecard').classList.add('hidden');
+    // A new round dealing means every rejoin decision for the last one is
+    // settled (the server won't start one while any are pending). Clear the
+    // offer and its interval here rather than leaving a countdown running
+    // against a deadline that has already passed.
+    hideRejoinOffer();
+    rejoinAsked = false;
 
     // The solid full-screen overlay is reserved for the joker/open-card
     // reveal step only -- during countdown + dealing, the real oval table
@@ -2859,6 +2865,177 @@
   }
   socket.on('join_requests', ({ pending }) => renderJoinRequestsBanner(pending));
 
+  // ================= rejoin after elimination: client =================
+  // Engine + server for this shipped days before the UI did, so until now an
+  // eliminated player simply spectated: the server was listening for
+  // request_rejoin, the engine was exposing canRejoin/rejoinScore per viewer,
+  // and nothing ever asked. These three pieces close that.
+  //
+  // The server gives the decision REJOIN_DECISION_MS (30s) and auto-denies
+  // after it, holding the next round the whole time -- so both sides show a
+  // countdown, and neither is allowed to look like it's waiting forever.
+  const REJOIN_DECISION_MS = 30000;
+  let rejoinAsked = false;       // this player has a request in flight
+  let rejoinDeadline = 0;        // epoch ms the server will give up at
+  let rejoinTicker = null;
+
+  function rejoinEls() {
+    return {
+      box: document.getElementById('rejoin-offer'),
+      text: document.getElementById('rejoin-offer-text'),
+      status: document.getElementById('rejoin-offer-status'),
+      ask: document.getElementById('btn-rejoin-ask'),
+      no: document.getElementById('btn-rejoin-no'),
+    };
+  }
+
+  function stopRejoinTicker() {
+    if (rejoinTicker) { clearInterval(rejoinTicker); rejoinTicker = null; }
+  }
+
+  function secondsLeft() {
+    return Math.max(0, Math.ceil((rejoinDeadline - Date.now()) / 1000));
+  }
+
+  // Locks the buttons and counts down while the host decides. Reaching zero
+  // doesn't decide anything on its own -- the SERVER's timer is the one that
+  // matters, and its rejoin_result is what actually closes this out. This
+  // just stops the screen claiming time is left when it isn't.
+  function startRejoinCountdown() {
+    const { status } = rejoinEls();
+    stopRejoinTicker();
+    const tick = () => {
+      const s = secondsLeft();
+      status.textContent = s > 0
+        ? `Asked the host — ${s}s left`
+        : 'Waiting for the host…';
+      if (s <= 0) stopRejoinTicker();
+    };
+    tick();
+    rejoinTicker = setInterval(tick, 1000);
+  }
+
+  function hideRejoinOffer() {
+    stopRejoinTicker();
+    const { box, status } = rejoinEls();
+    box.classList.add('hidden');
+    status.classList.add('hidden');
+  }
+
+  // Called from the round-result render. `game.canRejoin` and
+  // `game.rejoinScore` are computed per-viewer by the engine, so this needs
+  // no eligibility logic of its own -- deliberately, so the screen can never
+  // offer something the server would then refuse.
+  function renderRejoinOffer(game) {
+    const { box, text, status, ask, no } = rejoinEls();
+    if (!game || !game.canRejoin) {
+      // Not eligible (or no longer eligible -- e.g. the game ended while the
+      // scorecard was up). Drop any in-flight state with it.
+      if (!rejoinAsked) hideRejoinOffer();
+      return;
+    }
+
+    box.classList.remove('hidden');
+    const back = game.rejoinScore;
+    const limit = game.eliminationScore || 200;
+    text.textContent = rejoinAsked
+      ? 'Waiting for the host to answer.'
+      : `You're out. Come back in at ${back} points? The limit is ${limit}.`;
+    ask.classList.toggle('hidden', rejoinAsked);
+    no.classList.toggle('hidden', rejoinAsked);
+    status.classList.toggle('hidden', !rejoinAsked);
+  }
+
+  document.getElementById('btn-rejoin-ask').onclick = () => {
+    const { status } = rejoinEls();
+    // Optimistic: the buttons swap for the countdown immediately rather than
+    // after the round trip, because the 30 seconds are already running on the
+    // server and a second tap would just be refused as a duplicate.
+    rejoinAsked = true;
+    rejoinDeadline = Date.now() + REJOIN_DECISION_MS;
+    renderRejoinOffer(latestGame);
+    startRejoinCountdown();
+    socket.emit('request_rejoin', { roomCode: myRoomCode }, (res) => {
+      if (res && res.ok) return;
+      // Refused (solo vs bots, no longer eligible, rate limited). Put the
+      // choice back rather than leaving a countdown that will never resolve.
+      rejoinAsked = false;
+      stopRejoinTicker();
+      renderRejoinOffer(latestGame);
+      status.classList.remove('hidden');
+      status.textContent = friendlyError((res && res.error) || 'Could not ask to rejoin.');
+    });
+  };
+
+  document.getElementById('btn-rejoin-no').onclick = () => {
+    hideRejoinOffer();
+    rejoinAsked = false;
+    // Tells the server to stop holding the round for a decision this player
+    // has already made. Leaving instead is the player's own call afterwards.
+    socket.emit('decline_rejoin', { roomCode: myRoomCode }, () => {});
+  };
+
+  socket.on('rejoin_result', ({ ok, score, reason }) => {
+    rejoinAsked = false;
+    stopRejoinTicker();
+    const { box, text, status, ask, no } = rejoinEls();
+    box.classList.remove('hidden');
+    ask.classList.add('hidden');
+    no.classList.add('hidden');
+    status.classList.remove('hidden');
+    if (ok) {
+      text.textContent = 'You’re back in.';
+      status.textContent = `Rejoined at ${score} points. Next round deals shortly.`;
+      // The seats, scores and your hand all arrive on the next game_state --
+      // nothing to reconstruct here.
+    } else {
+      text.textContent = 'Not this time.';
+      status.textContent = friendlyError(reason || 'The host declined.');
+    }
+  });
+
+  // ---- host side: who's asking to come back ----
+  function renderRejoinRequestsBanner(pending) {
+    const banner = document.getElementById('rejoin-requests-banner');
+    banner.classList.toggle('hidden', !pending || pending.length === 0);
+    banner.innerHTML = '';
+    (pending || []).forEach((req) => {
+      const row = document.createElement('div');
+      row.className = 'join-request-row';
+      const txt = document.createElement('span');
+      txt.className = 'jr-text';
+      const b = document.createElement('b');
+      b.textContent = req.name;
+      txt.appendChild(b);
+      // The score is the whole decision for the host -- letting someone back
+      // at 45 and at 190 are not the same favour -- so it's stated, not
+      // implied, and built as text nodes since the name is user-supplied.
+      txt.appendChild(document.createTextNode(` wants back in at ${req.score}`));
+      const yes = document.createElement('button');
+      yes.className = 'jr-admit'; yes.type = 'button'; yes.textContent = 'Let in';
+      const nope = document.createElement('button');
+      nope.className = 'jr-ignore'; nope.type = 'button'; nope.textContent = 'No';
+      row.appendChild(txt); row.appendChild(yes); row.appendChild(nope);
+
+      // Same reason as the join banner: clear the row on tap so a slow round
+      // trip doesn't invite a second tap that errors with "no longer waiting".
+      const settle = () => {
+        row.remove();
+        if (!banner.children.length) banner.classList.add('hidden');
+      };
+      yes.onclick = () => {
+        settle();
+        socket.emit('respond_rejoin', { roomCode: myRoomCode, playerId: req.playerId, accept: true }, () => {});
+      };
+      nope.onclick = () => {
+        settle();
+        socket.emit('respond_rejoin', { roomCode: myRoomCode, playerId: req.playerId, accept: false }, () => {});
+      };
+      banner.appendChild(row);
+    });
+  }
+  socket.on('rejoin_requests', ({ pending }) => renderRejoinRequestsBanner(pending));
+
   // Errors get TWO independent signals now, not just one easy-to-miss one:
   // 1) the inline toast banner in the main page flow (visible regardless of
   //    whether the profile dropdown is open), and 2) the same text inside
@@ -4359,6 +4536,12 @@
       ? `Eliminated: ${r.newlyEliminated.map(playerName).join(', ')}`
       : '';
 
+    // Offer the way back BEFORE the overlay is shown, so an eliminated
+    // player sees the choice as the screen arrives rather than watching it
+    // pop in a frame later. Eligibility is entirely the engine's call
+    // (game.canRejoin, per viewer).
+    renderRejoinOffer(game);
+
     document.getElementById('overlay-round-result').classList.remove('hidden');
     // Deliberately AFTER the overlay is unhidden. It used to run before, and
     // relied on requestAnimationFrame firing late enough for the panel to
@@ -4815,6 +4998,12 @@
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
       document.getElementById('overlay-scorecard').classList.add('hidden');
+      // A pending rejoin belongs to the room being left -- drop the offer,
+      // its countdown interval and the host banner with it, or the next room
+      // inherits a stale prompt and a ticking timer for a finished game.
+      hideRejoinOffer();
+      rejoinAsked = false;
+      document.getElementById('rejoin-requests-banner').classList.add('hidden');
       showScreen('screen-landing');
       // Full-screen interstitial on the way out of a room -- a natural
       // stopping point, never mid-game. Deliberately fired AFTER the leave
