@@ -83,7 +83,7 @@
     <!-- Avatar picker. Populated from AVATARS in app.js rather than written
          out here, so the set only has to be defined once. -->
     <label>Your avatar</label>
-    <div id="avatar-picker" class="avatar-picker"></div>
+    <div id="avatar-picker" class="avatar-picker" data-avatar-picker></div>
     <p id="landing-error" class="error"></p>
 
     <!-- Vibration is deliberately reserved for the two moments that are
@@ -1034,10 +1034,20 @@
 
 <div id="table-name-dialog" class="overlay hidden">
   <div class="card-panel dialog-panel">
-    <h2>Your name at this table</h2>
+    <h2>How you appear here</h2>
     <p class="hint">Just for this game — your saved name and the group leaderboard don't change.</p>
     <input id="input-table-name" type="text" maxlength="20" placeholder="e.g. Batman" autocomplete="off" />
     <p id="table-name-error" class="error"></p>
+
+    <!-- The avatar picker also lives in the profile menu, but that is only
+         reachable from the landing screen -- so once you were at a table
+         there was no way to change your face, and tapping your own seat
+         (which opens this dialog) did nothing for it. This is the dialog
+         players actually reach for when they want to change how they look,
+         so the picker belongs here too. Both are rendered by the same
+         function; picking in either updates the other. -->
+    <label>Avatar</label>
+    <div class="avatar-picker" data-avatar-picker></div>
     <div class="dialog-actions">
       <button id="btn-table-name-cancel" class="secondary" type="button">Cancel</button>
       <button id="btn-table-name-save" class="primary" type="button">Save</button>
