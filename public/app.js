@@ -797,18 +797,98 @@
       shuffleBurst(35, 0.4, { gain: 0.16, dur: 0.016, freqSpread: 2500 });
     }
 
+    // ------------------------------------------------------------------
+    // Sample override hook (Sept 2026).
+    //
+    // Every cue below goes through play(name, fallback). If SAMPLES[name]
+    // holds a loaded AudioBuffer it's used; otherwise the synthesised
+    // fallback runs. That means recorded audio can replace any single cue
+    // later -- one at a time, in any order -- without touching a single
+    // call site elsewhere in the app.
+    //
+    // Nothing is loaded today: real card sounds have to be sourced and
+    // licensed, and a half-set of samples mixed with synthesis sounds worse
+    // than either on its own. The seam is here so that work is a drop-in
+    // rather than a rewrite.
+    // ------------------------------------------------------------------
+    const SAMPLES = Object.create(null);
+    function play(name, fallback) {
+      if (muted) return;
+      const buf = SAMPLES[name];
+      if (!buf) { fallback(); return; }
+      const c = ensureCtx();
+      if (!c) { fallback(); return; }
+      try {
+        const src = c.createBufferSource();
+        const g = c.createGain();
+        g.gain.value = 0.9;
+        src.buffer = buf;
+        src.connect(g).connect(c.destination);
+        src.start();
+      } catch (e) { fallback(); }
+    }
+
+    // Two-oscillator voice with a soft attack. The old cues were bare sine
+    // and sawtooth tones with an instant onset, which is exactly what makes
+    // a sound read as a "beep" -- a detuned second voice and a few ms of
+    // attack are most of the difference between a beep and a note.
+    function warm(freq, duration, opts) {
+      opts = opts || {};
+      if (muted) return;
+      const c = ensureCtx();
+      if (!c) return;
+      const t0 = c.currentTime + (opts.delay || 0);
+      const g = c.createGain();
+      const peak = opts.gain || 0.16;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(peak, t0 + 0.018);
+      g.gain.exponentialRampToValueAtTime(0.0008, t0 + duration);
+      const filt = c.createBiquadFilter();
+      filt.type = 'lowpass';
+      filt.frequency.setValueAtTime(opts.cutoff || 2600, t0);
+      [0, opts.detune || 7].forEach((cents, i) => {
+        const o = c.createOscillator();
+        o.type = i === 0 ? (opts.type || 'triangle') : 'sine';
+        o.frequency.setValueAtTime(freq, t0);
+        o.detune.setValueAtTime(cents, t0);
+        o.connect(filt);
+        o.start(t0);
+        o.stop(t0 + duration + 0.05);
+      });
+      filt.connect(g).connect(c.destination);
+    }
+    function warmSeq(notes) {
+      notes.forEach((n) => warm(n[0], n[1], { delay: n[2], gain: n[3], type: n[4] }));
+    }
+
     return {
       isMuted: () => muted,
       setMuted(v) { muted = v; localStorage.setItem('leastcount_muted', v ? '1' : '0'); },
       init() { ensureCtx(); },
-      discard() { cardSnap({ gain: 0.42 }); },
-      penaltyDraw(count) { cardRiffle(count || 1); },
-      reshuffle() { cardReshuffle(); },
-      chainAlert() { cardSnap({ gain: 0.5 }); seq([[280, 0.14, 0.05, 'square', 0.08]]); },
-      yourTurn() { seq([[660, 0.1, 0], [880, 0.14, 0.1]]); },
-      declareCorrect() { seq([[523, 0.12, 0], [659, 0.12, 0.1], [784, 0.22, 0.2]]); },
-      declareWrong() { seq([[300, 0.2, 0, 'sawtooth'], [220, 0.28, 0.15, 'sawtooth']]); },
-      win() { seq([[523, 0.15, 0], [659, 0.15, 0.12], [784, 0.15, 0.24], [1046, 0.35, 0.36]]); },
+      // Lets a future loader install a decoded sample: Sound.useSample('win', buffer)
+      useSample(name, buffer) { SAMPLES[name] = buffer; },
+
+      // ---- your own actions (new) ----
+      // Nothing used to respond to what the PLAYER did -- every sound fired
+      // at something happening to them. Selecting a card, drawing, and
+      // declaring were all silent, which is most of why the loop felt dead.
+      select() { play('select', () => cardSnap({ gain: 0.16, dur: 0.03 })); },
+      deselect() { play('deselect', () => cardSnap({ gain: 0.1, dur: 0.025 })); },
+      declareTap() { play('declareTap', () => warmSeq([[440, 0.09, 0, 0.13], [660, 0.12, 0.07, 0.13]])); },
+
+      discard() { play('discard', () => cardSnap({ gain: 0.42 })); },
+      penaltyDraw(count) { play('penaltyDraw', () => cardRiffle(count || 1)); },
+      reshuffle() { play('reshuffle', () => cardReshuffle()); },
+      chainAlert() {
+        play('chainAlert', () => {
+          cardSnap({ gain: 0.5 });
+          warm(220, 0.2, { delay: 0.05, gain: 0.13, type: 'triangle', cutoff: 1400 });
+        });
+      },
+      yourTurn() { play('yourTurn', () => warmSeq([[587, 0.11, 0, 0.14], [880, 0.16, 0.09, 0.15]])); },
+      declareCorrect() { play('declareCorrect', () => warmSeq([[523, 0.13, 0, 0.15], [659, 0.13, 0.1, 0.15], [784, 0.26, 0.2, 0.16]])); },
+      declareWrong() { play('declareWrong', () => warmSeq([[311, 0.22, 0, 0.15, 'triangle'], [233, 0.34, 0.14, 0.14, 'triangle']])); },
+      win() { play('win', () => warmSeq([[523, 0.16, 0, 0.15], [659, 0.16, 0.12, 0.15], [784, 0.16, 0.24, 0.16], [1046, 0.4, 0.36, 0.17]])); },
     };
   })();
 
@@ -1724,7 +1804,7 @@
     if (!name) return setLandingError('Enter your name');
     if (!roomCode) return setLandingError('Enter room code');
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+    socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       // room.phase was already 'playing' when the request landed -- the
       // server held it as a pending request instead of joining outright
@@ -2605,7 +2685,7 @@
     const name = getPlayerName();
     if (!name) return setLandingError('Enter your name');
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+    socket.emit('create_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('room_created');
       saveSession(res.roomCode, res.playerId);
@@ -3173,7 +3253,7 @@
     if (!name) return setLandingError('Enter your name');
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_solo_room', { name, botCount, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+    socket.emit('create_solo_room', { name, botCount, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('solo_game_started', { bot_count: botCount });
       saveSession(res.roomCode, res.playerId);
@@ -3209,7 +3289,7 @@
     if (!name) return setLandingError('Enter your name');
     const playerCount = Number(document.getElementById('input-online-playercount').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('queue_join', { playerCount, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+    socket.emit('queue_join', { playerCount, name, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       queuedPlayerCount = playerCount;
       document.getElementById('queue-waiting-count').textContent = String(playerCount);
@@ -3606,6 +3686,15 @@
       // While dealing, only the running card count is shown (no score yet).
       const chipEl = document.createElement('div');
       chipEl.className = 'seat-chip';
+
+      // ---- avatar + name on one row (Sept 2026) ----
+      // A seat used to be two lines of text, which is why the table read as
+      // a status display rather than a place people were sitting. The face
+      // is the first thing you should be able to tell apart at a glance,
+      // before you can read anything.
+      const idRow = document.createElement('div');
+      idRow.className = 'seat-id';
+      idRow.appendChild(avatarEl(p.avatar, p.name, p.playerId, 22));
       const nameEl = document.createElement('div');
       nameEl.className = 'seat-name';
       // Own seat is marked with a neutral ring (see .seat.own-seat in
@@ -3614,15 +3703,54 @@
       // name, so it clipped sooner than it should have for no good reason.
       nameEl.textContent = p.name;
       if (p.playerId === myPlayerId) seatEl.classList.add('own-seat');
-      chipEl.appendChild(nameEl);
+      idRow.appendChild(nameEl);
+      chipEl.appendChild(idRow);
+
+      // ---- fan of card backs ----
+      // "13 cards" is a number you read; three overlapping backs is a hand
+      // you see. Deliberately a FIXED three rather than one back per card:
+      // seats are 71-96px wide depending on device (see the fluid furniture
+      // maths above) and thirteen backs would either not fit or shrink to
+      // slivers. The exact count stays on the badge, so nothing is lost --
+      // the fan carries "this is a hand", the badge carries "how big".
+      // Skipped for your own seat: your real cards are in the tray below,
+      // and a fake fan of your own hand would be actively confusing.
+      if (count !== undefined && count > 0 && p.playerId !== myPlayerId) {
+        const fan = document.createElement('div');
+        fan.className = 'seat-fan';
+        const backs = Math.min(3, count);
+        for (let b = 0; b < backs; b++) {
+          const back = document.createElement('span');
+          back.className = 'seat-back';
+          back.style.setProperty('--i', String(b));
+          fan.appendChild(back);
+        }
+        const badge = document.createElement('span');
+        badge.className = 'seat-fan-count';
+        badge.textContent = String(count);
+        fan.appendChild(badge);
+        chipEl.appendChild(fan);
+      }
+
       const metaEl = document.createElement('div');
       metaEl.className = 'seat-meta';
       // The reveal box now carries the running total, so the chip drops it
       // while that box is up -- otherwise moving the total into the box just
       // relocates the duplicate instead of removing it.
       const chipHidesScore = dealing || (revealPhaseActive && p.playerId !== myPlayerId);
-      metaEl.textContent = count !== undefined
-        ? count + ' cards' + (chipHidesScore ? '' : ' · ' + score + ' pts') : '';
+      // The fan's badge now carries the card count for opponents, so this
+      // line drops it there and shows the score alone -- printing "13" on
+      // the badge and "13 cards" underneath it is just the same fact twice
+      // in a seat that has no room to spare. Your own seat has no fan, so
+      // it keeps the full text.
+      const fanShowsCount = count !== undefined && count > 0 && p.playerId !== myPlayerId;
+      if (count === undefined) {
+        metaEl.textContent = '';
+      } else if (fanShowsCount) {
+        metaEl.textContent = chipHidesScore ? '' : score + ' pts';
+      } else {
+        metaEl.textContent = count + ' cards' + (chipHidesScore ? '' : ' · ' + score + ' pts');
+      }
       chipEl.appendChild(metaEl);
 
       // Recent discards for THIS player, this round -- lets you track what
@@ -4164,6 +4292,10 @@
   // together (they're always discarded as a set anyway, matching-rank or not).
   function toggleSelectGroup(group) {
     const allSelected = group.cards.every((c) => selectedIds.has(c.id));
+    // Picking a card up and putting it down are different actions, so they
+    // get different sounds -- a quieter, shorter one for putting it back.
+    // Before this, touching a card made no sound at all.
+    if (allSelected) Sound.deselect(); else Sound.select();
     if (allSelected) {
       group.cards.forEach((c) => selectedIds.delete(c.id));
     } else {
@@ -4185,36 +4317,54 @@
   }
 
   document.getElementById('btn-discard').onclick = () => {
-    Sound.discard();
     const ids = [...selectedIds];
 
-    // Send the card on its way BEFORE the server round trip. The play is
-    // almost always legal (the UI only offers legal selections), and waiting
-    // for the ack would put a network delay in front of the one animation
-    // the player most expects to be instant. If the server does refuse, the
-    // cards are still in hand and the error shows -- a card that flew and
-    // came back is a far smaller oddity than a tap that felt dead.
-    (() => {
-      const first = document.querySelector('#hand .card.selected') || document.querySelector('#hand .card');
-      const to = openCardSlotRect();
-      if (!first || !to) return;
-      const from = flyRect(first);
-      const hand = (latestGame && latestGame.yourHand) || [];
-      const card = hand.find((c) => c.id === ids[0]);
-      flyCard({ left: from.left, top: from.top, w: to.w, h: to.h }, to, card || null);
-    })();
-
+    // ------------------------------------------------------------------
+    // THE MOVE GOES FIRST. Nothing decorative may sit in front of it.
+    //
+    // This previously ran Sound.discard() and the card-flight animation
+    // BEFORE this emit. Both are cosmetic, but a throw in either one meant
+    // the emit below never executed -- so the tap did nothing, the turn
+    // timer ran down, and the server auto-played on the player's behalf.
+    // From the table that reads as the game freezing and then playing
+    // itself. Decoration must never be able to cost someone a turn.
+    //
+    // emit() is non-blocking and its ack is async, so the flourish below
+    // still measures the hand in the same tick, before any re-render.
+    // ------------------------------------------------------------------
     socket.emit('play_turn', { roomCode: myRoomCode, cardIds: ids }, (res) => {
       if (!res.ok) return setGameError(res.error);
       selectedIds = new Set();
       setGameError('');
     });
+
+    // Everything below here is flourish. It is wrapped so that a failure --
+    // a missing element, an audio context the OS refused, anything -- is
+    // logged and forgotten rather than propagating into the turn.
+    try {
+      Sound.discard();
+      const first = document.querySelector('#hand .card.selected') || document.querySelector('#hand .card');
+      const to = openCardSlotRect();
+      if (first && to) {
+        const from = flyRect(first);
+        const hand = (latestGame && latestGame.yourHand) || [];
+        const card = hand.find((c) => c.id === ids[0]);
+        flyCard({ left: from.left, top: from.top, w: to.w, h: to.h }, to, card || null);
+      }
+    } catch (e) {
+      console.warn('[fx] discard flourish failed (turn was still sent):', e && e.message);
+    }
   };
 
   document.getElementById('btn-declare').onclick = () => {
+    // Declare emits first for the same reason as discard: a sound must never
+    // be able to swallow the single most consequential tap in the game.
     socket.emit('declare', { roomCode: myRoomCode }, (res) => {
       if (!res.ok) setGameError(res.error);
     });
+    // Declaring used to make no sound at all until the RESULT came back from
+    // the server, so the riskiest tap you can make was also the deadest one.
+    try { Sound.declareTap(); } catch (e) { /* never worth a turn */ }
   };
 
   document.getElementById('btn-take-penalty').onclick = () => {
@@ -5184,6 +5334,104 @@
   // Stable per-player avatar colour: same name/id always gets the same hue,
   // for everyone in the room, with no server round-trip. A plain string hash
   // is enough -- this only needs to be consistent, not unpredictable.
+  // ====================================================================
+  // Avatars (Sept 2026)
+  //
+  // Ten original characters, drawn as inline SVG. Inline rather than image
+  // files because they cost no requests, stay sharp at every seat size on
+  // every screen density, and recolour from CSS -- and because the whole set
+  // ships with the app, so a seat never renders empty while something loads.
+  //
+  // Built from circles and simple paths on purpose: at 26px in a seat chip
+  // (the smallest they're drawn) anything more detailed turns to mud, and
+  // these have to read instantly at a glance mid-turn.
+  //
+  // Each carries its own background colour so players are distinguishable
+  // by colour alone from across the table, before you can make out the face.
+  // The id list must stay in step with AVATAR_IDS in server.js.
+  // ====================================================================
+  const AVATARS = {
+    fox:     { bg: '#D9622F', face: '#F3A469', ink: '#40200C', d: '<path d="M12 46 L22 14 L34 28 L46 14 L56 46 Z"/><circle cx="26" cy="36" r="3.4" fill="#40200C"/><circle cx="42" cy="36" r="3.4" fill="#40200C"/><path d="M30 45 Q34 49 38 45" stroke="#40200C" stroke-width="2.6" fill="none" stroke-linecap="round"/>' },
+    owl:     { bg: '#6E5BB8', face: '#9C8BD8', ink: '#241C46', d: '<circle cx="34" cy="34" r="22"/><circle cx="26" cy="30" r="8" fill="#FFF"/><circle cx="42" cy="30" r="8" fill="#FFF"/><circle cx="26" cy="30" r="3.6" fill="#241C46"/><circle cx="42" cy="30" r="3.6" fill="#241C46"/><path d="M30 41 L34 46 L38 41 Z" fill="#E8A33D"/>' },
+    cat:     { bg: '#3E9B92', face: '#7FCFC6', ink: '#123833', d: '<path d="M14 24 L20 10 L28 20 Z"/><path d="M54 24 L48 10 L40 20 Z"/><circle cx="34" cy="36" r="20"/><circle cx="27" cy="33" r="3.2" fill="#123833"/><circle cx="41" cy="33" r="3.2" fill="#123833"/><path d="M30 39 L38 39 L34 44 Z" fill="#E88BA0"/><path d="M34 44 L30 47 M34 44 L38 47" stroke="#123833" stroke-width="2.2" fill="none" stroke-linecap="round"/>' },
+    panda:   { bg: '#D8D8DE', face: '#FFFFFF', ink: '#22222A', d: '<circle cx="20" cy="18" r="8" fill="#22222A"/><circle cx="48" cy="18" r="8" fill="#22222A"/><circle cx="34" cy="36" r="21"/><ellipse cx="26" cy="33" rx="6" ry="7" fill="#22222A"/><ellipse cx="42" cy="33" rx="6" ry="7" fill="#22222A"/><circle cx="26" cy="33" r="2.2" fill="#FFF"/><circle cx="42" cy="33" r="2.2" fill="#FFF"/><ellipse cx="34" cy="44" rx="4" ry="3" fill="#22222A"/>' },
+    tiger:   { bg: '#D98E22', face: '#F6C87C', ink: '#3A2206', d: '<circle cx="34" cy="34" r="22"/><path d="M17 30 L24 31 M17 37 L24 37 M51 30 L44 31 M51 37 L44 37" stroke="#3A2206" stroke-width="3" stroke-linecap="round"/><circle cx="27" cy="33" r="3.2" fill="#3A2206"/><circle cx="41" cy="33" r="3.2" fill="#3A2206"/><path d="M28 44 Q34 49 40 44" stroke="#3A2206" stroke-width="2.6" fill="none" stroke-linecap="round"/>' },
+    frog:    { bg: '#6BA630', face: '#9BD45C', ink: '#1E3A08', d: '<circle cx="22" cy="20" r="9"/><circle cx="46" cy="20" r="9"/><circle cx="22" cy="20" r="4" fill="#1E3A08"/><circle cx="46" cy="20" r="4" fill="#1E3A08"/><ellipse cx="34" cy="40" rx="21" ry="17"/><path d="M24 44 Q34 52 44 44" stroke="#1E3A08" stroke-width="3" fill="none" stroke-linecap="round"/>' },
+    bear:    { bg: '#9A653F', face: '#C08E63', ink: '#3A2413', d: '<circle cx="18" cy="20" r="8"/><circle cx="50" cy="20" r="8"/><circle cx="34" cy="36" r="21"/><circle cx="27" cy="33" r="3" fill="#3A2413"/><circle cx="41" cy="33" r="3" fill="#3A2413"/><ellipse cx="34" cy="43" rx="7" ry="5" fill="#E3C6A8"/><circle cx="34" cy="41" r="2.6" fill="#3A2413"/>' },
+    monkey:  { bg: '#A87345', face: '#CE9A66', ink: '#3A2210', d: '<circle cx="15" cy="34" r="8"/><circle cx="53" cy="34" r="8"/><circle cx="34" cy="34" r="20"/><ellipse cx="34" cy="40" rx="13" ry="11" fill="#E8C9A0"/><circle cx="28" cy="31" r="3" fill="#3A2210"/><circle cx="40" cy="31" r="3" fill="#3A2210"/><path d="M29 43 Q34 47 39 43" stroke="#3A2210" stroke-width="2.4" fill="none" stroke-linecap="round"/>' },
+    penguin: { bg: '#34608C', face: '#2B4C6F', ink: '#10263B', d: '<ellipse cx="34" cy="36" rx="21" ry="23"/><ellipse cx="34" cy="41" rx="13" ry="17" fill="#FFF"/><circle cx="28" cy="28" r="3" fill="#10263B"/><circle cx="40" cy="28" r="3" fill="#10263B"/><path d="M30 35 L34 40 L38 35 Z" fill="#E8A33D"/>' },
+    rabbit:  { bg: '#C97A96', face: '#F2C3D2', ink: '#43172A', d: '<ellipse cx="25" cy="16" rx="6" ry="14"/><ellipse cx="43" cy="16" rx="6" ry="14"/><circle cx="34" cy="40" r="19"/><circle cx="28" cy="37" r="3" fill="#43172A"/><circle cx="40" cy="37" r="3" fill="#43172A"/><path d="M31 46 Q34 49 37 46" stroke="#43172A" stroke-width="2.4" fill="none" stroke-linecap="round"/>' },
+  };
+  const AVATAR_IDS = Object.keys(AVATARS);
+
+  // Renders one avatar at a given pixel size. Returns an element, never a
+  // string -- these end up next to user-supplied names, and keeping the
+  // whole seat built from nodes means no path where a name could be treated
+  // as markup.
+  function avatarEl(avatarId, name, playerId, size) {
+    size = size || 26;
+    const wrap = document.createElement('span');
+    wrap.className = 'avatar';
+    wrap.style.width = size + 'px';
+    wrap.style.height = size + 'px';
+
+    const a = AVATARS[avatarId];
+    if (a) {
+      wrap.style.background = a.bg;
+      // viewBox is fixed at 68x68 for every character, so they all sit at
+      // the same optical size no matter which one a player picked.
+      wrap.innerHTML = `<svg viewBox="0 0 68 68" aria-hidden="true"><g fill="${a.face}">${a.d}</g></svg>`;
+      return wrap;
+    }
+
+    // No avatar chosen (or an id this build doesn't know): initials on the
+    // colour we already derive for chat, so the seat still reads as a person
+    // and the whole feature degrades instead of breaking.
+    const hue = chatAvatarHue(playerId || name || '');
+    wrap.style.background = `hsl(${hue} 45% 42%)`;
+    wrap.classList.add('avatar-initials');
+    const txt = (String(name || '?').replace(/[^\p{L}\p{N} ]/gu, '').trim() || '?')
+      .split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+    wrap.textContent = txt;
+    wrap.style.fontSize = Math.round(size * 0.42) + 'px';
+    return wrap;
+  }
+
+  let myAvatar = localStorage.getItem('leastcount_avatar') || null;
+
+  // Stored in localStorage rather than on the Firestore user doc, which is
+  // where I first meant to put it. Firestore would only buy something if the
+  // identity outlived the device -- and it doesn't: sign-in is anonymous, so
+  // the uid is regenerated on reinstall anyway (the same limit that resets
+  // stats and the avatar together). Until Google Sign-In comes off its flag,
+  // a server round trip per read would cost latency and quota to deliver
+  // exactly what localStorage already delivers.
+  function renderAvatarPicker() {
+    const box = document.getElementById('avatar-picker');
+    if (!box) return;
+    box.innerHTML = '';
+    AVATAR_IDS.forEach((id) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'avatar-choice' + (id === myAvatar ? ' selected' : '');
+      btn.setAttribute('aria-label', id);
+      btn.setAttribute('aria-pressed', id === myAvatar ? 'true' : 'false');
+      btn.appendChild(avatarEl(id, '', '', 40));
+      btn.onclick = () => {
+        myAvatar = id;
+        localStorage.setItem('leastcount_avatar', id);
+        renderAvatarPicker();
+        // If we're already at a table, change the face there and then --
+        // otherwise the picker appears to do nothing until the next game.
+        if (myRoomCode) {
+          socket.emit('set_avatar', { roomCode: myRoomCode, avatar: id }, () => {});
+        }
+      };
+      box.appendChild(btn);
+    });
+  }
+  renderAvatarPicker();
+
   function chatAvatarHue(seed) {
     let h = 0;
     const s = String(seed || '');
@@ -5939,6 +6187,12 @@
     // which is most of what makes the table feel played-at rather than
     // reported-on. Keyed off the open card changing while the round carries
     // on, attributed to whoever's turn it just WAS (prev.currentPlayer).
+    // Wrapped for the same reason as the discard handler: this runs inside
+    // playSoundsForTransition(), which the game_state handler calls. A throw
+    // here would abort the rest of that handler -- so a decorative flight
+    // could stop the BOARD updating, which is the worst possible failure for
+    // a cosmetic feature. Logged and swallowed instead.
+    try {
     const openChanged = prev.openCard && game.openCard
       && (prev.openCard.id !== game.openCard.id);
     const sameRound = prev.roundNumber === game.roundNumber;
@@ -5961,6 +6215,9 @@
         && (!prev.lastDraw || prev.lastDraw !== game.lastDraw)) {
       const drawn = (game.lastDraw.cards || []).length;
       if (drawn > 0) buzz(drawn > 1 ? [40, 70, 40] : 40);
+    }
+    } catch (e) {
+      console.warn('[fx] table flourish failed (state still applied):', e && e.message);
     }
     if (!prev.roundOver && game.roundOver && game.lastRoundResult) {
       if (game.lastRoundResult.correct) Sound.declareCorrect();
