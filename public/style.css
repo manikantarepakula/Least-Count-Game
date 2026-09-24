@@ -1436,6 +1436,25 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
    "Jokers / Wild -- only you see this" label line -- the border plus their
    position on the joker side of the divider is enough of a cue on its own,
    and the Rules screen covers the mechanic in full for anyone new. */
+/* ---- Rejoin offer on the round-result screen (Sept 2026) ----------------
+   A 30-second decision, so it gets a bordered panel rather than a line of
+   text: it has to be findable the instant the scorecard appears, on a screen
+   that already carries a podium, an ad slot and a hand reveal.
+   Gold, not red -- this is an opportunity, not a warning. --------------- */
+.rejoin-offer {
+  border: 1px solid var(--gold);
+  background: rgba(212,175,55,0.10);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin: 12px 0;
+  text-align: center;
+}
+.rejoin-offer-text { margin: 0 0 10px; font-size: 14px; color: var(--text-light); }
+.rejoin-offer-actions { display: flex; gap: 8px; }
+.rejoin-offer-actions button { flex: 1; margin: 0; min-height: 44px; }
+.rejoin-offer-status { margin: 8px 0 0; font-size: 12.5px; color: var(--text-muted); }
+.rejoin-offer-status.hidden, .rejoin-offer-actions button.hidden { display: none; }
+
 .card.wild-zero { border-color: var(--gold); }
 
 /* ---- Jokers in hand (Sept 2026) ------------------------------------------
@@ -1563,10 +1582,27 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 /* Floating, host-only strip -- sits above whatever screen (lobby or the
    live game) the host happens to be on, since a join request can arrive at
    any time. Stacks vertically if more than one person is waiting at once. */
-.join-requests-banner {
+/* The fixed positioning moved up to this wrapper so the join and rejoin
+   banners stack rather than landing on top of each other -- both are
+   host-facing and can be pending at the same moment.
+   pointer-events is off on the wrapper and back on for the banners
+   themselves, so the container can span the width without swallowing taps
+   meant for the top bar behind it. */
+.top-banners {
   position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
   width: min(92vw, 420px); z-index: 60;
   display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.top-banners > * { pointer-events: auto; }
+.join-requests-banner {
+  display: flex; flex-direction: column; gap: 8px;
+}
+/* Gold edge marks this as the rejoin decision, matching the offer the
+   eliminated player is looking at -- so the host can tell at a glance which
+   of the two questions they're answering. */
+.rejoin-requests-banner .join-request-row {
+  border: 1px solid var(--gold);
 }
 .join-requests-banner.hidden { display: none; }
 .join-request-row {
