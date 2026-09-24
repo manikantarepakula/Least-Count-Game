@@ -5428,28 +5428,36 @@
   // stats and the avatar together). Until Google Sign-In comes off its flag,
   // a server round trip per read would cost latency and quota to deliver
   // exactly what localStorage already delivers.
+  // Renders into EVERY [data-avatar-picker] on the page, so the profile
+  // menu's copy and the one in the table dialog stay in step without either
+  // needing to know the other exists.
   function renderAvatarPicker() {
-    const box = document.getElementById('avatar-picker');
-    if (!box) return;
-    box.innerHTML = '';
-    AVATAR_IDS.forEach((id) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'avatar-choice' + (id === myAvatar ? ' selected' : '');
-      btn.setAttribute('aria-label', id);
-      btn.setAttribute('aria-pressed', id === myAvatar ? 'true' : 'false');
-      btn.appendChild(avatarEl(id, '', '', 40));
-      btn.onclick = () => {
-        myAvatar = id;
-        localStorage.setItem('leastcount_avatar', id);
-        renderAvatarPicker();
-        // If we're already at a table, change the face there and then --
-        // otherwise the picker appears to do nothing until the next game.
-        if (myRoomCode) {
-          socket.emit('set_avatar', { roomCode: myRoomCode, avatar: id }, () => {});
-        }
-      };
-      box.appendChild(btn);
+    const boxes = document.querySelectorAll('[data-avatar-picker]');
+    boxes.forEach((box) => {
+      box.innerHTML = '';
+      AVATAR_IDS.forEach((id) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'avatar-choice' + (id === myAvatar ? ' selected' : '');
+        btn.setAttribute('aria-label', id);
+        btn.setAttribute('aria-pressed', id === myAvatar ? 'true' : 'false');
+        btn.appendChild(avatarEl(id, '', '', 40));
+        btn.onclick = () => {
+          // Tapping the one you already have clears it, back to initials --
+          // otherwise the first pick is permanent, which is a strange thing
+          // to discover only after you have made it.
+          myAvatar = (myAvatar === id) ? null : id;
+          if (myAvatar) localStorage.setItem('leastcount_avatar', myAvatar);
+          else localStorage.removeItem('leastcount_avatar');
+          renderAvatarPicker();
+          // Change the face at the table there and then -- otherwise the
+          // picker appears to do nothing until the next game.
+          if (myRoomCode) {
+            socket.emit('set_avatar', { roomCode: myRoomCode, avatar: myAvatar }, () => {});
+          }
+        };
+        box.appendChild(btn);
+      });
     });
   }
   renderAvatarPicker();
@@ -6080,6 +6088,12 @@
   // ====================================================================
   const FLY_MS = 180;
 
+  // When the current card flight lands. Anything that would cover the table
+  // (the penalty-draw overlay) waits for this, so two animations can never
+  // run on top of each other. Declared with var-like scope at the top of the
+  // IIFE so showDrawReveal, defined further down, can read it.
+  let flightBusyUntil = 0;
+
   function flyRect(el) {
     const r = el.getBoundingClientRect();
     return { left: r.left, top: r.top, w: r.width, h: r.height };
@@ -6115,6 +6129,10 @@
     // tick and there is nothing to transition FROM, so it just appears at
     // the destination.
     void el.offsetWidth;
+
+    // Claim the table until this lands, so the penalty-draw overlay holds
+    // off instead of covering a card that is still moving.
+    flightBusyUntil = Date.now() + FLY_MS;
 
     el.style.transition = `left ${FLY_MS}ms cubic-bezier(.22,.7,.3,1), top ${FLY_MS}ms cubic-bezier(.22,.7,.3,1), width ${FLY_MS}ms ease-out, height ${FLY_MS}ms ease-out, opacity ${FLY_MS}ms ease-out`;
     el.style.left = toRect.left + 'px';
@@ -6262,6 +6280,27 @@
   let drawRevealTimeout = null;
   function showDrawReveal(cards) {
     if (!cards || cards.length === 0) return;
+
+    // ------------------------------------------------------------------
+    // Wait for any card still in flight before covering the table.
+    //
+    // This overlay and the discard flight were firing simultaneously. A
+    // discard that MATCHES the open card (or gets the joker free pass) draws
+    // no penalty, so no 'cards_drawn' arrives and the flight plays cleanly --
+    // but any other discard draws one, and this full-screen overlay landed
+    // on top of a card that was still mid-air, 180ms into a 2500ms cover.
+    // That is why the animation only looked right on matching discards.
+    //
+    // Sequencing them also puts the events in their true causal order: your
+    // card leaves your hand, THEN the penalty arrives. Simultaneous, it read
+    // as one confused moment.
+    // ------------------------------------------------------------------
+    const wait = Math.max(0, flightBusyUntil - Date.now());
+    if (wait > 0) {
+      setTimeout(() => showDrawReveal(cards), wait + 40);
+      return;
+    }
+
     Sound.penaltyDraw(cards.length);
     const overlay = document.getElementById('draw-reveal');
     const container = document.getElementById('draw-reveal-cards');
