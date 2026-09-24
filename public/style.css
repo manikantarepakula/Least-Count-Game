@@ -1455,6 +1455,66 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 .rejoin-offer-status { margin: 8px 0 0; font-size: 12.5px; color: var(--text-muted); }
 .rejoin-offer-status.hidden, .rejoin-offer-actions button.hidden { display: none; }
 
+/* ---- Cards in flight (Sept 2026) --------------------------------------
+   A fixed, full-viewport layer because a discard crosses from the hand tray
+   to the middle of the oval, and those sit in different stacking contexts.
+   z-index sits above the table and below the overlays, so a flying card is
+   never drawn over the round-result or chat sheets. */
+.fly-layer {
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 9;
+}
+.flying-card {
+  position: absolute;
+  pointer-events: none;
+  margin: 0;
+  will-change: left, top;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.45);
+}
+
+/* ---- Press feedback -----------------------------------------------------
+   The whole app had six :active rules, which is why every tap felt like
+   submitting a form rather than handling a card. These are the two controls
+   touched most, so they're where the difference is felt.
+   transform only -- no layout properties -- so nothing reflows on touch. */
+.card.selectable {
+  transition: transform 90ms ease-out, box-shadow 90ms ease-out;
+}
+.card.selectable:active {
+  transform: translateY(-4px) scale(1.03);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.45);
+}
+.action-bar button { transition: transform 80ms ease-out, filter 80ms ease-out; }
+.action-bar button:active:not(:disabled) { transform: scale(0.96); filter: brightness(1.12); }
+@media (prefers-reduced-motion: reduce) {
+  .card.selectable, .card.selectable:active,
+  .action-bar button, .action-bar button:active:not(:disabled) {
+    transition: none; transform: none;
+  }
+}
+
+/* ---- Settings row + toggle (profile menu) ---- */
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin: 14px 0 4px;
+  padding-top: 12px; border-top: 1px solid var(--jade-border);
+  text-align: left;
+}
+.settings-label { display: block; font-size: 14px; color: var(--text-light); }
+.settings-hint { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+.toggle-pill {
+  flex: 0 0 auto; min-width: 58px; min-height: 34px; margin: 0;
+  border-radius: 17px; font-size: 13px; font-weight: 700;
+  border: 1px solid var(--jade-border);
+  background: rgba(255,255,255,0.08); color: var(--text-muted);
+}
+.toggle-pill.on {
+  background: rgba(212,175,55,0.18);
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
 .card.wild-zero { border-color: var(--gold); }
 
 /* ---- Jokers in hand (Sept 2026) ------------------------------------------
