@@ -79,6 +79,11 @@
     </div>
     <label>Your name</label>
     <input id="input-name" type="text" maxlength="20" placeholder="e.g. Manikanta" />
+
+    <!-- Avatar picker. Populated from AVATARS in app.js rather than written
+         out here, so the set only has to be defined once. -->
+    <label>Your avatar</label>
+    <div id="avatar-picker" class="avatar-picker"></div>
     <p id="landing-error" class="error"></p>
 
     <!-- Vibration is deliberately reserved for the two moments that are
