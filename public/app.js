@@ -3743,6 +3743,12 @@
       document.getElementById('timer-seconds').textContent = remaining;
       el.classList.remove('hidden');
       el.classList.toggle('low', remaining <= 10);
+      // The second of the two things that vibrate. Guarded to YOUR turn --
+      // buzzing while a bot's clock runs down would mean nothing, and this
+      // tick runs for every player's timer, not just yours.
+      const isMyTurn = !!(latestGame && !latestGame.roundOver
+        && latestGame.currentPlayer === myPlayerId);
+      maybeBuzzTurnTimer(remaining, isMyTurn);
     }
     tick();
     timerInterval = setInterval(tick, 250);
@@ -4181,6 +4187,23 @@
   document.getElementById('btn-discard').onclick = () => {
     Sound.discard();
     const ids = [...selectedIds];
+
+    // Send the card on its way BEFORE the server round trip. The play is
+    // almost always legal (the UI only offers legal selections), and waiting
+    // for the ack would put a network delay in front of the one animation
+    // the player most expects to be instant. If the server does refuse, the
+    // cards are still in hand and the error shows -- a card that flew and
+    // came back is a far smaller oddity than a tap that felt dead.
+    (() => {
+      const first = document.querySelector('#hand .card.selected') || document.querySelector('#hand .card');
+      const to = openCardSlotRect();
+      if (!first || !to) return;
+      const from = flyRect(first);
+      const hand = (latestGame && latestGame.yourHand) || [];
+      const card = hand.find((c) => c.id === ids[0]);
+      flyCard({ left: from.left, top: from.top, w: to.w, h: to.h }, to, card || null);
+    })();
+
     socket.emit('play_turn', { roomCode: myRoomCode, cardIds: ids }, (res) => {
       if (!res.ok) return setGameError(res.error);
       selectedIds = new Set();
@@ -5771,6 +5794,123 @@
   }
 
   // ---------------- sound event detection (diff previous vs new game state) ----------------
+  // ====================================================================
+  // Card flight + haptics (Sept 2026)
+  //
+  // Playing a card was instant and silent: it vanished from the hand and the
+  // open card changed underneath. The whole game's motion budget had gone on
+  // ceremony -- the intro splash, the dealing sequence, confetti -- which a
+  // player sees a handful of times, while the turn itself, which they see
+  // hundreds of times, had none.
+  //
+  // 180ms, ease-out, no arc or spin. Deliberately restrained: the turn timer
+  // is 15s and a 4-player table plays three opponent moves between your
+  // turns, so a showier animation would add over a second of waiting per
+  // round and make the game feel SLOWER, not richer.
+  // ====================================================================
+  const FLY_MS = 180;
+
+  function flyRect(el) {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, top: r.top, w: r.width, h: r.height };
+  }
+
+  // Animates a card face from one rect to another. Purely decorative -- it
+  // never blocks, never calls back into game state, and cleans itself up, so
+  // a dropped frame or an interrupted round can't leave anything behind.
+  function flyCard(fromRect, toRect, cardData, opts) {
+    opts = opts || {};
+    const layer = document.getElementById('fly-layer');
+    if (!layer || !fromRect || !toRect) return;
+    // Respect the OS "reduce motion" setting -- some people get motion sick,
+    // and a card game that ignores that is one they stop playing.
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    let el;
+    try {
+      el = cardData ? cardEl(cardData, {}) : document.createElement('div');
+    } catch (e) {
+      el = document.createElement('div');
+    }
+    if (!cardData) el.className = 'card card-back-mini';
+    el.classList.add('flying-card');
+    el.style.left = fromRect.left + 'px';
+    el.style.top = fromRect.top + 'px';
+    el.style.width = fromRect.w + 'px';
+    el.style.height = fromRect.h + 'px';
+    layer.appendChild(el);
+
+    // Force a reflow so the browser treats the start position as a real
+    // frame -- without this the element is created and moved in the same
+    // tick and there is nothing to transition FROM, so it just appears at
+    // the destination.
+    void el.offsetWidth;
+
+    el.style.transition = `left ${FLY_MS}ms cubic-bezier(.22,.7,.3,1), top ${FLY_MS}ms cubic-bezier(.22,.7,.3,1), width ${FLY_MS}ms ease-out, height ${FLY_MS}ms ease-out, opacity ${FLY_MS}ms ease-out`;
+    el.style.left = toRect.left + 'px';
+    el.style.top = toRect.top + 'px';
+    el.style.width = toRect.w + 'px';
+    el.style.height = toRect.h + 'px';
+    if (opts.fade) el.style.opacity = '0';
+
+    setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, FLY_MS + 60);
+  }
+
+  function openCardSlotRect() {
+    const slot = document.querySelector('.table-center .card');
+    return slot ? flyRect(slot) : null;
+  }
+
+  function seatRectFor(playerId) {
+    const seat = document.querySelector(`.seat[data-player-id="${CSS.escape(playerId)}"]`);
+    return seat ? flyRect(seat) : null;
+  }
+
+  // ---- haptics ----
+  // Reserved for the two moments that are WARNINGS: a +2 penalty landing on
+  // you, and your own turn timer about to expire. Vibrating on every tap
+  // would turn it into background noise players tune out or switch off --
+  // and then it isn't there for the two places it earns its keep.
+  // navigator.vibrate works in the Android WebView with no native plugin, so
+  // this ships as a normal web deploy rather than waiting on a native build.
+  let hapticsOn = localStorage.getItem('leastcount_haptics') !== '0';
+  function buzz(pattern) {
+    if (!hapticsOn) return;
+    try {
+      if (navigator.vibrate) navigator.vibrate(pattern);
+    } catch (e) { /* unsupported or blocked -- never worth breaking play over */ }
+  }
+  function refreshHapticsToggle() {
+    const b = document.getElementById('btn-haptics-toggle');
+    if (!b) return;
+    b.textContent = hapticsOn ? 'On' : 'Off';
+    b.setAttribute('aria-checked', hapticsOn ? 'true' : 'false');
+    b.classList.toggle('on', hapticsOn);
+  }
+  (function wireHapticsToggle() {
+    const b = document.getElementById('btn-haptics-toggle');
+    if (!b) return;
+    refreshHapticsToggle();
+    b.onclick = () => {
+      hapticsOn = !hapticsOn;
+      localStorage.setItem('leastcount_haptics', hapticsOn ? '1' : '0');
+      refreshHapticsToggle();
+      if (hapticsOn) buzz(20);   // confirm it works, once, on enabling
+    };
+  })();
+
+  // One buzz per turn at the 5s mark -- a single warning, not an escalating
+  // nag. Reset each time the turn changes so it can fire again next turn.
+  let timerBuzzArmed = true;
+  function maybeBuzzTurnTimer(secondsLeft, isMyTurn) {
+    if (!isMyTurn) { timerBuzzArmed = true; return; }
+    if (secondsLeft > 5) { timerBuzzArmed = true; return; }
+    if (secondsLeft <= 5 && secondsLeft > 0 && timerBuzzArmed) {
+      timerBuzzArmed = false;
+      buzz([25, 60, 25]);
+    }
+  }
+
   function playSoundsForTransition(prev, game) {
     if (!prev) return;
     if (game.currentPlayer === myPlayerId && prev.currentPlayer !== myPlayerId && !game.roundOver) {
@@ -5791,6 +5931,36 @@
     }
     if (game.chainCount > 0 && prev.chainCount === 0) {
       Sound.chainAlert();
+    }
+
+    // ---- opponent's card flies to the pile ----
+    // Without this the open card silently changes and you have to spot the
+    // difference; with it you SEE the move happen at the seat that made it,
+    // which is most of what makes the table feel played-at rather than
+    // reported-on. Keyed off the open card changing while the round carries
+    // on, attributed to whoever's turn it just WAS (prev.currentPlayer).
+    const openChanged = prev.openCard && game.openCard
+      && (prev.openCard.id !== game.openCard.id);
+    const sameRound = prev.roundNumber === game.roundNumber;
+    if (openChanged && sameRound && !game.roundOver
+        && prev.currentPlayer && prev.currentPlayer !== myPlayerId) {
+      const from = seatRectFor(prev.currentPlayer);
+      const to = openCardSlotRect();
+      if (from && to) {
+        // Start it at the card's destination size so it reads as a card the
+        // whole way, rather than a seat-shaped block that morphs.
+        flyCard({ left: from.left + (from.w - to.w) / 2, top: from.top, w: to.w, h: to.h },
+          to, game.openCard);
+      }
+    }
+
+    // ---- a +2 penalty landed on you ----
+    // One of exactly two things that vibrate. This is the moment the game
+    // does something TO you that costs points, so it earns the interruption.
+    if (game.lastDraw && game.lastDraw.playerId === myPlayerId
+        && (!prev.lastDraw || prev.lastDraw !== game.lastDraw)) {
+      const drawn = (game.lastDraw.cards || []).length;
+      if (drawn > 0) buzz(drawn > 1 ? [40, 70, 40] : 40);
     }
     if (!prev.roundOver && game.roundOver && game.lastRoundResult) {
       if (game.lastRoundResult.correct) Sound.declareCorrect();
