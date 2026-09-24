@@ -80,6 +80,20 @@
     <label>Your name</label>
     <input id="input-name" type="text" maxlength="20" placeholder="e.g. Manikanta" />
     <p id="landing-error" class="error"></p>
+
+    <!-- Vibration is deliberately reserved for the two moments that are
+         warnings -- a +2 penalty landing on you, and your own turn timer
+         about to run out. Buzzing on every card tap would make it noise
+         that players tune out (or switch off), which would cost us the two
+         places it actually helps. -->
+    <div class="settings-row">
+      <div>
+        <span class="settings-label">Vibration</span>
+        <span class="settings-hint">Penalties and turn warnings</span>
+      </div>
+      <button id="btn-haptics-toggle" class="toggle-pill" type="button" role="switch" aria-checked="true">On</button>
+    </div>
+
     <button id="btn-close-profile-menu" class="secondary">Close</button>
   </div>
 </div>
@@ -543,6 +557,14 @@
      come back. They stay separate elements because they're different
      decisions (admit a stranger vs let back in a player you just knocked
      out, on a score you need to see before answering). -->
+<!-- Cards in flight (Sept 2026). A viewport-level layer, because a discard
+     travels from the hand tray to the centre of the oval and those live in
+     different stacking contexts -- the existing #deal-flyer is positioned
+     inside .oval-table, which the hand is not part of.
+     pointer-events:none throughout: a card mid-flight must never eat a tap
+     meant for the table underneath. -->
+<div id="fly-layer" class="fly-layer" aria-hidden="true"></div>
+
 <div class="top-banners">
   <div id="join-requests-banner" class="join-requests-banner hidden"></div>
   <div id="rejoin-requests-banner" class="join-requests-banner rejoin-requests-banner hidden"></div>
