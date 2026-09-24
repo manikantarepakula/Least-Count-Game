@@ -179,6 +179,29 @@ function cleanPlatform(p) {
 }
 
 // --------------------------------------------------------------------------
+// Avatars (Sept 2026).
+//
+// The server stores and relays an avatar ID and nothing else -- the artwork
+// is inline SVG that lives in the client. That's deliberate: an ID can be
+// validated against a fixed list, whereas a URL or any markup coming from a
+// client would be something we'd have to sanitise on every path it reached.
+// An unknown ID simply becomes null and the seat falls back to initials.
+//
+// The list must stay in step with AVATARS in public/app.js. It's short and
+// changes rarely, so a shared constant isn't worth a build step for it.
+// --------------------------------------------------------------------------
+const AVATAR_IDS = ['fox', 'owl', 'cat', 'panda', 'tiger', 'frog', 'bear', 'monkey', 'penguin', 'rabbit'];
+function cleanAvatar(a) {
+  return AVATAR_IDS.includes(a) ? a : null;
+}
+// Bots get a stable face too, spread across the set so a solo table doesn't
+// show four of the same one. Keyed off the bot's number, not randomness, so
+// the same bot looks the same for the whole game.
+function botAvatar(i) {
+  return AVATAR_IDS[(i * 3) % AVATAR_IDS.length];
+}
+
+// --------------------------------------------------------------------------
 // Tester-activity report -- built for the Google Play closed-testing review,
 // which requires 12+ testers opted in for 14 continuous days AND evidence
 // that they actually USED the app (Google checks real engagement, not just
@@ -1575,6 +1598,13 @@ function publicRoomInfo(room) {
       name: room.players.get(pid).name,
       connected: room.players.get(pid).connected,
       isBot: !!room.players.get(pid).isBot,
+      // Chosen avatar (Sept 2026). Travels with every room broadcast so
+      // other players' seats can render a face rather than a grey chip.
+      // A plain id, never a URL or markup -- the art lives in the client as
+      // inline SVG, so this can never become a way to inject anything.
+      // Bots get a deterministic one assigned at creation, so a bot table
+      // looks as populated as a human one.
+      avatar: room.players.get(pid).avatar || null,
     })),
   };
 }
@@ -2288,7 +2318,7 @@ function handleTurnTimeout(room) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('create_room', async ({ name, firebaseIdToken, platform }, ack) => {
+  socket.on('create_room', async ({ name, firebaseIdToken, platform, avatar }, ack) => {
     try {
       if (isRateLimited(socket, 'create_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       if (isIpRateLimited(socket, 'create_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
@@ -2314,7 +2344,7 @@ io.on('connection', (socket) => {
         pendingJoins: new Map(), // mid-game join requests awaiting host approval -- see join_room below
         allHumansDisconnectedAt: null, // set once every human is gone -- see the cleanup sweep below
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
       room.order.push(playerId);
       rememberPlayerUid(room, verifiedUid, playerId);
       rooms.set(code, room);
@@ -2332,7 +2362,7 @@ io.on('connection', (socket) => {
   // countdown -> deal -> reveal sequence, exactly like a real multiplayer
   // game starting -- bots are just regular players to the game engine, the
   // only special handling is how quickly they act (see scheduleTurnTimer).
-  socket.on('create_solo_room', async ({ name, botCount, firebaseIdToken, platform }, ack) => {
+  socket.on('create_solo_room', async ({ name, botCount, firebaseIdToken, platform, avatar }, ack) => {
     try {
       if (isRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       if (isIpRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
@@ -2358,11 +2388,11 @@ io.on('connection', (socket) => {
         statsRecorded: false,
         allHumansDisconnectedAt: null,
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
       room.order.push(playerId);
       for (let i = 1; i <= n; i++) {
         const botId = makePlayerId();
-        room.players.set(botId, { name: `🤖 Bot ${i}`, socketId: null, connected: true, isBot: true });
+        room.players.set(botId, { name: `🤖 Bot ${i}`, socketId: null, connected: true, isBot: true, avatar: botAvatar(i) });
         room.order.push(botId);
       }
       rooms.set(code, room);
@@ -2468,7 +2498,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('join_room', async ({ roomCode, name, firebaseIdToken, platform }, ack) => {
+  socket.on('join_room', async ({ roomCode, name, firebaseIdToken, platform, avatar }, ack) => {
     try {
       if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
       // Two kinds of key arrive here (see the groups section above): a
@@ -2556,7 +2586,7 @@ io.on('connection', (socket) => {
       // straight into the lobby, no approval needed.
       if (room.phase === 'lobby') {
         const playerId = makePlayerId();
-        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
+        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
         room.order.push(playerId);
         rememberPlayerUid(room, verifiedUid, playerId);
         // A freshly-spun-up group room has no host yet (createRoomForGroup
@@ -2584,7 +2614,7 @@ io.on('connection', (socket) => {
       // reached a stranger.
       if (room.groupCode) {
         const playerId = makePlayerId();
-        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
+        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
         room.order.push(playerId);
         rememberPlayerUid(room, verifiedUid, playerId);
         repairHost(room);
@@ -3485,6 +3515,29 @@ io.on('connection', (socket) => {
   // this changes what the table sees and nothing else. The saved profile name
   // is untouched, so it lasts for this room only, and the group leaderboard
   // still records the real one (see recordGroupGame).
+  // Change your face without leaving the table. Same shape and the same
+  // ownership rule as set_name below: the seat is taken from THIS socket's
+  // own index entry, so there is no playerId in the payload to forge.
+  socket.on('set_avatar', ({ roomCode, avatar }, ack) => {
+    try {
+      if (isRateLimited(socket, 'set_name')) throw new Error('Too many changes too quickly. Please wait a moment.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      const p = room.players.get(entry.playerId);
+      if (!p) throw new Error('Not seated.');
+      // cleanAvatar turns anything unrecognised into null rather than
+      // throwing -- an old client sending a retired id should quietly fall
+      // back to initials, not fail to change its name.
+      p.avatar = cleanAvatar(avatar);
+      broadcastRoom(room);
+      ack && ack({ ok: true, avatar: p.avatar });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
   socket.on('set_name', ({ roomCode, name }, ack) => {
     try {
       if (isRateLimited(socket, 'set_name')) throw new Error('Too many changes too quickly. Please wait a moment.');
