@@ -1027,12 +1027,34 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
   flex: 1 1 auto;
   min-height: 0;
 }
+/* The felt was a flat two-stop gradient inside a plain dark ring, which is
+   most of why the biggest element on screen read as a shape rather than an
+   object. Three cheap additions give it depth: a warmer centre so the light
+   appears to fall on the middle of the table, a much deeper vignette at the
+   edge, and a two-tone rim (highlight on top, shadow beneath) so the border
+   reads as a raised edge catching light rather than a drawn outline.
+   All gradients -- no images, no extra requests. */
 .table-felt {
   position: absolute; inset: 12%;
-  background: radial-gradient(circle, var(--jade-bg), var(--jade-bg-dark) 75%);
+  background:
+    radial-gradient(circle at 50% 38%, #1c5540 0%, var(--jade-bg) 42%, var(--jade-bg-dark) 78%, #041009 100%);
   border-radius: 50%;
   border: 6px solid #061712;
-  box-shadow: inset 0 0 30px rgba(0,0,0,0.45);
+  box-shadow:
+    inset 0 0 44px rgba(0,0,0,0.55),
+    inset 0 2px 1px rgba(255,255,255,0.06),
+    inset 0 -3px 6px rgba(0,0,0,0.5),
+    0 6px 18px rgba(0,0,0,0.4);
+}
+/* Faint concentric ring, the way a real felt table has a stitched edge.
+   Very low contrast on purpose -- it should register as texture, not as a
+   line someone drew. */
+.table-felt::after {
+  content: '';
+  position: absolute; inset: 7%;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.045);
+  pointer-events: none;
 }
 .stock-badge {
   /* Hidden from players by request -- stock count is still tracked and
@@ -1073,10 +1095,71 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
   gap: 3px; z-index: 3; width: var(--seat-w, 96px); text-align: center;
 }
 .seat-chip {
-  background: rgba(255,255,255,0.14); border-radius: var(--radius-sm); padding: 5px 9px;
-  font-size: 11.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: rgba(255,255,255,0.14); border-radius: var(--radius-sm); padding: 5px 7px;
+  font-size: 11.5px; text-align: center;
   max-width: 100%; width: 100%;
 }
+
+/* ---- Seat identity + hand (Sept 2026) ----------------------------------
+   A seat used to be two lines of text. Now it's a face, a name, and a
+   visible hand -- the three things a player at a real table can see. */
+.seat-id {
+  display: flex; align-items: center; gap: 5px;
+  min-width: 0;
+}
+.seat-name {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: left;
+}
+.avatar {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; overflow: hidden;
+  box-shadow: 0 0 0 1.5px rgba(255,255,255,0.22);
+}
+.avatar svg { width: 100%; height: 100%; display: block; }
+.avatar-initials { font-weight: 700; color: #fff; letter-spacing: .02em; }
+
+/* Three overlapping backs. Each is nudged by its index via --i, so the
+   markup stays a flat list and the overlap is one line of CSS. Negative
+   margin rather than absolute positioning keeps the fan in flow, so the
+   chip still sizes itself correctly on a 71px seat. */
+.seat-fan {
+  display: flex; align-items: center; justify-content: center;
+  gap: 0; margin: 4px 0 2px;
+}
+.seat-back {
+  width: 13px; height: 18px; border-radius: 2px;
+  background:
+    repeating-linear-gradient(45deg, #8d2733 0 3px, #6f1d28 3px 6px);
+  border: 1px solid rgba(255,255,255,0.35);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+  margin-left: calc(var(--i) * -5px);
+  transform: rotate(calc((var(--i) - 1) * 7deg));
+}
+.seat-fan-count {
+  margin-left: 5px;
+  font-size: 10.5px; font-weight: 700;
+  color: var(--text-light);
+}
+.seat-meta:empty { display: none; }
+
+/* ---- Avatar picker (profile menu) ---- */
+.avatar-picker {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+  margin: 6px 0 4px;
+}
+.avatar-choice {
+  display: flex; align-items: center; justify-content: center;
+  padding: 4px; margin: 0; min-height: 48px;
+  background: transparent; border: 1.5px solid transparent; border-radius: 12px;
+}
+.avatar-choice.selected {
+  border-color: var(--gold);
+  background: rgba(212,175,55,0.14);
+}
+.avatar-choice:active { transform: scale(0.94); }
 .seat.active .seat-chip { background: var(--gold); color: #1a1a1a; font-weight: 700; }
 /* "This is my seat" gets a plain neutral ring, deliberately NOT gold --
    gold is reserved for "whose turn is it" (the fill above, plus the pulse
