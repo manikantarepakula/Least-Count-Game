@@ -536,7 +536,17 @@
 <!-- Host-only, floating over whatever screen they're on (lobby or mid-game)
      -- a Teams-style waiting-room strip listing everyone currently asking to
      join, each with Admit/Ignore. Hidden entirely whenever nobody's waiting. -->
-<div id="join-requests-banner" class="join-requests-banner hidden"></div>
+<!-- Both host-facing request banners live in one fixed wrapper so they stack
+     instead of colliding. Each was position:fixed at top:8px on its own,
+     which put them in exactly the same place -- and they genuinely can be
+     pending together: someone new knocking while someone eliminated asks to
+     come back. They stay separate elements because they're different
+     decisions (admit a stranger vs let back in a player you just knocked
+     out, on a score you need to see before answering). -->
+<div class="top-banners">
+  <div id="join-requests-banner" class="join-requests-banner hidden"></div>
+  <div id="rejoin-requests-banner" class="join-requests-banner rejoin-requests-banner hidden"></div>
+</div>
 
 <div id="screen-game" class="screen">
   <!-- Three columns: Scores | Round | mute + leave (Sept 2026).
@@ -692,6 +702,22 @@
 
     <div id="podium" class="podium"></div>
     <div id="round-result-note" class="round-result-note"></div>
+
+    <!-- Rejoin offer (Sept 2026). Shown only to a player the engine says is
+         eligible (game.canRejoin, computed per-viewer in getPublicState).
+         Placed directly under the result, above the ad and the scores: this
+         is a 30-second decision and it must not be something you scroll to
+         find. The score is spelled out because coming back at 180 against a
+         200 limit is a completely different proposition from coming back at
+         45, and a bare yes/no would hide that. -->
+    <div id="rejoin-offer" class="rejoin-offer hidden">
+      <p class="rejoin-offer-text" id="rejoin-offer-text"></p>
+      <div class="rejoin-offer-actions">
+        <button id="btn-rejoin-ask" class="primary" type="button">Ask to rejoin</button>
+        <button id="btn-rejoin-no" class="secondary" type="button">No thanks</button>
+      </div>
+      <p class="rejoin-offer-status hidden" id="rejoin-offer-status"></p>
+    </div>
 
     <!-- Reserved hole for the 300x250 ad. The ad itself is a NATIVE view
          floating over the WebView (same as the bottom banner), so it takes up
