@@ -3694,7 +3694,13 @@
       // before you can read anything.
       const idRow = document.createElement('div');
       idRow.className = 'seat-id';
-      idRow.appendChild(avatarEl(p.avatar, p.name, p.playerId, 22));
+      // Guarded because this runs inside renderOvalTable's per-seat loop: an
+      // avatar that failed to build would otherwise abort the loop and leave
+      // the table half-rendered. A seat with no face is a blemish; a table
+      // with no seats is a broken game.
+      try {
+        idRow.appendChild(avatarEl(p.avatar, p.name, p.playerId, 22));
+      } catch (e) { /* seat renders without a face */ }
       const nameEl = document.createElement('div');
       nameEl.className = 'seat-name';
       // Own seat is marked with a neutral ring (see .seat.own-seat in
@@ -4292,10 +4298,13 @@
   // together (they're always discarded as a set anyway, matching-rank or not).
   function toggleSelectGroup(group) {
     const allSelected = group.cards.every((c) => selectedIds.has(c.id));
-    // Picking a card up and putting it down are different actions, so they
-    // get different sounds -- a quieter, shorter one for putting it back.
-    // Before this, touching a card made no sound at all.
-    if (allSelected) Sound.deselect(); else Sound.select();
+    // Sound goes AFTER the selection changes, and guarded -- same rule as
+    // the discard and declare handlers. Played first (as it was), a throw in
+    // the audio path would have made cards impossible to select at all,
+    // which is a dead game from a decoration.
+    try {
+      if (allSelected) Sound.deselect(); else Sound.select();
+    } catch (e) { /* audio is never worth a tap */ }
     if (allSelected) {
       group.cards.forEach((c) => selectedIds.delete(c.id));
     } else {
@@ -5390,8 +5399,21 @@
     const hue = chatAvatarHue(playerId || name || '');
     wrap.style.background = `hsl(${hue} 45% 42%)`;
     wrap.classList.add('avatar-initials');
-    const txt = (String(name || '?').replace(/[^\p{L}\p{N} ]/gu, '').trim() || '?')
-      .split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+    // Deliberately NO unicode property escapes here. /[^\p{L}\p{N} ]/gu is a
+    // regex LITERAL, so it's evaluated when this file is parsed, not when
+    // this line runs -- on an Android WebView older than Chrome 64 that
+    // means the whole of app.js fails to parse and the app is a white
+    // screen. Cleaning up initials is not worth that risk.
+    //
+    // Array.from() splits by code point rather than UTF-16 unit, so a name
+    // starting with an emoji or a non-BMP character yields that whole
+    // character instead of half a surrogate pair. Non-Latin scripts get
+    // their own initial, which is right for Telugu names.
+    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    const txt = parts.slice(0, 2)
+      .map((w) => Array.from(w)[0] || '')
+      .join('')
+      .toUpperCase() || '?';
     wrap.textContent = txt;
     wrap.style.fontSize = Math.round(size * 0.42) + 'px';
     return wrap;
