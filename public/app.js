@@ -4439,7 +4439,11 @@
       // the fan carries "this is a hand", the badge carries "how big".
       // Skipped for your own seat: your real cards are in the tray below,
       // and a fake fan of your own hand would be actively confusing.
-      if (count !== undefined && count > 0 && p.playerId !== myPlayerId) {
+      // Card backs are hidden during the reveal: the merged panel below is
+      // about to show the ACTUAL cards, and a fan of backs with a count
+      // badge next to it was the same fact stated a second time in a seat
+      // with no room to spare.
+      if (count !== undefined && count > 0 && p.playerId !== myPlayerId && !revealPhaseActive) {
         const fan = document.createElement('div');
         fan.className = 'seat-fan';
         const backs = Math.min(3, count);
@@ -4461,14 +4465,19 @@
       // The reveal box now carries the running total, so the chip drops it
       // while that box is up -- otherwise moving the total into the box just
       // relocates the duplicate instead of removing it.
-      const chipHidesScore = dealing || (revealPhaseActive && p.playerId !== myPlayerId);
+      const chipHidesScore = dealing || revealPhaseActive;
       // The fan's badge now carries the card count for opponents, so this
       // line drops it there and shows the score alone -- printing "13" on
       // the badge and "13 cards" underneath it is just the same fact twice
       // in a seat that has no room to spare. Your own seat has no fan, so
       // it keeps the full text.
-      const fanShowsCount = count !== undefined && count > 0 && p.playerId !== myPlayerId;
-      if (count === undefined) {
+      const fanShowsCount = count !== undefined && count > 0 && p.playerId !== myPlayerId && !revealPhaseActive;
+      if (revealPhaseActive) {
+        // During the reveal the panel below carries cards, round score and
+        // running total. The chip is reduced to identity alone -- avatar and
+        // name -- which is exactly what the old floating panel was missing.
+        metaEl.textContent = '';
+      } else if (count === undefined) {
         metaEl.textContent = '';
       } else if (fanShowsCount) {
         metaEl.textContent = chipHidesScore ? '' : score + ' pts';
@@ -4501,14 +4510,36 @@
       seatEl.innerHTML = '';
       seatEl.appendChild(chipEl);
 
-      // Round-end reveal: everyone's remaining cards, shown at their own
-      // chair before the scorecard appears (see startRevealPhase below).
-      // Skipped for your own seat -- your cards are already face-up in the
-      // tray, and its header already prints "Your cards (Value: N)", so a
-      // box here would only duplicate both.
-      if (revealPhaseActive && p.playerId !== myPlayerId) {
+      // ------------------------------------------------------------------
+      // Round-end reveal, MERGED INTO THE SEAT (Sept 2026).
+      //
+      // This used to be a separate absolutely-positioned box that dropped
+      // BELOW the seat, flipping above only when the seat sat low on the
+      // table. Two directions, six seats: at six players that produced two
+      // panel-on-panel and four panel-on-seat overlaps, and because the box
+      // carried no name, a panel that drifted onto a neighbour became
+      // genuinely unreadable -- you could not tell whose score it was.
+      //
+      // Appending INSIDE the chip fixes that by construction. The panel
+      // inherits the seat's avatar and name, so attribution is never in
+      // doubt; and it consumes no horizontal space at all, so it cannot
+      // collide sideways with the neighbouring seat.
+      //
+      // Your own seat is included now. It was skipped on the grounds that
+      // the hand tray already shows your cards -- but that left you as the
+      // only player with no round score on the table, which is precisely
+      // the number you most want to see.
+      // ------------------------------------------------------------------
+      if (revealPhaseActive) {
         const revealBox = buildSeatRevealBox(game, p.playerId, top);
-        if (revealBox) seatEl.appendChild(revealBox);
+        if (revealBox) {
+          chipEl.appendChild(revealBox);
+          // Lifts this seat above its neighbours. With panels now growing
+          // downward inside the chip, a tall hand at one seat can reach the
+          // seat below it at 8+ players; whoever is revealing wins the
+          // stacking order rather than being half-covered.
+          seatEl.classList.add('revealing');
+        }
       }
 
       const reaction = seatReactions[p.playerId];
@@ -4751,8 +4782,12 @@
     // The chain-banner already explains that case, so no separate hint needed.
     discardBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && selectedIds.size > 0);
     declareBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && handValue <= 5);
-    discardBtn.classList.toggle('hidden', duringChain);
-    declareBtn.classList.toggle('hidden', duringChain);
+    // Hidden during the reveal too, not merely disabled. They were sitting
+    // there fully coloured while the round result was on screen -- two large
+    // buttons that do nothing, in the spot the eye goes to act, directly
+    // above the ad banner.
+    discardBtn.classList.toggle('hidden', duringChain || revealPhaseActive);
+    declareBtn.classList.toggle('hidden', duringChain || revealPhaseActive);
 
     // "Help me play" -- only ever shown in a solo game against bots (no
     // other real player at the table), never in Play Online/Friends. One
@@ -4896,10 +4931,20 @@
     const isWinner = roundWinnerIds(game).has(playerId);
 
     const box = document.createElement('div');
-    // Bottom-half seats flip the box above the chip so it never runs off
-    // the lower edge of the table into the hand tray.
-    box.className = 'seat-reveal-box'
-      + (topPercent > 62 ? ' above' : '')
+    // No more 'above' flip: the box is now a child of the seat chip and
+    // flows under the name, so there is no edge to run off and no direction
+    // to choose. topPercent is kept in the signature for call-site
+    // compatibility and is deliberately unused.
+    void topPercent;
+    // Severity, so +25 does not look identical to +6. Everything that isn't
+    // a declare shared one gold before this, which made a quarter of the way
+    // to elimination read the same as a scratch.
+    const severity = roundScore === undefined ? ''
+      : roundScore === 0 ? ' sev-none'
+      : roundScore < 10 ? ' sev-low'
+      : roundScore < 25 ? ' sev-mid'
+      : ' sev-high';
+    box.className = 'seat-reveal-box' + severity
       + (isDeclarer ? ' declared' : '')
       + (isPenalty ? ' penalty' : '')
       + (isWinner && !isPenalty ? ' winner' : '');
@@ -4953,7 +4998,13 @@
     const groups = groupHand(hand)
       .slice()
       .sort((a, b) => cardValueClient(b.cards[0], wildRank) - cardValueClient(a.cards[0], wildRank));
-    const shown = groups.slice(0, REVEAL_MAX_SEAT_TILES);
+    // EVERY group, not a slice. This used to cap at REVEAL_MAX_SEAT_TILES
+    // and append a "+N more" chip -- which meant the reveal refused to
+    // reveal, and refused hardest for the player holding the most cards,
+    // whose hand is the single most interesting one at the table. The grid
+    // wraps within the seat width instead; a big hand makes the panel
+    // taller, which is fine now that it grows inside the seat.
+    const shown = groups;
     shown.forEach((g) => {
       const el = cardEl(g.cards[0]);
       el.classList.add('mini');
