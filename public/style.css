@@ -1348,17 +1348,32 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
    defeats the entire point of showing the cards. 20x24 with a 10px bold
    rank is the largest that fits, and the badge is shrunk to 10px so it
    stops covering the rank it's annotating. ---- */
+/* Sept 2026: this is now a FLOW CHILD of .seat-chip, not an absolutely
+   positioned overlay. It sits under the player's name, so it can never
+   drift onto a neighbouring seat and never needs to be told which
+   direction to open. It inherits the chip's avatar + name, which is what
+   makes each panel self-identifying. */
 .seat-reveal-box {
-  position: absolute; z-index: 7;
-  top: calc(100% + 4px); left: 50%; transform: translateX(-50%);
-  width: 70px; box-sizing: border-box;
-  padding: 2px 3px;
-  /* Slightly darker than .seat-chip's translucent white so the white card
-     faces stay legible against it wherever it lands on the felt. */
+  position: relative; z-index: 1;
+  width: 100%; box-sizing: border-box;
+  margin-top: 3px; padding: 3px;
   background: rgba(6,26,20,0.94);
   border: 1px solid var(--jade-border); border-radius: var(--radius-sm);
 }
-.seat-reveal-box.above { top: auto; bottom: calc(100% + 4px); }
+/* Severity: a scratch and a quarter of the way to elimination should not
+   look the same. Applied to the panel edge, not the number, so it reads
+   from across the table at a glance. */
+.seat-reveal-box.sev-none { border-color: rgba(74,222,128,0.55); }
+.seat-reveal-box.sev-low  { border-color: rgba(240,198,116,0.45); }
+.seat-reveal-box.sev-mid  { border-color: rgba(240,150,90,0.65); }
+.seat-reveal-box.sev-high { border-color: rgba(255,107,107,0.75); }
+.seat-reveal-box.sev-mid  .seat-reveal-score { color: #ff9e5e; }
+.seat-reveal-box.sev-high .seat-reveal-score { color: #ff6b6b; }
+/* Wrap rather than truncate -- the grid gets taller, never wider. */
+.seat-reveal-grid { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
+/* The seat has to be allowed to grow downward now that it carries cards. */
+.seat.revealing { z-index: 8; }
+.seat.revealing .seat-chip { padding-bottom: 4px; }
 .seat-reveal-box.declared { border: 2px solid var(--gold); }
 .seat-reveal-tag {
   font-size: 7px; color: var(--gold-bright); font-weight: 700; letter-spacing: 0.04em;
