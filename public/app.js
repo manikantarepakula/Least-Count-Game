@@ -798,6 +798,13 @@
     // jitter is enough for the ear to stop noticing the loop.
     function rnd(a, b) { return a + Math.random() * (b - a); }
 
+    // Deal-tick throttle state. Lives here (module scope) rather than at the
+    // call site so the rate holds no matter who calls dealTick() or how
+    // often -- the deal animation's own pace scales with player count and
+    // must not be allowed to set the audio pace.
+    let lastDealTickAt = 0;
+    let dealTickGap = 170;
+
     function tone(freq, duration, opts) {
       opts = opts || {};
       if (muted) return;
@@ -1419,15 +1426,63 @@
         }));
       },
 
-      // One tick per card during the deal. Thirteen passes around the table
-      // used to happen in total silence. Pitch climbs slightly as the deal
-      // progresses so the sequence has a shape and an obvious ending,
-      // instead of being 78 identical clicks.
-      dealTick(i, total) {
-        safe(() => play('dealTick', () => {
-          const t = total ? Math.min(1, i / total) : 0;
-          cardSnap({ gain: 0.13 + t * 0.05 });
-          blip(520 + t * 260, 620 + t * 300, 0.05, { gain: 0.03, wet: 0.5 });
+      // ------------------------------------------------------------------
+      // DEALING. Rebuilt -- the first version was machine-gun clicking.
+      //
+      // The deal animation fires one card every 90ms, i.e. ELEVEN per
+      // second, for 13 passes: 78 flights in a six-player game, 130 in a
+      // ten-player one. A cue on every flight is a buzzsaw, not a deal. A
+      // real dealer puts out three or four cards a second.
+      //
+      // Two changes. First, this throttles ITSELF rather than trusting the
+      // call site, so the rate is right at any table size: extra calls
+      // inside the window are dropped. Second, the pitched layer is gone.
+      // Dealing has no pitch -- 78 rising tones read as a broken arpeggio,
+      // and that was most of what made it grate.
+      //
+      // The interval is jittered so it lands like a hand, not a metronome.
+      // ------------------------------------------------------------------
+      dealTick() {
+        safe(() => {
+          const now = Date.now();
+          if (now - lastDealTickAt < dealTickGap) return;
+          lastDealTickAt = now;
+          dealTickGap = rnd(140, 205);   // next gap: never mechanical
+          play('dealTick', () => {
+            // Flick only -- no low thud. A card leaving a dealer's hand is
+            // all high-frequency transient; the body belongs to the card
+            // LANDING, which is a different sound (discard).
+            noiseBurst({
+              duration: rnd(0.022, 0.032),
+              filterType: 'bandpass',
+              freqStart: rnd(3600, 5200),
+              freqEnd: rnd(1600, 2300),
+              q: 1.4,
+              gain: rnd(0.085, 0.135),
+              wet: 0.4,
+            });
+          });
+        });
+      },
+
+      // Played once when the deal finishes: the dealer squaring the pile.
+      // Gives the sequence an ending instead of the ticks just stopping.
+      dealSettle() {
+        safe(() => play('dealSettle', () => {
+          cardSnap({ gain: 0.2 });
+          thump(150, 0.14, 0.1, 0.01);
+          shuffleBurst(7, 0.09, { gain: 0.07, dur: 0.012 });
+        }));
+      },
+
+      // The deck-intro riffle. The visual shuffle (two halves zippering
+      // together) played in silence, so the sequence opened with a moving
+      // picture and no sound at all. Softer than the mid-game reshuffle --
+      // this is scene-setting, not an event you need to notice.
+      deckShuffle() {
+        safe(() => play('deckShuffle', () => {
+          shuffleBurst(26, 0.5, { gain: 0.13, dur: 0.015 });
+          shuffleBurst(22, 0.5, { gain: 0.1, dur: 0.014, freqSpread: 2400 });
         }));
       },
 
@@ -2008,6 +2063,10 @@
     setT(() => {
       dealingLabel.textContent = 'Shuffling...';
       decks.forEach((d) => { d.style.opacity = '0'; });
+      // The riffle animation ran silently. Sound here also means the deal
+      // that follows reads as the second half of a sequence rather than
+      // ticking out of nowhere.
+      Sound.deckShuffle();
     }, 1150);
 
     setT(() => {
@@ -2101,14 +2160,18 @@
 
     function flyNext() {
       if (cancelled) return;
-      if (flight >= totalFlights) { flyer.style.opacity = '0'; return; }
+      if (flight >= totalFlights) {
+        flyer.style.opacity = '0';
+        Sound.dealSettle();   // the dealer squaring the pile: gives it an ending
+        return;
+      }
       const p = players[flight % players.length];
       const seatEl = seatFor(p.playerId);
       if (!seatEl) { flight += 1; flyNext(); return; }
-      // One tick per card. Thirteen passes around the table used to play
-      // out in complete silence, which is a long, conspicuously dead
-      // opening to every single round.
-      Sound.dealTick(flight, totalFlights);
+      // Called on every flight, but Sound.dealTick() throttles itself down
+      // to a dealer's pace -- see the comment on the cue. Do NOT move the
+      // rate limiting up here: mid-sequence rejoins re-enter this loop.
+      Sound.dealTick();
       const to = centerOf(seatEl);
       const travelMs = flightMs * 0.7;
       flyer.style.transition = `left ${travelMs}ms ease, top ${travelMs}ms ease`;
