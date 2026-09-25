@@ -673,15 +673,130 @@
   // ---------------- sound effects (Web Audio API, no files needed) ----------------
   const Sound = (() => {
     let ctx = null;
-    let muted = localStorage.getItem('leastcount_muted') === '1';
+    // Guarded: this runs at module construction, so a localStorage throw
+    // here (private mode, storage disabled) would take out the entire
+    // Sound object and with it every call site in the app.
+    let muted = (() => {
+      try { return localStorage.getItem('leastcount_muted') === '1'; } catch (e) { return false; }
+    })();
 
+    // Never throws. Constructing an AudioContext can fail outright -- some
+    // Android WebViews refuse it under autoplay policy, and a device that
+    // has hit its audio-context limit throws too. This is the bottom of
+    // the sound stack, so a throw here would escape through every cue.
+    let ctxFailed = false;
     function ensureCtx() {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return null;
-      if (!ctx) ctx = new AC();
-      if (ctx.state === 'suspended') ctx.resume();
-      return ctx;
+      if (ctxFailed) return null;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) { ctxFailed = true; return null; }
+        if (!ctx) ctx = new AC();
+        if (ctx.state === 'suspended') ctx.resume();
+        return ctx;
+      } catch (e) {
+        // Latch the failure: retrying on every single card tap would mean
+        // a throw-and-catch hundreds of times a game.
+        ctxFailed = true;
+        ctx = null;
+        console.warn('[sound] audio unavailable on this device:', e && e.message);
+        return null;
+      }
     }
+
+    // ------------------------------------------------------------------
+    // MASTER BUS + REVERB SEND (Sept 2026 rebuild)
+    //
+    // Every voice used to connect straight to ctx.destination. That is the
+    // single biggest reason the old cues were described as "dry and
+    // lifeless": a sound that stops dead the instant its envelope closes
+    // has no space around it, and the ear reads that as cheap. Real game
+    // audio is almost never heard bone-dry -- there is always a short tail.
+    //
+    // So: everything now goes through master, and voices that want depth
+    // also feed a send into a small convolution reverb. The impulse
+    // response is generated here rather than loaded, so this still costs
+    // zero bytes of download.
+    //
+    // MASTER_GAIN is deliberately the one knob that controls overall
+    // loudness. If the whole game is too loud or too quiet after this
+    // rebuild, that is the number to move -- not the 12 individual cues.
+    // ------------------------------------------------------------------
+    const MASTER_GAIN = 0.95;
+    const REVERB_GAIN = 0.22;
+    let master = null;
+    let reverbSend = null;
+
+    // A decaying noise burst IS an impulse response -- that's all a small
+    // room is, mathematically. Stereo, slightly different per channel so
+    // the tail has a little width instead of sitting dead centre.
+    function buildImpulse(c, seconds, decay) {
+      const len = Math.max(1, Math.floor(c.sampleRate * seconds));
+      const buf = c.createBuffer(2, len, c.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        const data = buf.getChannelData(ch);
+        for (let i = 0; i < len; i++) {
+          // (1 - i/len)^decay gives the exponential-ish fade; the noise
+          // gives it the density that makes it read as a room.
+          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+        }
+      }
+      return buf;
+    }
+
+    // Returns { master, send } or null. Built lazily on first sound and
+    // cached. If anything in here fails (old WebView, no ConvolverNode)
+    // we fall back to a bare master gain with no send, and every cue
+    // still plays -- just dry. Never throws.
+    function ensureBus() {
+      const c = ensureCtx();
+      if (!c) return null;
+      if (master) return { master, send: reverbSend };
+      try {
+        master = c.createGain();
+        master.gain.value = MASTER_GAIN;
+        master.connect(c.destination);
+      } catch (e) {
+        master = null;
+        return null;
+      }
+      try {
+        const conv = c.createConvolver();
+        conv.buffer = buildImpulse(c, 0.45, 2.6);
+        const wet = c.createGain();
+        wet.gain.value = REVERB_GAIN;
+        reverbSend = c.createGain();
+        reverbSend.gain.value = 1;
+        reverbSend.connect(conv).connect(wet).connect(master);
+      } catch (e) {
+        // No reverb available -- dry is worse, but silent is far worse.
+        reverbSend = null;
+      }
+      return { master, send: reverbSend };
+    }
+
+    // Connect a voice's output to the master, and optionally bleed some of
+    // it into the reverb. `wet` is 0..1.
+    function routeOut(node, wet) {
+      const bus = ensureBus();
+      if (!bus) return false;
+      node.connect(bus.master);
+      if (wet > 0 && bus.send) {
+        try {
+          const c = ensureCtx();
+          const s = c.createGain();
+          s.gain.value = wet;
+          node.connect(s).connect(bus.send);
+        } catch (e) { /* dry is fine */ }
+      }
+      return true;
+    }
+
+    // Small random spread, used everywhere below. Repetition is the enemy
+    // of a good game sound: the discard cue fires hundreds of times in a
+    // single game, and byte-identical playback is precisely what makes
+    // players reach for the mute button. A few percent of pitch and timing
+    // jitter is enough for the ear to stop noticing the loop.
+    function rnd(a, b) { return a + Math.random() * (b - a); }
 
     function tone(freq, duration, opts) {
       opts = opts || {};
@@ -696,7 +811,8 @@
       gain.gain.setValueAtTime(0.0001, t0);
       gain.gain.linearRampToValueAtTime(opts.gain || 0.15, t0 + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
-      osc.connect(gain).connect(c.destination);
+      osc.connect(gain);
+      if (!routeOut(gain, opts.wet || 0)) return;
       osc.start(t0);
       osc.stop(t0 + duration + 0.03);
     }
@@ -740,7 +856,8 @@
       gain.gain.linearRampToValueAtTime(peak, t0 + 0.004);
       gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
 
-      src.connect(filter).connect(gain).connect(c.destination);
+      src.connect(filter).connect(gain);
+      if (!routeOut(gain, opts.wet === undefined ? 0.18 : opts.wet)) return;
       src.start(t0);
       src.stop(t0 + duration + 0.02);
     }
@@ -767,7 +884,7 @@
         noiseBurst({
           duration: 0.04, filterType: 'bandpass',
           freqStart: 3200 + Math.random() * 1400, freqEnd: 1800, q: 1.5,
-          gain: 0.28, delay,
+          gain: 0.38, delay, wet: 0.24,
         });
       }
     }
@@ -855,40 +972,212 @@
         o.start(t0);
         o.stop(t0 + duration + 0.05);
       });
-      filt.connect(g).connect(c.destination);
+      filt.connect(g);
+      routeOut(g, opts.wet === undefined ? 0.3 : opts.wet);
     }
     function warmSeq(notes) {
       notes.forEach((n) => warm(n[0], n[1], { delay: n[2], gain: n[3], type: n[4] }));
     }
 
+    // ------------------------------------------------------------------
+    // LAYERING HELPERS (Sept 2026 rebuild)
+    //
+    // "Juicy" game audio is not a property of any single recording -- it is
+    // a stack. A satisfying discard in a polished card game is typically
+    // four things fired within ~20ms of each other:
+    //
+    //   1. a swoosh   (the card moving through air)
+    //   2. a transient (the snap of it landing)
+    //   3. a thump     (low-end body, so it has weight on a phone speaker)
+    //   4. a blip      (a PITCHED element -- the part that makes it feel
+    //                   designed rather than recorded)
+    //
+    // The old cues had exactly one of those four, which is why they read as
+    // thin no matter how the noise was filtered. Layer 4 in particular was
+    // completely absent from every card sound.
+    // ------------------------------------------------------------------
+
+    // A pitched tone that glides from one frequency to another. Short
+    // downward glides feel like something landing; upward feels like
+    // something being picked up or confirmed.
+    function blip(from, to, duration, opts) {
+      opts = opts || {};
+      if (muted) return;
+      const c = ensureCtx();
+      if (!c) return;
+      const t0 = c.currentTime + (opts.delay || 0);
+      const osc = c.createOscillator();
+      const g = c.createGain();
+      osc.type = opts.type || 'triangle';
+      osc.frequency.setValueAtTime(from, t0);
+      if (to && to !== from) {
+        osc.frequency.exponentialRampToValueAtTime(Math.max(40, to), t0 + duration);
+      }
+      const peak = opts.gain || 0.12;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(peak, t0 + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0008, t0 + duration);
+      osc.connect(g);
+      if (!routeOut(g, opts.wet === undefined ? 0.25 : opts.wet)) return;
+      osc.start(t0);
+      osc.stop(t0 + duration + 0.04);
+    }
+
+    // Air movement. A wide bandpass swept across the spectrum -- downward
+    // for something arriving, upward for something leaving.
+    function swoosh(opts) {
+      opts = opts || {};
+      noiseBurst({
+        duration: opts.duration || 0.13,
+        filterType: 'bandpass',
+        freqStart: opts.from || 5200,
+        freqEnd: opts.to || 1100,
+        q: 0.8,
+        gain: opts.gain || 0.18,
+        delay: opts.delay || 0,
+        wet: opts.wet === undefined ? 0.3 : opts.wet,
+      });
+    }
+
+    // Low-end weight. Phone speakers can barely reproduce this, but the
+    // little they do produce is the difference between a sound that feels
+    // like an object and one that feels like a notification.
+    function thump(freq, duration, gain, delay) {
+      blip(freq, freq * 0.6, duration, { gain, delay, type: 'sine', wet: 0.15 });
+    }
+
+    // Ascending high blips -- the "reward" garnish on good outcomes.
+    // Intervals widen as it climbs so it reads as a flourish, not a scale.
+    function sparkle(n, base, gain, delay) {
+      for (let i = 0; i < n; i++) {
+        const f = base * Math.pow(1.5, i) * rnd(0.97, 1.03);
+        blip(f, f * 1.06, 0.09, {
+          gain: Math.max(0.02, (gain || 0.07) * (1 - i * 0.12)),
+          delay: (delay || 0) + i * 0.045,
+          type: 'sine',
+          wet: 0.42,
+        });
+      }
+    }
+
+    // A cue must NEVER be able to throw. A sound bug took the live game
+    // down once already (the flourish ran before socket.emit and an
+    // exception ate the turn). Wrapping here means that class of bug can
+    // no longer escape this module, regardless of what the call site does.
+    function safe(fn) {
+      try { fn(); } catch (e) {
+        console.warn('[sound] cue failed (ignored):', e && e.message);
+      }
+    }
+
     return {
       isMuted: () => muted,
-      setMuted(v) { muted = v; localStorage.setItem('leastcount_muted', v ? '1' : '0'); },
-      init() { ensureCtx(); },
+      setMuted(v) {
+        muted = v;
+        // localStorage throws in private-mode WebViews and when storage is
+        // full. Muting must still work for the session even if it can't be
+        // remembered for the next one.
+        try { localStorage.setItem('leastcount_muted', v ? '1' : '0'); } catch (e) { /* session-only */ }
+      },
+      init() { safe(() => { ensureCtx(); ensureBus(); }); },
       // Lets a future loader install a decoded sample: Sound.useSample('win', buffer)
       useSample(name, buffer) { SAMPLES[name] = buffer; },
 
-      // ---- your own actions (new) ----
-      // Nothing used to respond to what the PLAYER did -- every sound fired
-      // at something happening to them. Selecting a card, drawing, and
-      // declaring were all silent, which is most of why the loop felt dead.
-      select() { play('select', () => cardSnap({ gain: 0.16, dur: 0.03 })); },
-      deselect() { play('deselect', () => cardSnap({ gain: 0.1, dur: 0.025 })); },
-      declareTap() { play('declareTap', () => warmSeq([[440, 0.09, 0, 0.13], [660, 0.12, 0.07, 0.13]])); },
-
-      discard() { play('discard', () => cardSnap({ gain: 0.42 })); },
-      penaltyDraw(count) { play('penaltyDraw', () => cardRiffle(count || 1)); },
-      reshuffle() { play('reshuffle', () => cardReshuffle()); },
-      chainAlert() {
-        play('chainAlert', () => {
-          cardSnap({ gain: 0.5 });
-          warm(220, 0.2, { delay: 0.05, gain: 0.13, type: 'triangle', cutoff: 1400 });
-        });
+      // ---- your own actions ----
+      // Selecting a card fires constantly, so it stays small and dry on
+      // purpose: a big sound here would be exhausting inside two minutes.
+      // Up for select, down for deselect, so the two are distinguishable
+      // without looking at the screen.
+      select() {
+        safe(() => play('select', () => {
+          const p = rnd(0.97, 1.03);
+          cardSnap({ gain: 0.2 });
+          blip(660 * p, 820 * p, 0.06, { gain: 0.07, type: 'sine', wet: 0.12 });
+        }));
       },
-      yourTurn() { play('yourTurn', () => warmSeq([[587, 0.11, 0, 0.14], [880, 0.16, 0.09, 0.15]])); },
-      declareCorrect() { play('declareCorrect', () => warmSeq([[523, 0.13, 0, 0.15], [659, 0.13, 0.1, 0.15], [784, 0.26, 0.2, 0.16]])); },
-      declareWrong() { play('declareWrong', () => warmSeq([[311, 0.22, 0, 0.15, 'triangle'], [233, 0.34, 0.14, 0.14, 'triangle']])); },
-      win() { play('win', () => warmSeq([[523, 0.16, 0, 0.15], [659, 0.16, 0.12, 0.15], [784, 0.16, 0.24, 0.16], [1046, 0.4, 0.36, 0.17]])); },
+      deselect() {
+        safe(() => play('deselect', () => {
+          const p = rnd(0.97, 1.03);
+          cardSnap({ gain: 0.14 });
+          blip(700 * p, 520 * p, 0.06, { gain: 0.055, type: 'sine', wet: 0.12 });
+        }));
+      },
+      declareTap() {
+        safe(() => play('declareTap', () => {
+          warmSeq([[440, 0.1, 0, 0.18], [660, 0.14, 0.07, 0.18]]);
+          sparkle(2, 1180, 0.05, 0.12);
+        }));
+      },
+
+      // THE most important sound in the game -- it fires on every single
+      // turn, hundreds of times a session. All four layers, and jittered
+      // so the hundredth one doesn't sound like the first.
+      discard() {
+        safe(() => play('discard', () => {
+          const p = rnd(0.94, 1.06);
+          swoosh({ duration: 0.1, from: 5200, to: 1100, gain: 0.2 });
+          cardSnap({ gain: 0.62 });
+          thump(180 * p, 0.09, 0.16, 0.005);
+          blip(880 * p, 520 * p, 0.13, { gain: 0.1, delay: 0.015, wet: 0.35 });
+        }));
+      },
+
+      // Penalty. Deliberately DESCENDING -- picking up cards is the bad
+      // outcome in this game and the sound should agree with that. The
+      // riffle scales with the count, so +6 genuinely sounds worse than +2.
+      penaltyDraw(count) {
+        safe(() => play('penaltyDraw', () => {
+          const n = Math.max(1, count || 1);
+          cardRiffle(n);
+          const span = Math.min(n, 8) * 0.045;
+          blip(560, 330, 0.3, { gain: 0.13, delay: span, wet: 0.4 });
+          thump(140, 0.22, 0.14, span + 0.02);
+        }));
+      },
+
+      reshuffle() { safe(() => play('reshuffle', () => cardReshuffle())); },
+
+      // Someone extended the +2 chain at you. Rising and tense, with real
+      // low-end -- this is the one moment that should make you look up.
+      chainAlert() {
+        safe(() => play('chainAlert', () => {
+          cardSnap({ gain: 0.7 });
+          thump(150, 0.26, 0.2, 0.01);
+          blip(300, 460, 0.28, { gain: 0.14, delay: 0.05, type: 'sawtooth', wet: 0.35 });
+        }));
+      },
+
+      yourTurn() {
+        safe(() => play('yourTurn', () => {
+          warmSeq([[587, 0.12, 0, 0.2], [880, 0.2, 0.09, 0.2]]);
+          sparkle(2, 1320, 0.05, 0.1);
+        }));
+      },
+
+      declareCorrect() {
+        safe(() => play('declareCorrect', () => {
+          warmSeq([[523, 0.14, 0, 0.2], [659, 0.14, 0.1, 0.2], [784, 0.3, 0.2, 0.22]]);
+          sparkle(4, 1046, 0.075, 0.24);
+        }));
+      },
+
+      // Wrong declare. Falling, with a slight buzz underneath -- the
+      // sawtooth is what makes it read as a mistake rather than just a
+      // quieter success.
+      declareWrong() {
+        safe(() => play('declareWrong', () => {
+          warmSeq([[311, 0.24, 0, 0.2, 'triangle'], [233, 0.38, 0.14, 0.19, 'triangle']]);
+          blip(180, 120, 0.4, { gain: 0.1, delay: 0.06, type: 'sawtooth', wet: 0.3 });
+        }));
+      },
+
+      win() {
+        safe(() => play('win', () => {
+          warmSeq([[523, 0.17, 0, 0.2], [659, 0.17, 0.12, 0.2], [784, 0.17, 0.24, 0.21], [1046, 0.45, 0.36, 0.23]]);
+          sparkle(5, 1046, 0.085, 0.4);
+          thump(160, 0.4, 0.16, 0.36);
+        }));
+      },
     };
   })();
 
