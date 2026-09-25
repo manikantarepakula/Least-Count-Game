@@ -96,7 +96,12 @@
         <span class="settings-label">Vibration</span>
         <span class="settings-hint">Penalties and turn warnings</span>
       </div>
-      <button id="btn-haptics-toggle" class="toggle-pill" type="button" role="switch" aria-checked="true">On</button>
+      <!-- A real switch, not a button reading "On". The knob is a child
+           element rather than a pseudo-element so its position is trivially
+           animatable and inspectable. Label text lives in aria-label; the
+           visible state is the knob position and the track colour. -->
+      <button id="btn-haptics-toggle" class="switch" type="button" role="switch"
+              aria-checked="true" aria-label="Vibration"><span class="switch-knob"></span></button>
     </div>
 
     <button id="btn-close-profile-menu" class="secondary">Close</button>
