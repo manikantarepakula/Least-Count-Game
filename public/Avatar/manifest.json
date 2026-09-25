@@ -1,0 +1,44 @@
+{
+  "_comment_1": "Voxel Art (players) + Voxel Bot (bots), both CC0 1.0 from DiceBear. Public domain: no attribution, commercial use fine.",
+  "_comment_2": "These point at DiceBear's API rather than local files, so nothing had to be downloaded. See README.txt for why you will probably want to switch to local files before launch.",
+  "_comment_3": "To change one: edit its seed in the URL. Any word works, the same word always gives the same character.",
+
+  "avatars": [
+    { "id": "vx01", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Ravi",   "label": "Ravi" },
+    { "id": "vx02", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Neha",   "label": "Neha" },
+    { "id": "vx03", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Arjun",  "label": "Arjun" },
+    { "id": "vx04", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Priya",  "label": "Priya" },
+    { "id": "vx05", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Kabir",  "label": "Kabir" },
+    { "id": "vx06", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Meera",  "label": "Meera" },
+    { "id": "vx07", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Dev",    "label": "Dev" },
+    { "id": "vx08", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Anika",  "label": "Anika" },
+    { "id": "vx09", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Rohan",  "label": "Rohan" },
+    { "id": "vx10", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Zara",   "label": "Zara" },
+    { "id": "vx11", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Vikram", "label": "Vikram" },
+    { "id": "vx12", "file": "https://api.dicebear.com/10.x/voxel-art/svg?seed=Isha",   "label": "Isha" },
+
+    { "id": "bot01", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Circuit",  "label": "Circuit" },
+    { "id": "bot02", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Rivet",    "label": "Rivet" },
+    { "id": "bot03", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Bolt",     "label": "Bolt" },
+    { "id": "bot04", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Gizmo",    "label": "Gizmo" },
+    { "id": "bot05", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Pixel",    "label": "Pixel" },
+    { "id": "bot06", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Servo",    "label": "Servo" },
+    { "id": "bot07", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Cogwheel", "label": "Cogwheel" },
+    { "id": "bot08", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Fuse",     "label": "Fuse" },
+    { "id": "bot09", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Widget",   "label": "Widget" },
+    { "id": "bot10", "file": "https://api.dicebear.com/10.x/voxel-bot/svg?seed=Relay",    "label": "Relay" }
+  ],
+
+  "bots": {
+    "fox": "bot01",
+    "owl": "bot02",
+    "cat": "bot03",
+    "panda": "bot04",
+    "tiger": "bot05",
+    "frog": "bot06",
+    "bear": "bot07",
+    "monkey": "bot08",
+    "penguin": "bot09",
+    "rabbit": "bot10"
+  }
+}
