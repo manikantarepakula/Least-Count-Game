@@ -1199,6 +1199,18 @@
       // anyway), so sample loading piggybacks on a moment the player is
       // already waiting through. Everything stays synthesised until the
       // files finish decoding -- there is no silent window.
+      // Silence everything without touching the player's mute setting.
+      // Suspending the AudioContext stops output at the hardware level, so
+      // anything already scheduled dies with it -- which matters because
+      // cues are scheduled ahead of time and would otherwise keep firing
+      // from a backgrounded app.
+      suspend() {
+        safe(() => { if (ctx && ctx.state === 'running' && ctx.suspend) ctx.suspend(); });
+      },
+      resume() {
+        safe(() => { if (ctx && ctx.state === 'suspended' && ctx.resume) ctx.resume(); });
+      },
+
       init() {
         safe(() => {
           ensureCtx();
@@ -1612,6 +1624,31 @@
     Sound.init();
     document.removeEventListener('click', initAudioOnce);
   }, { once: true });
+
+  // ------------------------------------------------------------------
+  // Silence the app the moment it leaves the screen.
+  //
+  // The GAME keeps running -- the server owns the turn timer and will
+  // auto-play for you, which is correct and must not change. What is not
+  // correct is a phone in your pocket playing card snaps and turn chimes
+  // for a table you are no longer looking at.
+  //
+  // visibilitychange covers backgrounding, the recents switcher, and the
+  // screen locking. pagehide covers the WebView being torn down, which on
+  // Android does not always fire visibilitychange first.
+  //
+  // Deliberately NOT using the mute setting: this is temporary silence,
+  // and flipping mute would persist to localStorage and leave the player
+  // muted next time they open the app with no idea why.
+  // ------------------------------------------------------------------
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') Sound.suspend();
+    else Sound.resume();
+  });
+  window.addEventListener('pagehide', () => Sound.suspend());
+  // Coming back from the recents switcher fires pageshow but not always
+  // visibilitychange, so resume from both.
+  window.addEventListener('pageshow', () => Sound.resume());
 
   // Sound toggle button was removed from the game screen's top bar by
   // request; Sound.isMuted()/setMuted() are still available if a toggle is
@@ -4306,9 +4343,28 @@
 
   function renderOvalTable(game, orderOverride) {
     const oval = document.getElementById('oval-table');
-    oval.querySelectorAll('.seat').forEach((el) => el.remove());
+    // ------------------------------------------------------------------
+    // DO NOT DELETE THE SEATS HERE.
+    //
+    // This used to remove every .seat as its first act, before anything
+    // could fail. Two ways that ends with an empty table: latestRoom is
+    // falsy and the function returns, or anything below throws. Either way
+    // the seats are already gone and nothing puts them back.
+    //
+    // That is exactly what the 25 Sept video shows -- the entire table
+    // vanished for 18 seconds mid-game while the open card kept updating,
+    // because renderGame calls this function partway through: everything
+    // before the throw (open card, joker) kept rendering and everything
+    // after it (hand tray, hand value, buttons) silently stopped. The turn
+    // timer ran out and the server auto-played.
+    //
+    // Seats are now built into a fragment and swapped in at the very end,
+    // so a failure leaves the PREVIOUS table on screen. A table that is one
+    // state stale is vastly better than no table at all.
+    // ------------------------------------------------------------------
     renderRevealBanner(game);
     if (!latestRoom) return;
+    const seatFrag = document.createDocumentFragment();
 
     const dealing = !!orderOverride;
     const playerById = new Map(latestRoom.players.map((p) => [p.playerId, p]));
@@ -4627,8 +4683,34 @@
         }
       }
 
-      oval.appendChild(seatEl);
+      // Into the fragment, NOT into the live table. Nothing the player can
+      // see changes until every seat has been built successfully.
+      seatFrag.appendChild(seatEl);
     });
+
+    // ------------------------------------------------------------------
+    // THE SWAP. This is the whole point of the fragment above.
+    //
+    // Old seats are removed and new ones attached in the same tick, after
+    // all the work that could fail has already succeeded. Three failure
+    // modes stop mattering as a result:
+    //
+    //   - latestRoom momentarily falsy  -> early return, old table stays
+    //   - zero seats resolved           -> early return, old table stays
+    //   - anything above throws         -> we never reach here, old table stays
+    //
+    // Previously the removal was the FIRST statement in this function, so
+    // all three left an empty oval with the open card still updating on
+    // top of it -- the 25 Sept video. A table one state stale is vastly
+    // better than no table.
+    //
+    // NOTE: removing here rather than at the top is also what stops seats
+    // accumulating. An earlier half-finished version of this fix deleted
+    // the removal without wiring up the fragment, which silently appended
+    // a fresh set of seats on top of the old ones on EVERY state push.
+    // ------------------------------------------------------------------
+    oval.querySelectorAll('.seat').forEach((el) => el.remove());
+    oval.appendChild(seatFrag);
 
     reopenPlayerActionPopoverIfNeeded(oval);
   }
