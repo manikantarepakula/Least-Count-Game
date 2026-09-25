@@ -876,15 +876,16 @@
     // that scales with how many cards are actually moving, so drawing 1
     // penalty card sounds like a single flick and drawing 6 (a big +2 chain
     // penalty) sounds like a real handful being pulled off the stock.
-    function cardRiffle(count) {
+    function cardRiffle(count, gainScale) {
       count = Math.max(1, count || 1);
+      const gs = gainScale === undefined ? 1 : gainScale;
       const n = Math.min(count, 8); // cap the sound even if the draw itself is huge
       for (let i = 0; i < n; i++) {
         const delay = (i / n) * (0.1 + n * 0.02) + Math.random() * 0.015;
         noiseBurst({
           duration: 0.04, filterType: 'bandpass',
           freqStart: 3200 + Math.random() * 1400, freqEnd: 1800, q: 1.5,
-          gain: 0.38, delay, wet: 0.24,
+          gain: 0.38 * gs, delay, wet: gs < 1 ? 0.55 : 0.24,
         });
       }
     }
@@ -1122,16 +1123,56 @@
         }));
       },
 
-      // Penalty. Deliberately DESCENDING -- picking up cards is the bad
-      // outcome in this game and the sound should agree with that. The
-      // riffle scales with the count, so +6 genuinely sounds worse than +2.
-      penaltyDraw(count) {
+      // ------------------------------------------------------------------
+      // Penalty draw, WITH VALENCE.
+      //
+      // The old version knew only how many cards arrived, so dumping three
+      // 10s and drawing a 2 (an excellent turn) sounded exactly like
+      // shedding a 3 and drawing a King (a terrible one). Same cue, opposite
+      // feelings -- which is precisely the complaint.
+      //
+      // `band` is decided by the caller from the net change in hand points
+      // (see penaltyValence() further down). The riffle is common to all
+      // bands -- cards physically arrive either way -- and the VERDICT is a
+      // tonal phrase that lands just after it. Rising means you came out
+      // ahead, falling means you didn't.
+      //
+      // Defaults to 'neutral' if no band is passed, so nothing breaks.
+      // ------------------------------------------------------------------
+      penaltyDraw(count, band) {
         safe(() => play('penaltyDraw', () => {
           const n = Math.max(1, count || 1);
           cardRiffle(n);
-          const span = Math.min(n, 8) * 0.045;
-          blip(560, 330, 0.3, { gain: 0.13, delay: span, wet: 0.4 });
-          thump(140, 0.22, 0.14, span + 0.02);
+          const t = Math.min(n, 8) * 0.045;   // verdict lands after the riffle
+          switch (band) {
+            case 'jackpot':
+              // Drew a Joker or this round's wild rank -- worth zero points.
+              // You shed real value and picked up nothing. The one "penalty"
+              // that is genuinely good news, and it should sound like it.
+              blip(660, 990, 0.16, { gain: 0.14, delay: t, wet: 0.4 });
+              sparkle(4, 1180, 0.085, t + 0.1);
+              break;
+            case 'good':
+              blip(523, 784, 0.22, { gain: 0.13, delay: t, wet: 0.4 });
+              sparkle(2, 1046, 0.06, t + 0.14);
+              break;
+            case 'bad':
+              blip(520, 300, 0.32, { gain: 0.14, delay: t, wet: 0.4 });
+              thump(140, 0.24, 0.15, t + 0.02);
+              break;
+            case 'brutal':
+              // Reserved for a big net loss, or any multi-card +2 chain
+              // penalty. Two falling layers and a double thump so it reads
+              // as heavier than 'bad' rather than merely lower.
+              blip(420, 190, 0.5, { gain: 0.16, delay: t, wet: 0.45 });
+              blip(210, 130, 0.55, { gain: 0.1, delay: t + 0.05, type: 'sawtooth', wet: 0.35 });
+              thump(120, 0.4, 0.2, t + 0.02);
+              thump(100, 0.3, 0.14, t + 0.22);
+              break;
+            default: // neutral -- roughly a fair swap
+              blip(560, 430, 0.26, { gain: 0.12, delay: t, wet: 0.4 });
+              thump(150, 0.2, 0.12, t + 0.02);
+          }
         }));
       },
 
@@ -1178,8 +1219,189 @@
           thump(160, 0.4, 0.16, 0.36);
         }));
       },
+
+      // ==================================================================
+      // OTHER PLAYERS' MOVES
+      //
+      // Until now only YOUR actions made any sound. In a six-player game
+      // that means five of every six events at the table were silent --
+      // the opponent's card visibly flew to the pile making no noise at
+      // all. That is the single biggest reason the audio felt patchy.
+      //
+      // These are the same sounds as your own, but quieter and much wetter.
+      // More reverb with less direct signal is how the ear judges distance,
+      // so an opponent's discard lands as "across the table" rather than
+      // "in my hands" -- you can tell whose turn it just was without
+      // looking up, and your own moves stay unambiguously front and centre.
+      // ==================================================================
+      opponentDiscard() {
+        safe(() => play('opponentDiscard', () => {
+          const p = rnd(0.94, 1.06);
+          swoosh({ duration: 0.11, from: 4200, to: 900, gain: 0.075, wet: 0.6 });
+          cardSnap({ gain: 0.26 });
+          blip(820 * p, 500 * p, 0.12, { gain: 0.042, delay: 0.015, wet: 0.6 });
+        }));
+      },
+
+      // No valence here, and it isn't an oversight: the server only tells
+      // you privately what YOU drew. For everyone else it broadcasts the
+      // count and nothing more, so the value of their card is genuinely
+      // unknown to this client. Making it valenced needs a server change.
+      opponentDraw(count) {
+        safe(() => play('opponentDraw', () => {
+          cardRiffle(Math.max(1, count || 1), 0.4);
+        }));
+      },
+
+      // ==================================================================
+      // MOVES THAT USED TO BE SILENT
+      // ==================================================================
+
+      // Playing a 2 to push the chain on to the next player. The most
+      // aggressive thing you can do in this game, and it made no sound
+      // whatsoever. Rising and biting -- the mirror of chainAlert(), which
+      // is what the victim hears.
+      chainTwoPlay() {
+        safe(() => play('chainTwoPlay', () => {
+          cardSnap({ gain: 0.55 });
+          blip(330, 620, 0.26, { gain: 0.15, delay: 0.02, type: 'sawtooth', wet: 0.3 });
+          blip(660, 990, 0.18, { gain: 0.08, delay: 0.1, wet: 0.45 });
+        }));
+      },
+
+      // Giving up and accepting the +2/+4/+6. Fires on the TAP, so the
+      // button responds immediately; the cards themselves arrive a moment
+      // later with their own (always brutal) penaltyDraw. Resigned, heavy,
+      // no tonal rise at all.
+      takePenalty() {
+        safe(() => play('takePenalty', () => {
+          thump(190, 0.2, 0.2, 0);
+          blip(300, 180, 0.3, { gain: 0.12, delay: 0.02, type: 'triangle', wet: 0.35 });
+        }));
+      },
+
+      // Somebody is out of the game. Heavier and lower when it's you.
+      eliminated(isMe) {
+        safe(() => play('eliminated', () => {
+          const g = isMe ? 1 : 0.5;
+          const base = isMe ? 330 : 392;
+          warmSeq([[base, 0.3, 0, 0.19 * g, 'triangle'], [base * 0.75, 0.42, 0.18, 0.18 * g, 'triangle']]);
+          blip(base * 0.5, base * 0.32, 0.6, { gain: 0.12 * g, delay: 0.1, type: 'sawtooth', wet: 0.4 });
+          if (isMe) thump(110, 0.5, 0.18, 0.3);
+        }));
+      },
+
+      // One tick per card during the deal. Thirteen passes around the table
+      // used to happen in total silence. Pitch climbs slightly as the deal
+      // progresses so the sequence has a shape and an obvious ending,
+      // instead of being 78 identical clicks.
+      dealTick(i, total) {
+        safe(() => play('dealTick', () => {
+          const t = total ? Math.min(1, i / total) : 0;
+          cardSnap({ gain: 0.13 + t * 0.05 });
+          blip(520 + t * 260, 620 + t * 300, 0.05, { gain: 0.03, wet: 0.5 });
+        }));
+      },
+
+      // Quiet, high and short. Chat must never compete with the table.
+      chatMessage() {
+        safe(() => play('chatMessage', () => {
+          blip(880, 1170, 0.07, { gain: 0.055, wet: 0.45 });
+          blip(1170, 1170, 0.09, { gain: 0.04, delay: 0.06, wet: 0.5 });
+        }));
+      },
+
+      // Pairs with the existing 5-second vibration. Haptics alone reached
+      // only the players whose phones vibrate -- a phone on loud-with-
+      // vibration-off got no warning at all, and one on silent got no
+      // sound. Two channels, so the warning actually lands either way.
+      timerWarning() {
+        safe(() => play('timerWarning', () => {
+          blip(980, 980, 0.07, { gain: 0.13, type: 'square', wet: 0.2 });
+          blip(980, 980, 0.07, { gain: 0.13, delay: 0.14, type: 'square', wet: 0.2 });
+        }));
+      },
     };
   })();
+
+  // ------------------------------------------------------------------
+  // PENALTY VALENCE
+  //
+  // A penalty draw is not one feeling. Shedding three 10s and picking up a
+  // 2 is a great turn; shedding a single 3 and picking up a King is a
+  // miserable one. Both currently cost you exactly one penalty card, and
+  // both used to make exactly the same noise.
+  //
+  // What actually matters is the NET change in your hand's point total:
+  //
+  //     net = (points drawn) - (points discarded)
+  //
+  // Negative is good (your hand got lighter), positive is bad. This also
+  // correctly rewards the big play: releasing three 10s for one penalty
+  // card is a huge negative swing and should sound like a triumph.
+  //
+  // Jokers and the round's wild rank are worth ZERO, so drawing one is the
+  // best possible outcome -- you gave up real points and took on none.
+  // That gets its own band rather than being lumped in with "good".
+  // ------------------------------------------------------------------
+  function cardPoints(card, jokerRank) {
+    if (!card) return 0;
+    if (card.rank === 'JOKER') return 0;
+    if (jokerRank && card.rank === jokerRank) return 0;
+    if (card.rank === 'A') return 1;
+    if (card.rank === 'J' || card.rank === 'Q' || card.rank === 'K') return 10;
+    const n = parseInt(card.rank, 10);
+    return isNaN(n) ? 0 : n;   // never NaN -- a NaN here would poison every comparison below
+  }
+
+  // What the player just put down, remembered only long enough to compare
+  // it against what comes back. Cleared after use and time-limited, so a
+  // stale discard can never be paired with an unrelated later draw.
+  let lastDiscardInfo = null;
+  const DISCARD_PAIRING_MS = 6000;
+
+  function noteDiscardForValence(cards, jokerRank) {
+    if (!cards || !cards.length) { lastDiscardInfo = null; return; }
+    lastDiscardInfo = {
+      points: cards.reduce((s, c) => s + cardPoints(c, jokerRank), 0),
+      at: Date.now(),
+    };
+  }
+
+  function penaltyValence(drawnCards, jokerRank) {
+    const cards = drawnCards || [];
+    if (!cards.length) return 'neutral';
+
+    // Multi-card draws are ALWAYS a +2 chain penalty, and a chain penalty is
+    // always bad news regardless of arithmetic: you take cards and give up
+    // nothing in exchange, so there is no trade to evaluate.
+    if (cards.length > 1) return 'brutal';
+
+    const drawnPts = cardPoints(cards[0], jokerRank);
+
+    // A zero-point card (Joker or this round's wild rank) is a free card.
+    // Worth calling out even when you discarded almost nothing for it.
+    if (drawnPts === 0) return 'jackpot';
+
+    // No paired discard -- e.g. taking the penalty outright, or the draw
+    // arriving late enough that pairing it would be a guess. Judge the card
+    // on its own merits instead of inventing a comparison.
+    const fresh = lastDiscardInfo && (Date.now() - lastDiscardInfo.at) < DISCARD_PAIRING_MS;
+    if (!fresh) return drawnPts >= 10 ? 'bad' : 'neutral';
+
+    const net = drawnPts - lastDiscardInfo.points;
+    lastDiscardInfo = null;   // consume it: one discard pairs with one draw
+
+    // Thresholds are deliberately SYMMETRIC around zero. An earlier cut had
+    // 'good' at net <= -8, which made "discard a 10, draw a 4" (net -6) come
+    // out neutral even though "discard a 4, draw a 10" (net +6) came out bad
+    // -- the exact pair of moves that has to sound opposite. Mirror them.
+    if (net <= -15) return 'jackpot';  // a huge swing: dumped a big group, took back almost nothing
+    if (net <= -3) return 'good';      // came out ahead
+    if (net < 3) return 'neutral';     // roughly a fair swap
+    if (net < 12) return 'bad';        // the 4-for-a-10 case
+    return 'brutal';
+  }
 
   // ------------------------------------------------------------------
   // The intro splash is dismissed by a CSS animation ALONE (introFadeOut,
@@ -1755,6 +1977,10 @@
       const p = players[flight % players.length];
       const seatEl = seatFor(p.playerId);
       if (!seatEl) { flight += 1; flyNext(); return; }
+      // One tick per card. Thirteen passes around the table used to play
+      // out in complete silence, which is a long, conspicuously dead
+      // opening to every single round.
+      Sound.dealTick(flight, totalFlights);
       const to = centerOf(seatEl);
       const travelMs = flightMs * 0.7;
       flyer.style.transition = `left ${travelMs}ms ease, top ${travelMs}ms ease`;
@@ -4612,6 +4838,12 @@
       if (!res.ok) setGameError(res.error);
       else setGameError('');
     });
+    // Pushing the +2 chain on to the next player is the most aggressive
+    // move in the game and it made no sound at all. Emit first, as always.
+    try {
+      lastDiscardInfo = null;   // a chain 2 draws nothing back; no pairing
+      Sound.chainTwoPlay();
+    } catch (e) { /* never worth a turn */ }
   }
 
   document.getElementById('btn-discard').onclick = () => {
@@ -4640,6 +4872,16 @@
     // a missing element, an audio context the OS refused, anything -- is
     // logged and forgotten rather than propagating into the turn.
     try {
+      // Remember what just left the hand, so that when the penalty card
+      // comes back we can tell a good trade from a bad one. Must happen
+      // here, while yourHand still holds the cards -- the next state push
+      // removes them. Inside the flourish try/catch: if this ever fails the
+      // sound simply falls back to neutral, it can never cost a turn.
+      const handNow = (latestGame && latestGame.yourHand) || [];
+      noteDiscardForValence(
+        handNow.filter((c) => ids.indexOf(c.id) !== -1),
+        latestGame && latestGame.roundJokerRank
+      );
       Sound.discard();
       const first = document.querySelector('#hand .card.selected') || document.querySelector('#hand .card');
       const to = openCardSlotRect();
@@ -4669,6 +4911,15 @@
     socket.emit('play_turn', { roomCode: myRoomCode, cardIds: [] }, (res) => {
       if (!res.ok) setGameError(res.error);
     });
+    // Accepting the +2/+4/+6 used to be completely silent: you tapped a
+    // button, nothing acknowledged it, and the cards appeared a beat later.
+    // Nothing is being given up here, so there is no trade to weigh --
+    // clear any remembered discard so the incoming draw is judged on its
+    // own (it will be 'brutal' anyway, being multi-card).
+    try {
+      lastDiscardInfo = null;
+      Sound.takePenalty();
+    } catch (e) { /* never worth a turn */ }
   };
 
   document.getElementById('btn-show-hint').onclick = () => {
@@ -6309,6 +6560,9 @@
   })();
   socket.on('chat_message', (msg) => {
     if (isMuted(msg.playerId)) return; // muted -- skip both the panel message and the seat bubble
+    // Quiet tick for incoming chat. Skipped for your own messages (you just
+    // typed it, you don't need telling) so a busy table doesn't double up.
+    if (msg.playerId !== myPlayerId) Sound.chatMessage();
     appendChatMessage(msg);
     // Speech bubble at the sender's seat, in addition to the panel above --
     // only meaningful once seats actually exist (mid-game), not lobby chat.
@@ -6485,6 +6739,11 @@
     if (secondsLeft <= 5 && secondsLeft > 0 && timerBuzzArmed) {
       timerBuzzArmed = false;
       buzz([25, 60, 25]);
+      // Sound as well as vibration. Vibration alone reached only the
+      // players whose phone vibrates: someone on loud-with-vibration-off
+      // got no warning at all, and someone on silent got no sound. Two
+      // channels means the warning lands either way.
+      Sound.timerWarning();
     }
   }
 
@@ -6527,6 +6786,11 @@
     const sameRound = prev.roundNumber === game.roundNumber;
     if (openChanged && sameRound && !game.roundOver
         && prev.currentPlayer && prev.currentPlayer !== myPlayerId) {
+      // An opponent's discard now makes a sound as well as a movement.
+      // Until this line, every move made by anyone other than you was
+      // completely silent -- in a six-player game that is five out of every
+      // six events at the table.
+      Sound.opponentDiscard();
       const from = seatRectFor(prev.currentPlayer);
       const to = openCardSlotRect();
       if (from && to) {
@@ -6537,13 +6801,42 @@
       }
     }
 
-    // ---- a +2 penalty landed on you ----
-    // One of exactly two things that vibrate. This is the moment the game
-    // does something TO you that costs points, so it earns the interruption.
-    if (game.lastDraw && game.lastDraw.playerId === myPlayerId
-        && (!prev.lastDraw || prev.lastDraw !== game.lastDraw)) {
-      const drawn = (game.lastDraw.cards || []).length;
-      if (drawn > 0) buzz(drawn > 1 ? [40, 70, 40] : 40);
+    // ------------------------------------------------------------------
+    // ---- somebody ELSE picked cards up ----
+    //
+    // NOTE, and this is a real bug being fixed here: this block used to
+    // read game.lastDraw and vibrate on a +2 penalty. But lastDraw is NOT
+    // part of getPublicState() -- it only ever existed engine-side so the
+    // server could privately emit 'cards_drawn' to the one player affected.
+    // game.lastDraw is therefore permanently undefined on the client, and
+    // this condition has never once been true. The +2 vibration has never
+    // fired for anybody. Your own draw now buzzes from showDrawReveal(),
+    // which is driven by the 'cards_drawn' event that genuinely arrives.
+    //
+    // For OTHER players there is no draw event at all -- but handCounts is
+    // public, and a hand that grew between two states means that player
+    // drew exactly that many cards. That is the signal used here.
+    // ------------------------------------------------------------------
+    const counts = game.handCounts || {};
+    const prevCounts = prev.handCounts || {};
+    if (prev.roundNumber === game.roundNumber && !game.roundOver) {
+      let opponentDrew = 0;
+      Object.keys(counts).forEach((pid) => {
+        if (pid === myPlayerId) return;
+        const grew = (counts[pid] || 0) - (prevCounts[pid] || 0);
+        if (grew > 0) opponentDrew = Math.max(opponentDrew, grew);
+      });
+      // One sound for the table, not one per player -- a reshuffle or a
+      // rejoin can move several counts at once and we don't want a pile-up.
+      if (opponentDrew > 0) Sound.opponentDraw(opponentDrew);
+    }
+
+    // ---- somebody is out ----
+    const outNow = game.eliminated || [];
+    const outBefore = prev.eliminated || [];
+    if (outNow.length > outBefore.length) {
+      const justOut = outNow.filter((id) => outBefore.indexOf(id) === -1);
+      if (justOut.length) Sound.eliminated(justOut.indexOf(myPlayerId) !== -1);
     }
     } catch (e) {
       console.warn('[fx] table flourish failed (state still applied):', e && e.message);
@@ -6590,7 +6883,13 @@
       return;
     }
 
-    Sound.penaltyDraw(cards.length);
+    // The verdict, not just the count. penaltyValence() weighs what you
+    // gave up against what you got back -- see its comment block.
+    Sound.penaltyDraw(cards.length, penaltyValence(cards, latestGame && latestGame.roundJokerRank));
+    // The haptic belongs here, not in the state-diff handler: this event
+    // ('cards_drawn') is the only signal that actually tells a client it
+    // drew cards. See the note in playSoundsForTransition().
+    try { buzz(cards.length > 1 ? [40, 70, 40] : 40); } catch (e) { /* no haptics, no matter */ }
     const overlay = document.getElementById('draw-reveal');
     const container = document.getElementById('draw-reveal-cards');
     const label = document.getElementById('draw-reveal-label');
