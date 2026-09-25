@@ -6257,6 +6257,19 @@
     PACK.loaded = true;
     console.log('[avatars] pack active: ' + PACK.order.length + ' avatars'
       + (Object.keys(PACK.bots).length ? ', bot mapping on' : ', no bot mapping'));
+    // Anyone who picked a robot before bot art was hidden from the picker
+    // still has that id stored, and would keep looking like a bot forever
+    // with no way to see why. Drop it back to initials so the next tap in
+    // the picker gives them a real choice.
+    try {
+      const botArt = new Set(Object.keys(PACK.bots).map((k) => PACK.bots[k]));
+      if (myAvatar && botArt.has(myAvatar)) {
+        myAvatar = null;
+        try { localStorage.removeItem('leastcount_avatar'); } catch (e) { /* session only */ }
+        if (myRoomCode) socket.emit('set_avatar', { roomCode: myRoomCode, avatar: null }, () => {});
+      }
+    } catch (e) { /* not worth failing the pack load over */ }
+
     // Anything already on screen was drawn with built-ins; redraw it.
     try {
       renderAvatarPicker();
@@ -6268,8 +6281,22 @@
   }
 
   // The list the picker offers: pack art when installed, built-ins otherwise.
+  //
+  // BOT ARTWORK IS EXCLUDED. A pack ships robot faces for the bots, and if
+  // those appear in the picker a human can choose one and become visually
+  // indistinguishable from a bot at the table -- which breaks the one thing
+  // a seat has to tell you at a glance. Bots still render theirs; they are
+  // simply not offered.
+  //
+  // Worked out from the manifest's own "bots" mapping rather than a name
+  // prefix, so it stays correct whatever a pack calls its files.
   function selectableAvatarIds() {
-    return PACK.loaded ? PACK.order : AVATAR_IDS;
+    if (!PACK.loaded) return AVATAR_IDS;
+    const botArt = new Set(Object.keys(PACK.bots).map((k) => PACK.bots[k]));
+    const human = PACK.order.filter((id) => !botArt.has(id));
+    // If a pack maps EVERY avatar to a bot, offering nothing would leave the
+    // picker empty and look broken. Fall back to the full list in that case.
+    return human.length ? human : PACK.order;
   }
 
   // Up to two initials from a name. Pulled out of avatarEl so the img
@@ -7139,7 +7166,9 @@
   function refreshHapticsToggle() {
     const b = document.getElementById('btn-haptics-toggle');
     if (!b) return;
-    b.textContent = hapticsOn ? 'On' : 'Off';
+    // No text: the control is now a switch, and its knob position IS the
+    // state. Writing textContent here would wipe out the knob element.
+    // role="switch" + aria-checked is what a screen reader reads.
     b.setAttribute('aria-checked', hapticsOn ? 'true' : 'false');
     b.classList.toggle('on', hapticsOn);
   }
