@@ -1374,6 +1374,11 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 /* The seat has to be allowed to grow downward now that it carries cards. */
 .seat.revealing { z-index: 8; }
 .seat.revealing .seat-chip { padding-bottom: 4px; }
+/* Anchor by edge, not centre, while a panel is open. A centred seat grows
+   in both directions, which sent the top seat's panel up into the round
+   number in the header. These keep growth pointed inward. */
+.seat.revealing.grow-down { transform: translate(-50%, 0); }
+.seat.revealing.grow-up   { transform: translate(-50%, -100%); }
 .seat-reveal-box.declared { border: 2px solid var(--gold); }
 .seat-reveal-tag {
   font-size: 7px; color: var(--gold-bright); font-weight: 700; letter-spacing: 0.04em;
