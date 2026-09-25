@@ -4341,6 +4341,53 @@
   // of the table, so it needs the seat's pixel width to convert.
   const SEAT_WIDTH_PX = 96;
 
+  // ------------------------------------------------------------------
+  // SEAT-RENDER WATCHDOG (25 Sept)
+  //
+  // A player reported the table emptying mid-game and STAYING empty until
+  // the app was restarted, while the open card kept updating. Sticky is
+  // the important word: a one-off exception repairs itself on the next
+  // state push, so something was wrong with client state rather than with
+  // one render.
+  //
+  // Swapping the seats in at the end (below) means a bail now leaves the
+  // previous table on screen instead of a blank one -- better, but a table
+  // frozen one state behind is still wrong. This does two more things:
+  //
+  //  1. Says WHY it bailed, with the data, so the next report identifies
+  //     the trigger instead of us guessing from a video.
+  //  2. Asks the server for fresh room state if it keeps bailing, so the
+  //     player is not stuck until they think to restart the app.
+  //
+  // Deliberately conservative: three consecutive bails before acting, and
+  // at most one resync every 15s, because syncWithServer() can decide the
+  // session is dead and return you to the landing screen. Firing that on a
+  // single transient bail would be far worse than a stale table.
+  // ------------------------------------------------------------------
+  let seatRenderBails = 0;
+  let lastSeatResyncAt = 0;
+  const SEAT_BAIL_LIMIT = 3;
+  const SEAT_RESYNC_COOLDOWN_MS = 15000;
+
+  function noteSeatRenderBail(reason, game, extra) {
+    seatRenderBails += 1;
+    console.warn('[table] seat render bailed (' + seatRenderBails + '): ' + reason, {
+      roundOver: !!(game && game.roundOver),
+      turnOrderLength: (game && game.turnOrder && game.turnOrder.length) || 0,
+      roomPlayers: (latestRoom && latestRoom.players && latestRoom.players.length) || 0,
+      inRoom: !!myRoomCode,
+      ...(extra || {}),
+    });
+    if (seatRenderBails < SEAT_BAIL_LIMIT || !myRoomCode) return;
+    const now = Date.now();
+    if (now - lastSeatResyncAt < SEAT_RESYNC_COOLDOWN_MS) return;
+    lastSeatResyncAt = now;
+    console.warn('[table] asking the server for fresh room state');
+    try { syncWithServer(); } catch (e) {
+      console.warn('[table] resync failed:', e && e.message);
+    }
+  }
+
   function renderOvalTable(game, orderOverride) {
     const oval = document.getElementById('oval-table');
     // ------------------------------------------------------------------
@@ -4363,7 +4410,7 @@
     // state stale is vastly better than no table at all.
     // ------------------------------------------------------------------
     renderRevealBanner(game);
-    if (!latestRoom) return;
+    if (!latestRoom) { noteSeatRenderBail('no room state', game); return; }
     const seatFrag = document.createDocumentFragment();
 
     const dealing = !!orderOverride;
@@ -4375,7 +4422,15 @@
     const rotatedIds = meIdx > 0 ? [...orderIds.slice(meIdx), ...orderIds.slice(0, meIdx)] : orderIds.slice();
     const seatOrder = rotatedIds.map((id) => playerById.get(id)).filter(Boolean);
     const n = seatOrder.length;
-    if (n === 0) return;
+    if (n === 0) {
+      // The room's player list and the game's turn order have diverged, so
+      // not one seat resolved. This is the sticky failure: the list stays
+      // wrong, every later render bails here too, and the centre cards keep
+      // updating on a table that never repaints.
+      noteSeatRenderBail('no seats resolved', game, { orderIds, known: [...playerById.keys()] });
+      return;
+    }
+    seatRenderBails = 0;   // a good render clears the counter
 
     // ------------------------------------------------------------------
     // Fluid table furniture (Sept 2026).
