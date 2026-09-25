@@ -2168,10 +2168,22 @@
       const p = players[flight % players.length];
       const seatEl = seatFor(p.playerId);
       if (!seatEl) { flight += 1; flyNext(); return; }
-      // Called on every flight, but Sound.dealTick() throttles itself down
-      // to a dealer's pace -- see the comment on the cue. Do NOT move the
-      // rate limiting up here: mid-sequence rejoins re-enter this loop.
-      Sound.dealTick();
+      // NO SOUND PER CARD -- deliberately, after two attempts.
+      //
+      // First cut played a cue on every flight: 11 per second, 78 of them
+      // in a six-player deal. Second cut throttled it to a dealer's pace
+      // (~4.5/s) and stripped the pitched layer. Both still read as
+      // clicking rather than dealing.
+      //
+      // The reason is structural, not a tuning problem: this animation
+      // deals 13 passes in one uninterrupted burst, which no real deal
+      // does. A per-card sound faithfully tracking that is going to sound
+      // like a machine whatever its rate or timbre. The deal is now
+      // bracketed by sound instead -- a riffle as it starts, a settle as it
+      // ends -- and silent in between.
+      //
+      // Sound.dealTick() still exists and is self-throttling if this is
+      // ever worth revisiting; re-enabling is this one line.
       const to = centerOf(seatEl);
       const travelMs = flightMs * 0.7;
       flyer.style.transition = `left ${travelMs}ms ease, top ${travelMs}ms ease`;
