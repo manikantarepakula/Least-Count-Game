@@ -190,13 +190,40 @@ function cleanPlatform(p) {
 // The list must stay in step with AVATARS in public/app.js. It's short and
 // changes rarely, so a shared constant isn't worth a build step for it.
 // --------------------------------------------------------------------------
+// The built-in set. Still here as the fallback for clients with no avatar
+// pack installed, and as the pool bots draw from when the client hasn't
+// told us about any others.
 const AVATAR_IDS = ['fox', 'owl', 'cat', 'panda', 'tiger', 'frog', 'bear', 'monkey', 'penguin', 'rabbit'];
+
+// --------------------------------------------------------------------------
+// Avatar ids are VALIDATED BY SHAPE, not by membership of a list.
+//
+// This used to be `AVATAR_IDS.includes(a) ? a : null`, which meant the
+// server silently discarded any id it didn't already know. Adding an avatar
+// was therefore a two-sided change -- drop the artwork in, AND edit and
+// redeploy the server -- and if you forgot the second half, players would
+// pick a new avatar, see it apply locally, and find it gone for everyone
+// else. A confusing failure with no error anywhere.
+//
+// The id is never interpreted here: it is stored, broadcast, and used by
+// the client to look up a file. So the only things the server actually
+// needs to guarantee are that it is short, and that it cannot be used to
+// escape a path or inject markup on the way back out. A conservative
+// character class does both, and lets a new avatar be a pure file drop.
+// --------------------------------------------------------------------------
+const AVATAR_ID_RE = /^[a-z0-9][a-z0-9_-]{0,23}$/;
 function cleanAvatar(a) {
-  return AVATAR_IDS.includes(a) ? a : null;
+  if (typeof a !== 'string') return null;
+  const v = a.trim().toLowerCase();
+  return AVATAR_ID_RE.test(v) ? v : null;
 }
 // Bots get a stable face too, spread across the set so a solo table doesn't
 // show four of the same one. Keyed off the bot's number, not randomness, so
 // the same bot looks the same for the whole game.
+//
+// Bots stay on the built-in ids: the server has no idea which files a given
+// client has, and a bot pointing at a missing avatar would render as a gap.
+// The client maps these onto pack art when a pack is installed.
 function botAvatar(i) {
   return AVATAR_IDS[(i * 3) % AVATAR_IDS.length];
 }
