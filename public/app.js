@@ -4378,6 +4378,23 @@
       const halfSeatPct = (seatW / 2) / tableW * 100;
       seatEl.style.left = Math.min(100 - halfSeatPct, Math.max(halfSeatPct, left)) + '%';
       seatEl.style.top = top + '%';
+      // ------------------------------------------------------------------
+      // Seats are centred on their point, so ANY extra content makes them
+      // grow upward as much as downward. The seat at the top of the table
+      // now carries four rows -- name, card fan, points, last discard --
+      // and its top edge reaches into the round number in the header.
+      //
+      // This was first hit by the round-end reveal panel and fixed only for
+      // that case, which was too narrow: the seat is already tall enough
+      // during ordinary play to collide. Anchoring the top seat by its TOP
+      // edge is unconditional, so it can never grow toward the header in
+      // any phase of the game.
+      //
+      // Only the top band is anchored. Bottom seats grow toward the hand
+      // tray, which has clearance during play and is handled separately
+      // while a reveal panel is open.
+      // ------------------------------------------------------------------
+      if (top < 30) seatEl.classList.add('anchor-top');
 
       // Tap a seat to report/mute that player -- never wired for yourself
       // or for bots (nothing to report/mute there). Edge seats get an
@@ -4547,8 +4564,10 @@
           // the top of the table that pushed its edge into the Round
           // number in the header. Anchoring by edge instead means a panel
           // only ever grows toward the middle of the screen, never off it.
-          if (top < 30) seatEl.classList.add('grow-down');
-          else if (top > 70) seatEl.classList.add('grow-up');
+          // Top seats are already anchored unconditionally above; only the
+          // bottom band needs flipping while a panel is open, so a tall
+          // hand doesn't push the panel down into the hand tray.
+          if (top > 70) seatEl.classList.add('grow-up');
         }
       }
 
@@ -6177,6 +6196,102 @@
   };
   const AVATAR_IDS = Object.keys(AVATARS);
 
+  // ==================================================================
+  // AVATAR PACK (Sept 2026)
+  //
+  // The ten built-in faces above are hand-drawn SVG paths and read as a
+  // children's app -- wrong for an 18-35 audience. Rather than redrawing
+  // them blind, this loads real artwork from public/avatars/ when it is
+  // present, and keeps the built-ins as the fallback when it isn't.
+  //
+  // Install: drop image files into public/avatars/ and list them in
+  // public/avatars/manifest.json. No code change, and no SERVER change
+  // either -- avatar ids are now validated by shape rather than against a
+  // hardcoded list, so a new avatar is a pure file drop.
+  //
+  // Manifest shape:
+  //   { "avatars": [ { "id": "px01", "file": "px01.svg", "label": "Scout" } ],
+  //     "bots": { "fox": "px03", "owl": "px07" } }
+  //
+  // "bots" is optional and maps the built-in ids the SERVER assigns to bots
+  // onto pack art. The server can't know which files a client has, so it
+  // keeps sending built-in ids for bots; without this mapping bots would
+  // keep their cartoon animals while humans had pixel art, which would look
+  // like a bug rather than a mixed set.
+  // ==================================================================
+  const PACK = { byId: Object.create(null), order: [], bots: Object.create(null), loaded: false };
+
+  async function loadAvatarPack() {
+    if (!window.fetch) return;
+    let m = null;
+    try {
+      const res = await fetch('avatars/manifest.json', { cache: 'force-cache' });
+      if (!res.ok) return;                 // no pack installed -- built-ins stand
+      m = await res.json();
+    } catch (e) {
+      return;                               // offline, or malformed JSON
+    }
+    const list = m && Array.isArray(m.avatars) ? m.avatars : [];
+    list.forEach((a) => {
+      // Same id rule the server enforces. A manifest is authored by hand,
+      // so it WILL contain typos; anything that wouldn't survive the server
+      // is dropped here rather than being picked and then silently lost for
+      // everyone else at the table.
+      if (!a || typeof a.id !== 'string' || typeof a.file !== 'string') return;
+      const id = a.id.trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9_-]{0,23}$/.test(id)) {
+        console.warn('[avatars] skipping unusable id:', a.id);
+        return;
+      }
+      if (PACK.byId[id]) return;            // first definition wins
+      PACK.byId[id] = { file: a.file, label: typeof a.label === 'string' ? a.label : '' };
+      PACK.order.push(id);
+    });
+    if (m && m.bots && typeof m.bots === 'object') {
+      Object.keys(m.bots).forEach((k) => {
+        const v = m.bots[k];
+        if (typeof v === 'string' && PACK.byId[v]) PACK.bots[k] = v;
+      });
+    }
+    if (!PACK.order.length) return;
+    PACK.loaded = true;
+    console.log('[avatars] pack active: ' + PACK.order.length + ' avatars'
+      + (Object.keys(PACK.bots).length ? ', bot mapping on' : ', no bot mapping'));
+    // Anything already on screen was drawn with built-ins; redraw it.
+    try {
+      renderAvatarPicker();
+      if (latestGame) renderOvalTable(latestGame);
+      if (latestRoom) renderLobby(latestRoom);
+    } catch (e) {
+      console.warn('[avatars] redraw after pack load failed:', e && e.message);
+    }
+  }
+
+  // The list the picker offers: pack art when installed, built-ins otherwise.
+  function selectableAvatarIds() {
+    return PACK.loaded ? PACK.order : AVATAR_IDS;
+  }
+
+  // Up to two initials from a name. Pulled out of avatarEl so the img
+  // error path can reuse it rather than duplicating the parsing.
+  //
+  // Deliberately NO unicode property escapes. /[^\p{L}\p{N} ]/gu is a regex
+  // LITERAL, evaluated when this file is PARSED, not when the line runs --
+  // on an Android WebView older than Chrome 64 that means the whole of
+  // app.js fails to parse and the app is a white screen.
+  //
+  // Array.from() splits by code point rather than UTF-16 unit, so a name
+  // starting with an emoji or a non-BMP character yields that whole
+  // character instead of half a surrogate pair. Non-Latin scripts get their
+  // own initial, which is right for Telugu names.
+  function initialsFor(name) {
+    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    return parts.slice(0, 2)
+      .map((w) => Array.from(w)[0] || '')
+      .join('')
+      .toUpperCase() || '?';
+  }
+
   // Renders one avatar at a given pixel size. Returns an element, never a
   // string -- these end up next to user-supplied names, and keeping the
   // whole seat built from nodes means no path where a name could be treated
@@ -6187,6 +6302,34 @@
     wrap.className = 'avatar';
     wrap.style.width = size + 'px';
     wrap.style.height = size + 'px';
+
+    // 1. Pack artwork, if a pack is installed and knows this id. Bots are
+    //    sent built-in ids by the server, so they come through the bot
+    //    mapping rather than a direct hit.
+    const packId = (PACK.byId[avatarId] && avatarId) || PACK.bots[avatarId] || null;
+    if (packId) {
+      const img = document.createElement('img');
+      img.className = 'avatar-img';
+      img.alt = '';                 // decorative: the name is right beside it
+      img.decoding = 'async';
+      img.loading = 'lazy';
+      img.width = size;
+      img.height = size;
+      // A file listed in the manifest but missing from the folder would
+      // otherwise leave a broken-image glyph on the seat. Fall back to the
+      // initials treatment instead, which always renders.
+      img.onerror = () => {
+        img.remove();
+        wrap.classList.add('avatar-initials');
+        const h = chatAvatarHue(playerId || name || '');
+        wrap.style.background = `hsl(${h} 45% 42%)`;
+        wrap.textContent = initialsFor(name);
+        wrap.style.fontSize = Math.round(size * 0.42) + 'px';
+      };
+      img.src = 'avatars/' + PACK.byId[packId].file;
+      wrap.appendChild(img);
+      return wrap;
+    }
 
     const a = AVATARS[avatarId];
     if (a) {
@@ -6213,12 +6356,7 @@
     // starting with an emoji or a non-BMP character yields that whole
     // character instead of half a surrogate pair. Non-Latin scripts get
     // their own initial, which is right for Telugu names.
-    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
-    const txt = parts.slice(0, 2)
-      .map((w) => Array.from(w)[0] || '')
-      .join('')
-      .toUpperCase() || '?';
-    wrap.textContent = txt;
+    wrap.textContent = initialsFor(name);
     wrap.style.fontSize = Math.round(size * 0.42) + 'px';
     return wrap;
   }
@@ -6239,11 +6377,14 @@
     const boxes = document.querySelectorAll('[data-avatar-picker]');
     boxes.forEach((box) => {
       box.innerHTML = '';
-      AVATAR_IDS.forEach((id) => {
+      // Pack art when a pack is installed, built-ins otherwise.
+      selectableAvatarIds().forEach((id) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'avatar-choice' + (id === myAvatar ? ' selected' : '');
-        btn.setAttribute('aria-label', id);
+        // A pack can supply a human label; the raw id is a poor screen
+        // reader announcement ("px07").
+        btn.setAttribute('aria-label', (PACK.byId[id] && PACK.byId[id].label) || id);
         btn.setAttribute('aria-pressed', id === myAvatar ? 'true' : 'false');
         btn.appendChild(avatarEl(id, '', '', 40));
         btn.onclick = () => {
@@ -6265,6 +6406,19 @@
     });
   }
   renderAvatarPicker();
+
+  // Kick off the pack load. Deliberately NOT awaited and never allowed to
+  // reject: the app is fully usable on the built-in faces, so a missing or
+  // broken pack must cost nothing but a single 404. When it does land it
+  // redraws the picker and the table itself.
+  try {
+    const packLoad = loadAvatarPack();
+    if (packLoad && packLoad.catch) {
+      packLoad.catch((e) => console.warn('[avatars] pack load failed:', e && e.message));
+    }
+  } catch (e) {
+    console.warn('[avatars] pack load threw:', e && e.message);
+  }
 
   function chatAvatarHue(seed) {
     let h = 0;
