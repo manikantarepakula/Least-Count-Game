@@ -915,35 +915,143 @@
       shuffleBurst(35, 0.4, { gain: 0.16, dur: 0.016, freqSpread: 2500 });
     }
 
-    // ------------------------------------------------------------------
-    // Sample override hook (Sept 2026).
+    // ==================================================================
+    // RECORDED SAMPLES
     //
-    // Every cue below goes through play(name, fallback). If SAMPLES[name]
-    // holds a loaded AudioBuffer it's used; otherwise the synthesised
-    // fallback runs. That means recorded audio can replace any single cue
-    // later -- one at a time, in any order -- without touching a single
-    // call site elsewhere in the app.
+    // Every cue goes through play(name, fallback). If recorded audio has
+    // been loaded for that cue it plays; otherwise the synthesised
+    // fallback runs. So a pack can replace ONE cue or ALL of them, in any
+    // order, and a missing file is never an error -- it just means that
+    // particular cue stays synthesised.
     //
-    // Nothing is loaded today: real card sounds have to be sourced and
-    // licensed, and a half-set of samples mixed with synthesis sounds worse
-    // than either on its own. The seam is here so that work is a drop-in
-    // rather than a rewrite.
-    // ------------------------------------------------------------------
-    const SAMPLES = Object.create(null);
+    // Synthesis got the CHARACTER right (layering, levels, space). What it
+    // can't produce is the TEXTURE of real cardstock -- that needs a
+    // recording. This is the path for that.
+    //
+    // Install: drop files into public/sounds/ and list them in
+    // public/sounds/manifest.json. Nothing else in the app changes.
+    //
+    // Three things this deliberately does:
+    //
+    //  1. VARIANTS. A cue can have several files and picks one at random
+    //     per play. The discard fires hundreds of times a game -- a single
+    //     recorded file repeated identically is far MORE fatiguing than
+    //     synthesis was, because a real recording has no natural jitter.
+    //     This is the most common way a sample pack makes a game worse.
+    //
+    //  2. PER-CUE GAIN. Packs are mastered at wildly different levels.
+    //     Trim in the manifest rather than re-encoding audio.
+    //
+    //  3. THE MASTER BUS. Samples route through the same gain and reverb
+    //     send as the synth (the old code here connected straight to
+    //     ctx.destination, which would have made recorded cues bypass both
+    //     and sit oddly dry and loud next to the synthesised ones).
+    // ==================================================================
+    const SAMPLES = Object.create(null);   // name -> { buffers: [], gain, wet }
+    let samplesReady = false;
+
     function play(name, fallback) {
       if (muted) return;
-      const buf = SAMPLES[name];
-      if (!buf) { fallback(); return; }
+      const entry = SAMPLES[name];
+      if (!entry || !entry.buffers.length) { fallback(); return; }
       const c = ensureCtx();
       if (!c) { fallback(); return; }
       try {
+        const buf = entry.buffers.length === 1
+          ? entry.buffers[0]
+          : entry.buffers[Math.floor(Math.random() * entry.buffers.length)];
         const src = c.createBufferSource();
         const g = c.createGain();
-        g.gain.value = 0.9;
+        g.gain.value = entry.gain;
+        // Small random detune on every play. Costs nothing and is most of
+        // what stops a repeated sample from sounding mechanical.
+        src.playbackRate.value = rnd(0.97, 1.03);
         src.buffer = buf;
-        src.connect(g).connect(c.destination);
+        src.connect(g);
+        if (!routeOut(g, entry.wet)) { fallback(); return; }
         src.start();
-      } catch (e) { fallback(); }
+      } catch (e) {
+        // A decoded buffer that won't play is still better handled by the
+        // synth than by silence.
+        fallback();
+      }
+    }
+
+    // Reads public/sounds/manifest.json, if it exists. Absent manifest =
+    // exactly one 404 and then pure synthesis, forever, silently -- which
+    // is the state the app ships in today.
+    //
+    // Manifest shape:
+    //   { "discard": { "files": ["card_a.wav","card_b.wav"], "gain": 0.9 },
+    //     "opponentDiscard": { "sameAs": "discard", "gain": 0.4, "wet": 0.6 } }
+    //
+    // "sameAs" reuses another cue's already-decoded audio at a different
+    // level -- that is how an opponent's discard becomes the same card at
+    // a distance without shipping the file twice.
+    async function loadSamples() {
+      if (samplesReady) return;
+      samplesReady = true;
+      const c = ensureCtx();
+      if (!c || !window.fetch) return;
+
+      let manifest = null;
+      try {
+        const res = await fetch('sounds/manifest.json', { cache: 'force-cache' });
+        if (!res.ok) return;              // no pack installed
+        manifest = await res.json();
+      } catch (e) {
+        return;                            // offline, malformed JSON, whatever
+      }
+      if (!manifest || typeof manifest !== 'object') return;
+
+      const direct = Object.keys(manifest).filter((k) => !manifest[k].sameAs);
+      const aliases = Object.keys(manifest).filter((k) => manifest[k].sameAs);
+
+      await Promise.all(direct.map(async (cue) => {
+        const spec = manifest[cue] || {};
+        const files = Array.isArray(spec.files) ? spec.files : (spec.file ? [spec.file] : []);
+        const buffers = [];
+        await Promise.all(files.map(async (f) => {
+          try {
+            const r = await fetch('sounds/' + f, { cache: 'force-cache' });
+            if (!r.ok) return;
+            const bytes = await r.arrayBuffer();
+            // decodeAudioData is promise-based in modern engines but
+            // callback-only in older WebViews -- support both.
+            const buf = await new Promise((resolve, reject) => {
+              const p = c.decodeAudioData(bytes, resolve, reject);
+              if (p && typeof p.then === 'function') p.then(resolve, reject);
+            });
+            if (buf) buffers.push(buf);
+          } catch (e) {
+            console.warn('[sound] could not load sounds/' + f + ':', e && e.message);
+          }
+        }));
+        if (buffers.length) {
+          SAMPLES[cue] = {
+            buffers,
+            gain: typeof spec.gain === 'number' ? spec.gain : 0.9,
+            wet: typeof spec.wet === 'number' ? spec.wet : 0.25,
+          };
+        }
+      }));
+
+      aliases.forEach((cue) => {
+        const spec = manifest[cue];
+        const base = SAMPLES[spec.sameAs];
+        if (!base) return;                 // source cue had no usable files
+        SAMPLES[cue] = {
+          buffers: base.buffers,
+          gain: typeof spec.gain === 'number' ? spec.gain : base.gain,
+          wet: typeof spec.wet === 'number' ? spec.wet : base.wet,
+        };
+      });
+
+      const loaded = Object.keys(SAMPLES);
+      if (loaded.length) {
+        console.log('[sound] recorded audio active for: ' + loaded.join(', ')
+          + ' (all other cues remain synthesised)');
+      }
     }
 
     // Two-oscillator voice with a soft attack. The old cues were bare sine
@@ -1080,9 +1188,29 @@
         // remembered for the next one.
         try { localStorage.setItem('leastcount_muted', v ? '1' : '0'); } catch (e) { /* session-only */ }
       },
-      init() { safe(() => { ensureCtx(); ensureBus(); }); },
-      // Lets a future loader install a decoded sample: Sound.useSample('win', buffer)
-      useSample(name, buffer) { SAMPLES[name] = buffer; },
+      // Runs on the first tap (audio can't start before a user gesture
+      // anyway), so sample loading piggybacks on a moment the player is
+      // already waiting through. Everything stays synthesised until the
+      // files finish decoding -- there is no silent window.
+      init() {
+        safe(() => {
+          ensureCtx();
+          ensureBus();
+          const p = loadSamples();
+          if (p && p.catch) p.catch(() => { /* synth-only is a fine outcome */ });
+        });
+      },
+      // Manual install, e.g. from the console while tuning:
+      //   Sound.useSample('discard', decodedAudioBuffer, 0.9)
+      useSample(name, buffer, gain, wet) {
+        safe(() => {
+          if (!buffer) return;
+          if (!SAMPLES[name]) SAMPLES[name] = { buffers: [], gain: 0.9, wet: 0.25 };
+          SAMPLES[name].buffers.push(buffer);
+          if (typeof gain === 'number') SAMPLES[name].gain = gain;
+          if (typeof wet === 'number') SAMPLES[name].wet = wet;
+        });
+      },
 
       // ---- your own actions ----
       // Selecting a card fires constantly, so it stays small and dry on
