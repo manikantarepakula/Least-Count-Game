@@ -1118,6 +1118,17 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
   border-radius: 50%; overflow: hidden;
   box-shadow: 0 0 0 1.5px rgba(255,255,255,0.22);
 }
+/* Artwork loaded from an avatar pack (public/avatars/). Fills the circle
+   and crops, so a portrait that isn't perfectly square still sits right.
+   image-rendering: pixelated matters for pixel art specifically -- without
+   it the browser smooths the upscale and the crisp pixel edges turn to
+   mush, which is exactly what makes pixel art look cheap. It's harmless
+   for non-pixel artwork at these sizes. */
+.avatar-img {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+  image-rendering: pixelated;
+}
 .avatar svg { width: 100%; height: 100%; display: block; }
 .avatar-initials { font-weight: 700; color: #fff; letter-spacing: .02em; }
 
@@ -1377,8 +1388,14 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 /* Anchor by edge, not centre, while a panel is open. A centred seat grows
    in both directions, which sent the top seat's panel up into the round
    number in the header. These keep growth pointed inward. */
-.seat.revealing.grow-down { transform: translate(-50%, 0); }
 .seat.revealing.grow-up   { transform: translate(-50%, -100%); }
+
+/* Applies in EVERY phase, not just the reveal. A top-of-table seat carries
+   four rows during ordinary play (name, cards, points, last discard) and,
+   centred on its point, its top edge reaches the round number in the
+   header. Anchoring the top edge means the seat can only ever grow
+   downward, toward the middle of the table. */
+.seat.anchor-top { transform: translate(-50%, 0); }
 .seat-reveal-box.declared { border: 2px solid var(--gold); }
 .seat-reveal-tag {
   font-size: 7px; color: var(--gold-bright); font-weight: 700; letter-spacing: 0.04em;
