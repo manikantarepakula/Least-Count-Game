@@ -1623,16 +1623,38 @@ button.leave-btn { background: transparent; color: var(--red); border: 1px solid
 }
 .settings-label { display: block; font-size: 14px; color: var(--text-light); }
 .settings-hint { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
-.toggle-pill {
-  flex: 0 0 auto; min-width: 58px; min-height: 34px; margin: 0;
-  border-radius: 17px; font-size: 13px; font-weight: 700;
-  border: 1px solid var(--jade-border);
-  background: rgba(255,255,255,0.08); color: var(--text-muted);
+/* ---- Switch -------------------------------------------------------------
+   Replaces a pill button that displayed the word "On".
+   THE BUG IT FIXES: the global `button { width: 100% }` rule applies to
+   every button in the app. The old .toggle-pill set min-width but never
+   width, so it inherited 100% and ran off the right edge of the settings
+   row. `width: auto` below is load-bearing, not decoration -- any future
+   control in a flex row needs the same.
+   Sized 52x30 with a 24px knob: comfortably over the 44px minimum touch
+   target once the row's padding is counted, and unmistakably a switch
+   rather than a button you have to read. */
+.switch {
+  flex: 0 0 auto;
+  width: 52px; min-width: 0; height: 30px; padding: 0; margin: 0;
+  border-radius: 15px; border: 1px solid var(--jade-border);
+  background: rgba(255,255,255,0.10);
+  display: flex; align-items: center; justify-content: flex-start;
+  transition: background 0.18s ease, border-color 0.18s ease;
+  cursor: pointer;
 }
-.toggle-pill.on {
-  background: rgba(212,175,55,0.18);
-  border-color: var(--gold);
-  color: var(--gold);
+.switch-knob {
+  width: 24px; height: 24px; margin-left: 2px;
+  border-radius: 50%; background: #cfd8d4;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.45);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+.switch.on { background: rgba(212,175,55,0.30); border-color: var(--gold); }
+.switch.on .switch-knob { transform: translateX(21px); background: var(--gold); }
+.switch:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+/* Someone with reduced motion still needs to see the state change -- the
+   knob just arrives rather than sliding. */
+@media (prefers-reduced-motion: reduce) {
+  .switch, .switch-knob { transition: none; }
 }
 
 .card.wild-zero { border-color: var(--gold); }
