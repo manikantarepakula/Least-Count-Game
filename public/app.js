@@ -2063,10 +2063,11 @@
     setT(() => {
       dealingLabel.textContent = 'Shuffling...';
       decks.forEach((d) => { d.style.opacity = '0'; });
-      // The riffle animation ran silently. Sound here also means the deal
-      // that follows reads as the second half of a sequence rather than
-      // ticking out of nowhere.
-      Sound.deckShuffle();
+      // NO SOUND. This was a riffle under the shuffle animation, added in
+      // the same change that removed the per-card deal tick -- which meant
+      // one burst of card clicking replaced another and the start sequence
+      // sounded unchanged. The whole deal is silent now, by request.
+      // Sound.deckShuffle() remains defined if it is ever wanted back.
     }, 1150);
 
     setT(() => {
@@ -2162,7 +2163,9 @@
       if (cancelled) return;
       if (flight >= totalFlights) {
         flyer.style.opacity = '0';
-        Sound.dealSettle();   // the dealer squaring the pile: gives it an ending
+        // Silent too -- see the note on the shuffle above. Nothing in the
+        // deal makes a sound now; the first thing you hear in a round is
+        // your own turn starting.
         return;
       }
       const p = players[flight % players.length];
@@ -4539,6 +4542,13 @@
           // seat below it at 8+ players; whoever is revealing wins the
           // stacking order rather than being half-covered.
           seatEl.classList.add('revealing');
+          // Seats are centred on their point (translate -50%,-50%), so a
+          // taller chip grows UPWARD as much as downward. For the seat at
+          // the top of the table that pushed its edge into the Round
+          // number in the header. Anchoring by edge instead means a panel
+          // only ever grows toward the middle of the screen, never off it.
+          if (top < 30) seatEl.classList.add('grow-down');
+          else if (top > 70) seatEl.classList.add('grow-up');
         }
       }
 
