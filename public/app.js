@@ -6326,7 +6326,14 @@
         wrap.textContent = initialsFor(name);
         wrap.style.fontSize = Math.round(size * 0.42) + 'px';
       };
-      img.src = 'avatars/' + PACK.byId[packId].file;
+      // A manifest entry can be either a local filename (avatars/vx01.svg)
+      // or a full https URL. The URL form exists so a pack can be tried
+      // without downloading anything first -- see the note in the avatars
+      // README about moving to local files once you've settled on a set.
+      // http:// is deliberately NOT accepted: the app is served over https,
+      // and a mixed-content image is blocked by the browser anyway.
+      const f = PACK.byId[packId].file;
+      img.src = /^https:\/\//i.test(f) ? f : 'avatars/' + f;
       wrap.appendChild(img);
       return wrap;
     }
