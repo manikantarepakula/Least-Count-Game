@@ -949,7 +949,11 @@ select:focus { border-color: var(--brand-line); }
 .signin-status { color: var(--good-text); font-size: 12px; flex: 1; }
 .signin-row button.tiny { margin: 0; white-space: nowrap; }
 .icon-btn {
-  width: auto; flex: 0 0 auto; padding: 6px 9px; font-size: 15px; line-height: 1;
+  /* 44x44 is the floor for anything a thumb has to hit. These were 36x30,
+     which is a mis-tap waiting to happen on a control that opens a settings
+     menu -- and the icon itself stays small, only the hit area grows. */
+  width: auto; flex: 0 0 auto; min-width: 44px; min-height: 44px;
+  padding: 6px 9px; font-size: 15px; line-height: 1;
   background: rgba(255,255,255,0.12); color: #fff; border-radius: 8px;
 }
 
@@ -2604,7 +2608,8 @@ a.install-card-btn:hover {
 
 /* ---- WhatsApp invite button (the lobby's primary action while alone) ---- */
 .invite-btn {
-  width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; min-height: 44px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
   margin-top: 4px;
 }
 .invite-btn .icon { width: 18px; height: 18px; margin: 0; }
@@ -3088,7 +3093,8 @@ a.install-card-btn:hover {
   .coach-target { animation: none; outline: 2px solid var(--gold); }
 }
 
-/* First-launch tutorial offer (landing screen) */
+/* Post-tutorial handoff strip on the landing screen. (The first-launch
+   offer that also used these is a modal now -- see .tutorial-modal.) */
 .tutorial-offer {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin: 0 0 12px; padding: 12px;
@@ -3157,3 +3163,15 @@ body.game-active .bg-scrim { display: none; }
 
 /* Everything on a screen sits above the backdrop. */
 .screen { position: relative; z-index: 1; }
+
+
+/* Tutorial invitation modal. Buttons are full-width and stacked so both
+   clear the 44px touch minimum -- the inline version this replaces had a
+   35px button and a 26px text link, which are mis-tap targets. */
+.tutorial-modal { text-align: center; }
+.tutorial-modal h2 { margin: 0 0 6px; color: var(--gold-bright); }
+.tutorial-modal-sub {
+  margin: 0 0 16px; font-size: 13.5px; line-height: 1.5; color: var(--text-muted);
+}
+.tutorial-modal button { min-height: 48px; }
+.tutorial-modal button + button { margin-top: 8px; }
