@@ -233,6 +233,35 @@
              depends on other people showing up.
              wireQuickPlayToggle() in app.js switches on data-mode, not
              position, so this reorder needs no JS change. -->
+        <!-- First-launch tutorial offer. Shown once, dismissable, and never
+             blocking: it sits above Quick Play rather than over it, so a
+             returning player who has seen it simply never encounters it and
+             a new one can ignore it and press Start. -->
+        <div id="tutorial-offer" class="tutorial-offer hidden">
+          <div class="tutorial-offer-text">
+            <strong>New to Least Count?</strong>
+            <span>Play a quick practice hand &mdash; about a minute.</span>
+          </div>
+          <div class="tutorial-offer-actions">
+            <button id="btn-tutorial-yes" type="button" class="primary">Teach me</button>
+            <button id="btn-tutorial-no" type="button" class="tutorial-offer-no">No thanks</button>
+          </div>
+        </div>
+
+        <!-- Shown once, immediately after finishing the tutorial: the lessons
+             are positions rather than a played game, so the learner has not
+             actually played yet. This is the handoff into a real one. -->
+        <div id="tutorial-finished" class="tutorial-offer hidden">
+          <div class="tutorial-offer-text">
+            <strong>That's the whole game.</strong>
+            <span>Try it for real against bots &mdash; no pressure, nothing counts.</span>
+          </div>
+          <div class="tutorial-offer-actions">
+            <button id="btn-tutorial-play" type="button" class="primary">Play bots</button>
+            <button id="btn-tutorial-later" type="button" class="tutorial-offer-no">Later</button>
+          </div>
+        </div>
+
         <div class="segmented" id="quickplay-toggle">
           <button type="button" class="seg active" data-mode="bots">vs Bots</button>
           <button type="button" class="seg" data-mode="online">Online</button>
@@ -669,6 +698,20 @@
        so putting it here costs no vertical height, can never overlap
        anything at any screen size, and lands right above Least Count!
        where the thumb already is. -->
+  <!-- Tutorial coach. Sits directly above the hand, which is where the eye
+       already is when it's the player's turn, and where every action it
+       talks about happens. Hidden entirely outside a practice game. -->
+  <div id="coach" class="coach hidden">
+    <div class="coach-body">
+      <span id="coach-step" class="coach-step"></span>
+      <p id="coach-text" class="coach-text"></p>
+    </div>
+    <div class="coach-actions">
+      <button id="coach-next" class="coach-btn hidden" type="button">Got it</button>
+      <button id="coach-skip" class="coach-skip" type="button">Skip</button>
+    </div>
+  </div>
+
   <div class="hand-header">
     <span>Your cards (Value: <b id="hand-value">0</b>)</span>
     <div class="hand-header-actions">
