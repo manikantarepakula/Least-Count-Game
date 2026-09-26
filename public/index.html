@@ -61,6 +61,16 @@
 </head>
 <body>
 
+<!-- Scattered-card backdrop. Populated once by app.js from the SAME cardEl()
+     the game uses, so these are literally the app's own cards rather than a
+     drawing of them -- they can never drift from the real ones, and there is
+     no image to license, download or 404.
+     Hidden on the game screen (see body.game-active in style.css): the table
+     has its own felt and does not want cards behind the cards. -->
+<div id="bg-cards" class="bg-cards" aria-hidden="true"></div>
+<div id="bg-scrim" class="bg-scrim" aria-hidden="true"></div>
+
+
 <!-- Profile / sign-in / name panel -- a centered modal using the exact
      same .overlay pattern as Rules/Scores/My Stats below (proven reliable
      elsewhere in this file), instead of a dropdown anchored under the
