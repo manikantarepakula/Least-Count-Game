@@ -4486,7 +4486,7 @@
       const li = document.createElement('li');
       li.dataset.playerId = p.playerId;
       const hostTag = p.playerId === room.hostPlayerId ? '<span class="host-tag">HOST</span>' : '';
-      li.innerHTML = `<span>${escapeHtml(p.name)} ${hostTag}</span><span class="status">${p.connected ? 'online' : 'offline'}</span>`;
+      li.innerHTML = `<span>${escapeHtml(displayName(p.name))} ${hostTag}</span><span class="status">${p.connected ? 'online' : 'offline'}</span>`;
       // Tap a player's row to report/mute them before the game even starts --
       // same popover the seats use once play begins. Not wired for yourself
       // or for bots (lobby rows are only ever real players anyway, but the
@@ -4875,7 +4875,7 @@
       // style.css) instead of appending "(You)" text -- that text used to
       // share the exact same 96px truncation-prone width as everyone else's
       // name, so it clipped sooner than it should have for no good reason.
-      nameEl.textContent = p.name;
+      nameEl.textContent = displayName(p.name);
       if (p.playerId === myPlayerId) seatEl.classList.add('own-seat');
       idRow.appendChild(nameEl);
       chipEl.appendChild(idRow);
@@ -5739,10 +5739,28 @@
   // and is the fallback playerName() reaches for once the live lookup misses.
   const knownPlayerNames = {};
 
+  // ------------------------------------------------------------------
+  // Bots are named "\u{1F916} Bot 1" on the server, which predates them having
+  // faces. Now that every bot renders a voxel robot avatar, the emoji is a
+  // second robot sitting next to the first one on every seat.
+  //
+  // Stripped here rather than renamed on the server, for three reasons: it
+  // needs no server deploy, it fixes rooms that already exist, and the
+  // server's name is still the thing stored and broadcast -- so nothing
+  // downstream that matches on it breaks.
+  //
+  // Written as an escaped surrogate pair rather than a literal emoji so the
+  // file stays pure ASCII and cannot be mangled by an editor or a transfer
+  // that is not UTF-8 clean.
+  // ------------------------------------------------------------------
+  function displayName(n) {
+    return String(n == null ? '' : n).replace(/^\uD83E\uDD16\s*/, '');
+  }
+
   function playerName(playerId) {
     const p = latestRoom && latestRoom.players.find((x) => x.playerId === playerId);
-    if (p) return p.name;
-    return knownPlayerNames[playerId] || '?';
+    if (p) return displayName(p.name);
+    return displayName(knownPlayerNames[playerId]) || '?';
   }
 
   // ---------------- round result / scores / game over overlays ----------------
@@ -5784,7 +5802,7 @@
       const deltaHtml = delta !== undefined ? `<div class="podium-delta">+${delta} this round</div>` : '';
       slot.innerHTML =
         `<div class="podium-medal">${medal}</div>` +
-        `<div class="podium-name">${escapeHtml(p.name)}${elim}</div>` +
+        `<div class="podium-name">${escapeHtml(displayName(p.name))}${elim}</div>` +
         deltaHtml +
         `<div class="podium-score">${p.total} pts</div>`;
       podium.appendChild(slot);
@@ -5832,7 +5850,7 @@
 
       const nameEl = document.createElement('div');
       nameEl.className = 'reveal-name';
-      nameEl.textContent = p.name
+      nameEl.textContent = displayName(p.name)
         + (p.playerId === myPlayerId ? ' (You)' : '')
         + (isDeclarer ? ' (declared)' : '')
         + (elim ? ' (out)' : '');
@@ -6126,7 +6144,7 @@
       const rank = document.createElement('span');
       rank.className = 'sc-rank'; rank.textContent = String(i + 1);
       const name = document.createElement('span');
-      name.className = 'sc-name'; name.textContent = p.name;
+      name.className = 'sc-name'; name.textContent = displayName(p.name);
       top.appendChild(rank); top.appendChild(name);
       if (isOut) {
         const tag = document.createElement('span');
@@ -7141,7 +7159,7 @@
     if (!grouped) {
       const nameEl = document.createElement('span');
       nameEl.className = 'chat-name';
-      nameEl.textContent = msg.name || '?';
+      nameEl.textContent = displayName(msg.name) || '?';
       body.appendChild(nameEl);
       body.appendChild(document.createTextNode(' '));
     }
