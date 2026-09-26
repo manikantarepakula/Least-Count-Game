@@ -632,6 +632,10 @@
   // signal to switch the overlay into its "reveal" step -- not a fixed
   // client-side timer, so it can never fire before the data actually exists.
   let pendingStartReveal = false;
+  // True from the moment a start sequence begins until its reveal has run
+  // (or been force-cleared). renderGame uses it to tell "the dealing badge
+  // belongs on screen" apart from "the dealing badge is stuck on screen".
+  let startSeqActive = false;
   let startSeqTimer = null;
   let dealAnimationCancel = null;
 
@@ -1978,6 +1982,7 @@
     const badge = document.getElementById('deal-phase-badge');
     const countdownEl = document.getElementById('start-seq-countdown');
     const dealingLabel = document.getElementById('deal-phase-label');
+    startSeqActive = true;
     badge.classList.remove('hidden');
     countdownEl.classList.remove('hidden');
     dealingLabel.classList.add('hidden');
@@ -2024,12 +2029,39 @@
           animateDealing(data.players || [], dealMs, data.dealPasses || 13);
         });
         startSeqTimer = setTimeout(() => {
-          // Countdown + intro + deal animation are all done. The board
-          // itself will pop to life the instant the server's post-deal
-          // game_state arrives (see pendingStartReveal handling below) --
-          // we just flag that we're now waiting for it.
+          // Countdown + intro + deal animation are all done.
+          //
+          // THE RACE THIS FIXES: setting the flag and waiting for the next
+          // game_state assumes the server's post-deal state has not arrived
+          // yet. Often it has -- the server deals instantly while this
+          // client is still animating, and a backgrounded or slow phone
+          // widens the gap. That state passes through the handler with the
+          // flag still false, the flag goes true a moment later, and then
+          // NOTHING consumes it until somebody takes a turn. The dealing
+          // badge sits on top of a live table until then, which is the
+          // stuck counter players reported.
+          //
+          // So: if the state we were waiting for is already in hand, use it
+          // now instead of waiting for another one that may be seconds away.
           pendingStartReveal = true;
+          if (latestGame) {
+            pendingStartReveal = false;
+            showStartReveal(latestGame, lastStartRevealMs);
+          }
         }, introMs + dealMs);
+
+        // Last resort. Whatever happens above -- no game_state at all, an
+        // exception inside showStartReveal, a server that never sends the
+        // state -- the badge must not outlive the sequence. Nothing about
+        // the game depends on it, so forcing it away can only ever remove
+        // something stale.
+        setTimeout(() => {
+          if (!startSeqActive) return;
+          startSeqActive = false;
+          console.warn('[start] reveal never arrived; clearing the dealing badge');
+          document.getElementById('deal-phase-badge').classList.add('hidden');
+          countdownEl.classList.add('hidden');
+        }, introMs + dealMs + 8000);
         return;
       }
       countdownEl.textContent = String(n);
@@ -2254,6 +2286,7 @@
   // was set true by runStartSequence above). Shows the joker rank + open
   // card big or held on screen, then reveals the live board underneath.
   function showStartReveal(game, revealMs) {
+    startSeqActive = false;
     document.getElementById('deal-phase-badge').classList.add('hidden');
     document.getElementById('deal-flyer').classList.add('hidden');
     const overlay = document.getElementById('overlay-start-sequence');
@@ -4856,6 +4889,14 @@
     // Once a live round is confirmed in progress, force it closed for everyone.
     if (!game.roundOver) {
       document.getElementById('overlay-round-result').classList.add('hidden');
+      // Same treatment for the dealing badge. If a live round is in progress
+      // and no start sequence is running, a visible "3-2-1"/"Dealing cards"
+      // badge is by definition stale -- it survived its own sequence. This
+      // is the catch-all behind the two specific fixes in runStartSequence:
+      // whatever route leaves it behind, the next state push clears it.
+      if (!startSeqActive) {
+        document.getElementById('deal-phase-badge').classList.add('hidden');
+      }
     }
 
     // A leave that was queued mid-round (see btn-leave-game-confirm) fires
@@ -5164,13 +5205,34 @@
     const groups = groupHand(hand)
       .slice()
       .sort((a, b) => cardValueClient(b.cards[0], wildRank) - cardValueClient(a.cards[0], wildRank));
-    // EVERY group, not a slice. This used to cap at REVEAL_MAX_SEAT_TILES
-    // and append a "+N more" chip -- which meant the reveal refused to
-    // reveal, and refused hardest for the player holding the most cards,
-    // whose hand is the single most interesting one at the table. The grid
-    // wraps within the seat width instead; a big hand makes the panel
-    // taller, which is fine now that it grows inside the seat.
-    const shown = groups;
+    // ------------------------------------------------------------------
+    // The cap is back, and this is the third position on it -- worth saying
+    // why, because both previous ones were wrong in opposite directions.
+    //
+    //  1. Fixed cap of 5 with a "+N more" chip. Hid cards, and hid them
+    //     hardest for the player holding the most, whose hand is the most
+    //     interesting one at the table.
+    //  2. No cap at all. The panel grows inside the seat, so a 13-card hand
+    //     made a very tall seat that ran into its neighbours -- reported
+    //     from a real game.
+    //
+    // Neither "always 5" nor "unlimited" is right, because the amount of
+    // room a seat has depends entirely on how many seats there are. At 2-4
+    // players there is space to show a whole hand; at 8-10 there is barely
+    // room for one row. So the cap scales with the table.
+    // ------------------------------------------------------------------
+    const seatCount = (game.turnOrder && game.turnOrder.length)
+      || (latestRoom && latestRoom.players && latestRoom.players.length) || 6;
+    // Modelled against the real seat spacing on a 393px phone: a panel is
+    // ~86px wide, which fits 2 tiles per row, and the gap between adjacent
+    // seats falls from 284px at 2 players to 103px at 10. These four bands
+    // keep the panel shorter than that gap at every size, with the tightest
+    // margin (76 vs 103) at a full table.
+    const maxTiles = seatCount <= 4 ? 9
+      : seatCount <= 6 ? 6
+      : seatCount <= 8 ? 4
+      : 2;
+    const shown = groups.slice(0, maxTiles);
     shown.forEach((g) => {
       const el = cardEl(g.cards[0]);
       el.classList.add('mini');
