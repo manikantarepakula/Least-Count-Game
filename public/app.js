@@ -1842,6 +1842,10 @@
     if (intro && intro.parentNode) intro.parentNode.removeChild(intro);
   }, 3200);
 
+  try { buildCardBackdrop(); } catch (e) {
+    console.warn('[bg] card backdrop failed (cosmetic only):', e && e.message);
+  }
+
   document.addEventListener('click', function initAudioOnce() {
     Sound.init();
     document.removeEventListener('click', initAudioOnce);
@@ -4590,6 +4594,65 @@
   };
 
   // ---------------- realistic card rendering ----------------
+  // ------------------------------------------------------------------
+  // SCATTERED-CARD BACKDROP
+  //
+  // Builds the backdrop from cardEl() -- the same function the table uses --
+  // so the cards behind the UI are the app's own cards, not a picture of
+  // some. No image to license, nothing to download, nothing to 404, and it
+  // cannot drift out of step with the real card design.
+  //
+  // The layout is HARD-CODED rather than random. Random would reshuffle on
+  // every reload, so the app would look subtly different each launch and
+  // could occasionally deal itself a bad composition -- three cards stacked
+  // in the corner where the title goes. These fifteen were placed by hand.
+  //
+  // Every card carries a rotateX and rotateY as well as a flat rotate: a
+  // card square to the screen reads as a rectangle, and the whole point is
+  // that these read as cards in mid-air.
+  //
+  // Percentages, not pixels, so the composition holds from a 320px phone to
+  // a tablet without reflowing.
+  // ------------------------------------------------------------------
+  const BACKDROP_CARDS = [
+    { r: 'A', s: 'S', x: -6,  y: 2,  rot: -18, rx: 14, ry: -22, sc: 1.05, o: 0.30 },
+    { r: '7', s: 'H', x: 62,  y: -4, rot: 24,  rx: -18, ry: 16, sc: 0.95, o: 0.24 },
+    { r: 'K', s: 'D', x: 28,  y: 9,  rot: -7,  rx: 22, ry: 10,  sc: 0.70, o: 0.16 },
+    { r: '10', s: 'C', x: 84, y: 16, rot: 33,  rx: 10, ry: -26, sc: 0.82, o: 0.20 },
+    { r: 'Q', s: 'H', x: 4,   y: 24, rot: 12,  rx: -14, ry: 20, sc: 0.78, o: 0.18 },
+    { r: '3', s: 'S', x: 45,  y: 30, rot: -28, rx: 20, ry: -12, sc: 0.62, o: 0.13 },
+    { r: 'J', s: 'D', x: 72,  y: 38, rot: 9,   rx: -22, ry: -18, sc: 1.00, o: 0.26 },
+    { r: '5', s: 'C', x: 12,  y: 46, rot: -34, rx: 16, ry: 24,  sc: 0.88, o: 0.22 },
+    { r: '9', s: 'H', x: 88,  y: 54, rot: 17,  rx: -10, ry: -20, sc: 0.72, o: 0.15 },
+    { r: '2', s: 'S', x: 34,  y: 58, rot: 41,  rx: 24, ry: 14,  sc: 0.66, o: 0.14 },
+    { r: 'A', s: 'D', x: -8,  y: 68, rot: 21,  rx: -16, ry: -24, sc: 1.02, o: 0.28 },
+    { r: '8', s: 'C', x: 58,  y: 74, rot: -13, rx: 18, ry: 22,  sc: 0.85, o: 0.20 },
+    { r: 'K', s: 'S', x: 80,  y: 84, rot: 29,  rx: -20, ry: 12,  sc: 0.94, o: 0.24 },
+    { r: '6', s: 'H', x: 22,  y: 88, rot: -22, rx: 12, ry: -18, sc: 0.76, o: 0.17 },
+    { r: '4', s: 'D', x: 48,  y: 95, rot: 36,  rx: -24, ry: 20,  sc: 0.68, o: 0.15 },
+  ];
+
+  function buildCardBackdrop() {
+    const host = document.getElementById('bg-cards');
+    if (!host || host.childElementCount) return;   // build once, never rebuild
+    const frag = document.createDocumentFragment();
+    BACKDROP_CARDS.forEach((c) => {
+      let el;
+      try {
+        el = cardEl({ id: 'bg-' + c.r + c.s, rank: c.r, suit: c.s });
+      } catch (e) {
+        return;   // a decorative card is never worth a broken screen
+      }
+      el.style.left = c.x + '%';
+      el.style.top = c.y + '%';
+      el.style.opacity = String(c.o);
+      el.style.transform =
+        'rotate(' + c.rot + 'deg) rotateX(' + c.rx + 'deg) rotateY(' + c.ry + 'deg) scale(' + c.sc + ')';
+      frag.appendChild(el);
+    });
+    host.appendChild(frag);
+  }
+
   function cardEl(card, opts) {
     opts = opts || {};
     const el = document.createElement('div');
