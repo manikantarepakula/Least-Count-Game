@@ -320,7 +320,7 @@ body.game-active {
 .landing-hero-glow {
   position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
   width: 380px; height: 380px; border-radius: 50%;
-  background: radial-gradient(circle, rgba(var(--red-rgb),0.35), rgba(var(--red-rgb),0) 68%);
+  background: radial-gradient(circle, rgba(var(--red-rgb),0.50) 0%, rgba(212,160,23,0.22) 38%, rgba(var(--red-rgb),0) 70%);
   filter: blur(2px);
 }
 .landing-hero-cards {
@@ -498,9 +498,13 @@ body.game-active {
 }
 
 .mode-block {
-  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);
+  background: linear-gradient(170deg, rgba(255,255,255,0.085) 0%, rgba(255,255,255,0.03) 60%);
+  border: 1px solid rgba(255,255,255,0.14);
+  /* The inset top highlight is what makes this read as a lit surface rather
+     than a flat rectangle -- one pixel of light along the top edge implies
+     a light source, and that is most of what "not flat" means. */
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.10);
   border-radius: 14px; padding: 14px 16px;
-  box-shadow: var(--shadow-sm);
 }
 
 .mode-blocks { display: flex; flex-direction: column; gap: 12px; }
@@ -944,18 +948,32 @@ button {
 /* Primary = a DECISIVE action: start a game, create a room, join. Gold,
    because gold means "the good thing" and these are moments, not chores.
    Near-black text on gold measures 7.3:1. */
-button.primary { background: var(--gold); color: #1a1a1a; box-shadow: var(--shadow-md); }
-button.primary:hover:not(:disabled) { background: var(--gold-bright); }
+button.primary {
+  background: linear-gradient(160deg, var(--gold-bright) 0%, var(--gold) 55%, #b8860f 100%);
+  color: #241a05; box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255,255,255,0.35);
+}
+button.primary:hover:not(:disabled) {
+  background: linear-gradient(160deg, #ffd873 0%, var(--gold-bright) 55%, var(--gold) 100%);
+}
 button.secondary { background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: var(--text-light); }
 /* Danger = it costs you something or cannot be undone. The ONLY filled red
    in the app now, so red carries one meaning instead of five. */
-button.danger { background: var(--red-fill); color: #fff; margin-top: 8px; }
-button.declare { background: var(--gold); color: #1a1a1a; }
+button.danger {
+  background: linear-gradient(160deg, #a82530 0%, var(--red-fill) 100%);
+  color: #fff; margin-top: 8px;
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.18);
+}
+button.declare {
+  background: linear-gradient(160deg, var(--gold-bright) 0%, var(--gold) 55%, #b8860f 100%);
+  color: #241a05; box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255,255,255,0.35);
+}
 /* Routine in-game actions. Quiet on purpose -- see the note at the top of
    this file about Discard no longer being the loudest thing on screen. */
 button.action {
-  background: var(--action-bg); color: var(--text-light);
+  background: linear-gradient(160deg, #24604e 0%, var(--action-bg) 100%);
+  color: var(--text-light);
   border: 1px solid var(--action-border);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.10);
 }
 button.action:hover:not(:disabled) { background: var(--action-bg-hover); }
 /* .tiny (below) only ever controlled size, never color -- any button that
