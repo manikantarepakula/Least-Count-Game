@@ -4288,8 +4288,41 @@
   // server needs one. If they haven't entered a name yet, the prompt waits
   // rather than erroring.
   // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Who sees the tutorial invitation.
+  //
+  // "Hasn't dismissed it" was the wrong test -- it also caught everyone who
+  // had played fifty games, because the flag did not exist until today. So
+  // the real question is whether this person has ever played, and there are
+  // two ways to know:
+  //
+  //   1. leastcount_has_played, set the first time a game state arrives.
+  //   2. A saved player name. Anyone with one has been here before and
+  //      typed it in, which covers every existing player on the day this
+  //      ships -- without it, the whole existing user base would get a
+  //      "new to Least Count?" popup, which is worse than not asking.
+  //
+  // Fires once. Declining sets the same flag as completing, so it never
+  // asks twice either way.
+  // ------------------------------------------------------------------
+  function hasPlayedBefore() {
+    try {
+      if (localStorage.getItem('leastcount_has_played') === '1') return true;
+      const n = localStorage.getItem('leastcount_name');
+      return !!(n && n.trim());
+    } catch (e) {
+      return true;   // can't tell -> don't interrupt
+    }
+  }
+
+  function markHasPlayed() {
+    try { localStorage.setItem('leastcount_has_played', '1'); } catch (e) { /* session only */ }
+  }
+
   function maybeOfferTutorial() {
+    if (Tutorial.isActive()) return;          // never over the tutorial itself
     if (Tutorial.wasSeen()) return;
+    if (hasPlayedBefore()) return;
     const box = document.getElementById('tutorial-offer');
     if (!box) return;
     box.classList.remove('hidden');
@@ -8093,6 +8126,7 @@
       setGameError('');
     }
     showScreen('screen-game');
+    markHasPlayed();   // they are in a game; never offer the tutorial again
     renderGame(game);
     // No tutorial hook here: the tutorial is entirely client-side and never
     // receives server state, so a game_state arriving mid-lesson can only
