@@ -80,6 +80,19 @@
      out of its box or let page content behind it show through. Placed here
      at the top of body (a direct child, not nested inside any screen) so
      it's never at risk of being clipped by a screen's own overflow:hidden. -->
+<!-- Tutorial invitation. A modal rather than a panel on the page: inline, it
+     read as a Quick Play setting and sat there permanently for people who
+     had already played. This appears once, over everything, for someone who
+     has genuinely never played -- see maybeOfferTutorial() in app.js. -->
+<div id="tutorial-offer" class="overlay hidden">
+  <div class="card-panel tutorial-modal">
+    <h2>New to Least Count?</h2>
+    <p class="tutorial-modal-sub">Seven quick hands and you'll know how to play. About a minute.</p>
+    <button id="btn-tutorial-yes" class="primary" type="button">Teach me</button>
+    <button id="btn-tutorial-no" class="secondary" type="button">I know how to play</button>
+  </div>
+</div>
+
 <div id="profile-menu-panel" class="overlay hidden">
   <div class="card-panel profile-modal-panel">
     <h2>Profile</h2>
@@ -243,20 +256,6 @@
              depends on other people showing up.
              wireQuickPlayToggle() in app.js switches on data-mode, not
              position, so this reorder needs no JS change. -->
-        <!-- First-launch tutorial offer. Shown once, dismissable, and never
-             blocking: it sits above Quick Play rather than over it, so a
-             returning player who has seen it simply never encounters it and
-             a new one can ignore it and press Start. -->
-        <div id="tutorial-offer" class="tutorial-offer hidden">
-          <div class="tutorial-offer-text">
-            <strong>New to Least Count?</strong>
-            <span>Play a quick practice hand &mdash; about a minute.</span>
-          </div>
-          <div class="tutorial-offer-actions">
-            <button id="btn-tutorial-yes" type="button" class="primary">Teach me</button>
-            <button id="btn-tutorial-no" type="button" class="tutorial-offer-no">No thanks</button>
-          </div>
-        </div>
 
         <!-- Shown once, immediately after finishing the tutorial: the lessons
              are positions rather than a played game, so the learner has not
