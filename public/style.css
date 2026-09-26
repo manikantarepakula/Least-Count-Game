@@ -1035,7 +1035,11 @@ button.tiny:not(.primary):not(.secondary):not(.danger):not(.declare) {
   background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: var(--text-light);
 }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
-button.tiny { width: auto; padding: 8px 14px; font-size: 13px; }
+/* min-height 44 rather than more padding: the button stays visually small
+   (13px text, tight padding) while the hit area reaches the touch minimum.
+   .tiny is used for Invite on the group screen and the chat send button,
+   both of which measured 36px tall. */
+button.tiny { width: auto; min-height: 44px; padding: 8px 14px; font-size: 13px; }
 button.leave-btn { background: transparent; color: var(--red-text); border: 1px solid var(--red-text); margin-top: 10px; }
 
 .divider { text-align: center; margin: 20px 0; color: var(--text-muted); font-size: 12px; }
