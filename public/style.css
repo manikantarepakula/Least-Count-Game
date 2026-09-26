@@ -639,11 +639,10 @@ body.game-active {
    .mode-block itself only sets the CARD's own background/border, not its
    children's colors, so without this the buttons/select/labels inside would
    otherwise still show the app's original light-mode/green defaults. */
-#screen-landing .mode-block button.primary,
-#screen-lobby .mode-block button.primary {
-  background: linear-gradient(135deg, var(--red), var(--red-dark)); color: #fff;
-  box-shadow: var(--shadow-md);
-}
+/* DELETED (Sept 2026): this repainted primary buttons red, more
+   specifically than `button.primary`, so changing the palette in one place
+   silently did nothing on the two screens that matter most. The global
+   rule now owns this -- do not reintroduce a per-screen copy. */
 #screen-landing .mode-block button.secondary,
 #screen-lobby .mode-block button.secondary {
   background: transparent; border: 1.5px solid rgba(255,255,255,0.35); color: #e8e8ec;
@@ -788,10 +787,7 @@ body.game-active {
   background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.14); color: #fff;
 }
 #screen-landing .landing-form input[type=text]:focus { border-color: var(--gold); }
-#screen-landing .landing-form button.primary {
-  background: linear-gradient(135deg, var(--red), var(--red-dark)); color: #fff;
-  box-shadow: var(--shadow-md);
-}
+/* DELETED: third copy of the same button. See the note above. */
 #screen-landing .landing-form button.secondary,
 #screen-waiting-host .landing-form button.secondary,
 #screen-queue-waiting .landing-form button.secondary {
@@ -816,7 +812,7 @@ body.game-active {
 }
 .landing-form input[type=text]::placeholder { color: rgba(255,255,255,0.4); }
 .landing-form input[type=text]:focus { border-color: var(--gold); }
-.landing-form button.primary { background: var(--gold); color: #1a1a1a; }
+/* DELETED: fourth copy. button.primary is the single source now. */
 .landing-form button.secondary {
   background: transparent; border: 1.5px solid var(--gold); color: var(--gold);
 }
@@ -838,7 +834,7 @@ body.game-active {
 .landing-form .player-list li { border-bottom: 1px solid rgba(255,255,255,0.12); }
 .landing-form .player-list .host-tag { color: var(--gold-bright); }
 .landing-form .player-list .status { color: var(--text-muted); }
-.landing-form .leave-btn { border-color: #c0392b; color: #e0736a; }
+.landing-form .leave-btn { border-color: var(--red-text); color: var(--red-text); }
 
 /* The native <select> stays in the DOM for its value/behavior (see
    initDropdown() in app.js) but is visually replaced by the .dd themed
@@ -1903,7 +1899,9 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
 .join-request-row button {
   width: auto; padding: 7px 12px; margin: 0; font-size: 12px; border-radius: var(--radius-sm);
 }
-.join-request-row .jr-admit { background: #1e7a4a; color: #fff; }
+/* Admitting someone is a positive action, so it uses the success role
+   rather than its own one-off green. */
+.join-request-row .jr-admit { background: var(--action-bg-hover); color: #fff; border: 1px solid var(--action-border); }
 .join-request-row .jr-ignore { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: var(--text-muted); }
 
 .round-result-emoji { text-align: center; font-size: 48px; line-height: 1; margin-bottom: 4px; }
@@ -2654,7 +2652,10 @@ a.install-card-btn:hover {
   color: var(--text-muted); font-size: 13px; font-weight: 700; cursor: pointer;
 }
 .segmented .seg.active {
-  background: rgba(229,37,44,0.16); border-color: rgba(229,37,44,0.5); color: var(--text-light);
+  /* Was hardcoded rgba(229,37,44) -- the old signal red, in a form the
+     hex sweep could not see. Selection is a state, not a cost, so it
+     takes gold like every other "this one is chosen" affordance. */
+  background: rgba(212,160,23,0.18); border-color: rgba(212,160,23,0.55); color: var(--text-light);
 }
 
 /* Cap the groups list at roughly two rows and scroll the rest, so someone in
@@ -2737,7 +2738,9 @@ a.install-card-btn:hover {
    and "played yesterday" is what keeps the list from reading as empty. */
 .group-member.away { opacity: 0.62; }
 .gm-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
-.gm-dot.playing { background: var(--red); box-shadow: 0 0 0 3px rgba(229,37,44,0.22); }
+/* 'a game is live' is good news, not a cost -- green, like every other
+   positive state. */
+.gm-dot.playing { background: var(--good); box-shadow: 0 0 0 3px rgba(74,222,128,0.22); }
 .gm-dot.table   { background: var(--gold-bright); box-shadow: 0 0 0 3px rgba(242,193,78,0.20); }
 .gm-dot.online  { background: var(--good); }
 .gm-dot.away    { background: rgba(255,255,255,0.22); }
