@@ -431,6 +431,224 @@
 
   let latestRoom = null;
   let latestGame = null;
+
+  // ==================================================================
+  // TUTORIAL (position-based)
+  //
+  // Seven hand-built positions, not a real game. Each one is a synthetic
+  // state object fed to the SAME renderGame() the live game uses, so the
+  // learner is looking at the real interface with real cards -- it is only
+  // the situation that is staged.
+  //
+  // Why positions rather than a played game, which is where this started:
+  // a real game cannot guarantee its own lessons. The +2 chain needs a bot
+  // to throw a 2 at you at the right moment, and the wild rank needs to
+  // matter in your hand. Neither is controllable without scripting the
+  // bots, and a scripted bot is a fake game with extra steps. Staging the
+  // position is the honest version of the same trick.
+  //
+  // Nothing here touches the server. No room is created, no socket message
+  // is sent, nothing is recorded, and it works with no connection at all.
+  // The only cost is that the learner is not really playing -- which is
+  // why it ends by pointing them at a real game against bots.
+  // ==================================================================
+  const Tutorial = (() => {
+    const DONE_KEY = 'leastcount_tutorial_done';
+    const ME = 'tut-me';
+    let active = false;
+    let idx = 0;
+    let savedGame = null;
+    let savedRoom = null;
+
+    // A full, plausible public state. Every field renderGame() and
+    // renderOvalTable() read is present, because a missing one shows up as
+    // a blank seat or a thrown error rather than a nice default.
+    function state(o) {
+      const hand = (o.hand || []).map((r, i) => ({ id: 'tc' + i, rank: r, suit: SUIT_FOR(r, i) }));
+      return Object.assign({
+        roundNumber: 1,
+        turnOrder: [ME, 'tut-b1', 'tut-b2'],
+        currentPlayer: ME,
+        openCard: { id: 'topen', rank: o.open || '7', suit: '♦' },
+        roundJokerRank: o.wild || null,
+        chainCount: o.chain || 0,
+        stockCount: 40,
+        reshuffleCount: 0,
+        scores: { [ME]: 0, 'tut-b1': 0, 'tut-b2': 0 },
+        eliminationScore: 200,
+        eliminated: [], quit: [], rejoinsUsed: [],
+        roundOver: false, gameOver: false, winner: null,
+        lastRoundResult: null, roundHistory: [],
+        handCounts: { [ME]: hand.length, 'tut-b1': 9, 'tut-b2': 11 },
+        discardHistory: {},
+        yourHand: hand,
+        yourHandValue: hand.reduce((s, c) => s + cardPoints(c, o.wild || null), 0),
+        autoNextRoundInMs: null,
+      }, o.extra || {});
+    }
+    // Suits are cosmetic here, but a hand of all-diamonds looks wrong and
+    // distracts from the lesson.
+    function SUIT_FOR(rank, i) { return ['♠', '♥', '♦', '♣'][i % 4]; }
+
+    function room() {
+      return {
+        code: 'LEARN',
+        hostPlayerId: ME,
+        players: [
+          { playerId: ME, name: getPlayerName() || 'You', isBot: false, connected: true, avatar: myAvatar },
+          { playerId: 'tut-b1', name: 'Bot 1', isBot: true, connected: true, avatar: 'fox' },
+          { playerId: 'tut-b2', name: 'Bot 2', isBot: true, connected: true, avatar: 'owl' },
+        ],
+      };
+    }
+
+    // ---- the seven positions ----
+    const STEPS = [
+      {
+        label: 'Step 1 of 7',
+        // Reads the total off the state instead of repeating it in prose.
+        // The first version of this line said 34 about a hand worth 44 --
+        // a wrong number in the very first sentence of the tutorial is
+        // about the worst place to have one.
+        text: (g) => 'Lowest score wins. Every card left in your hand counts against you — picture cards are 10, aces are 1. This hand is worth '
+          + (g ? g.yourHandValue : 0) + '.',
+        build: () => state({ hand: ['K', 'Q', '9', '4', 'A', '10'], open: '7' }),
+        tap: true,
+      },
+      {
+        label: 'Step 2 of 7',
+        text: 'The open card is a 7 and you hold one. Tap your 7, then Discard Selected. Matching the open card costs you nothing.',
+        build: () => state({ hand: ['7', 'K', '9', '4', 'A'], open: '7' }),
+        want: (ids, g) => ids.length === 1 && rankOf(g, ids[0]) === '7',
+        nudge: 'Tap the 7 — it matches the open card.',
+        target: 'btn-discard',
+      },
+      {
+        label: 'Step 3 of 7',
+        text: 'Now the useful move. You hold three 10s — tap one and all three select together. Throwing all three costs the same single penalty card as throwing one.',
+        build: () => state({ hand: ['10', '10', '10', '4', 'A'], open: '7' }),
+        want: (ids, g) => ids.length === 3 && rankOf(g, ids[0]) === '10',
+        nudge: 'Tap a 10 — they select as a group.',
+        target: 'btn-discard',
+      },
+      {
+        label: 'Step 4 of 7',
+        text: 'That did not match the open card, so you picked one up. Thirty points gone for one card — that is the trade, and it is usually worth it.',
+        build: () => state({ hand: ['4', 'A', 'K'], open: '10' }),
+        tap: true,
+      },
+      {
+        label: 'Step 5 of 7',
+        text: 'Each round picks a wild rank — this round it is 8. Your 8s are worth zero, so they are free to hold. Keep them.',
+        build: () => state({ hand: ['8', '8', 'K', '4'], open: '10', wild: '8' }),
+        tap: true,
+      },
+      {
+        label: 'Step 6 of 7',
+        text: 'Someone played a 2 at you. Play a 2 of your own to pass the penalty on to the next player — or take the cards and end it.',
+        build: () => state({ hand: ['2', 'K', '9', '4'], open: '2', chain: 1 }),
+        want: (ids, g) => ids.length === 1 && rankOf(g, ids[0]) === '2',
+        nudge: 'Tap your 2 to pass it on.',
+        target: 'btn-discard',
+      },
+      {
+        label: 'Step 7 of 7',
+        text: 'Your hand is down to 4 points. Least Count! is lit — call it. You score zero, as long as nobody at the table is lower.',
+        build: () => state({ hand: ['A', '3'], open: '9' }),
+        declare: true,
+        nudge: 'Tap Least Count!',
+        target: 'btn-declare',
+      },
+    ];
+
+    function rankOf(g, id) {
+      const c = (g.yourHand || []).find((x) => x.id === id);
+      return c ? c.rank : null;
+    }
+    function el(id) { return document.getElementById(id); }
+    function clearTarget() {
+      document.querySelectorAll('.coach-target').forEach((n) => n.classList.remove('coach-target'));
+    }
+
+    function paint(msg) {
+      const step = STEPS[idx];
+      if (!step) return;
+      selectedIds = new Set();
+      latestRoom = room();
+      latestGame = step.build();
+      renderGame(latestGame);
+
+      const box = el('coach');
+      box.classList.remove('hidden');
+      el('coach-step').textContent = step.label;
+      el('coach-text').textContent = msg
+        || (typeof step.text === 'function' ? step.text(latestGame) : step.text);
+      el('coach-next').classList.toggle('hidden', !step.tap);
+      clearTarget();
+      if (step.target) {
+        const t = el(step.target);
+        if (t) t.classList.add('coach-target');
+      }
+    }
+
+    function advance() {
+      idx += 1;
+      if (idx >= STEPS.length) return finish(true);
+      paint();
+    }
+
+    function finish(completed) {
+      if (!active) return;
+      active = false;
+      clearTarget();
+      el('coach').classList.add('hidden');
+      try { localStorage.setItem(DONE_KEY, '1'); } catch (e) { /* session only */ }
+      try { logAnalytics(completed ? 'tutorial_completed' : 'tutorial_skipped', { step: idx + 1 }); } catch (e) { /* no */ }
+      // Put the interface back exactly as it was. Without this the synthetic
+      // hand stays on screen and the next real game renders on top of it.
+      latestGame = savedGame;
+      latestRoom = savedRoom;
+      selectedIds = new Set();
+      savedGame = null; savedRoom = null;
+      showScreen('screen-landing');
+      if (completed) el('tutorial-finished').classList.remove('hidden');
+    }
+
+    return {
+      isActive: () => active,
+      wasSeen() {
+        try { return localStorage.getItem(DONE_KEY) === '1'; } catch (e) { return true; }
+      },
+      start() {
+        savedGame = latestGame;
+        savedRoom = latestRoom;
+        active = true;
+        idx = 0;
+        showScreen('screen-game');
+        paint();
+      },
+      next() { if (active && STEPS[idx] && STEPS[idx].tap) advance(); },
+      skip() { finish(false); },
+
+      // Called instead of emitting to the server. Returns true if it handled
+      // the tap, so the real handlers can bail out.
+      tryDiscard(ids) {
+        if (!active) return false;
+        const step = STEPS[idx];
+        if (!step || !step.want) { paint(step && step.nudge); return true; }
+        if (step.want(ids, latestGame)) advance();
+        else paint(step.nudge);
+        return true;
+      },
+      tryDeclare() {
+        if (!active) return false;
+        const step = STEPS[idx];
+        if (step && step.declare) advance();
+        else paint(step && step.nudge);
+        return true;
+      },
+    };
+  })();
   let selectedIds = new Set();
   let chatUnread = 0;
   let timerInterval = null;
@@ -1662,6 +1880,13 @@
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
     document.getElementById(id).classList.add('active');
+    // Offer the tutorial whenever the landing screen comes up, not only on
+    // the very first paint: a player who lands here after their first game
+    // still gets one chance at it, and wasSeen() makes sure it is only ever
+    // one chance.
+    if (id === 'screen-landing') {
+      try { maybeOfferTutorial(); } catch (e) { /* never block navigation */ }
+    }
     // The group chat button belongs to the group screen only. Handled here
     // rather than in each navigation path because there are several ways off
     // that screen (back, joining a room, a game starting under you), and a
@@ -4039,7 +4264,68 @@
   initDropdown('input-maxscore');
   initDropdown('round-maxscore-select');
 
-  document.getElementById('btn-solo-start').onclick = async () => {
+  document.getElementById('btn-solo-start').onclick = () => startSoloGame();
+
+  (function wireCoachButtons() {
+    const next = document.getElementById('coach-next');
+    const skip = document.getElementById('coach-skip');
+    if (next) next.onclick = () => Tutorial.next();
+    if (skip) skip.onclick = () => Tutorial.skip();
+  })();
+
+  // ------------------------------------------------------------------
+  // First-launch offer.
+  //
+  // Offered, never forced: a tutorial you cannot decline is one of the most
+  // reliable ways to lose a player in the first minute. One tap in, one tap
+  // past, asked once ever.
+  //
+  // Gated on having a name, because the tutorial starts a real room and the
+  // server needs one. If they haven't entered a name yet, the prompt waits
+  // rather than erroring.
+  // ------------------------------------------------------------------
+  function maybeOfferTutorial() {
+    if (Tutorial.wasSeen()) return;
+    const box = document.getElementById('tutorial-offer');
+    if (!box) return;
+    box.classList.remove('hidden');
+  }
+
+  (function wireTutorialOffer() {
+    const box = document.getElementById('tutorial-offer');
+    if (!box) return;
+    const dismiss = () => {
+      box.classList.add('hidden');
+      try { localStorage.setItem('leastcount_tutorial_done', '1'); } catch (e) { /* session only */ }
+    };
+    const yes = document.getElementById('btn-tutorial-yes');
+    const no = document.getElementById('btn-tutorial-no');
+    if (yes) yes.onclick = () => {
+      const name = getPlayerName();
+      if (!name) return setLandingError('Enter your name first');
+      box.classList.add('hidden');
+      Tutorial.start();
+    };
+    if (no) no.onclick = dismiss;
+
+    // The handoff after the last lesson. "Play bots" starts an ordinary
+    // solo game -- nothing about it is special, which is the point: the
+    // tutorial taught the rules, and this is just the game.
+    const play = document.getElementById('btn-tutorial-play');
+    const later = document.getElementById('btn-tutorial-later');
+    const hideFinished = () => {
+      const f = document.getElementById('tutorial-finished');
+      if (f) f.classList.add('hidden');
+    };
+    if (play) play.onclick = () => { hideFinished(); startSoloGame(); };
+    if (later) later.onclick = hideFinished;
+  })();
+
+  // The tutorial no longer goes through here -- it is entirely client-side
+  // and creates no room. This is the ordinary solo game again, and it is
+  // also what the "play against bots" nudge at the end of the tutorial
+  // starts, so a learner's first real game is a completely normal one.
+  async function startSoloGame() {
     const name = getPlayerName();
     if (!name) return setLandingError('Enter your name');
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
@@ -4055,7 +4341,7 @@
       // (the very next room_update/game_starting event drives the rest).
       showScreen('screen-game');
     });
-  };
+  }
 
   // Footer nav on the landing screen. Home is just the landing screen itself
   // (no-op, it's already there). Stats is the SAME #btn-my-stats element the
@@ -5331,6 +5617,11 @@
   document.getElementById('btn-discard').onclick = () => {
     const ids = [...selectedIds];
 
+    // The tutorial owns this tap while it is running: there is no room and
+    // no server to emit to, so the emit below would be answered with an
+    // error. Checked first, before anything else reads game state.
+    if (Tutorial.tryDiscard(ids)) return;
+
     // ------------------------------------------------------------------
     // THE MOVE GOES FIRST. Nothing decorative may sit in front of it.
     //
@@ -5379,6 +5670,8 @@
   };
 
   document.getElementById('btn-declare').onclick = () => {
+    if (Tutorial.tryDeclare()) return;   // see the note on the discard handler
+
     // Declare emits first for the same reason as discard: a sound must never
     // be able to swallow the single most consequential tap in the game.
     socket.emit('declare', { roomCode: myRoomCode }, (res) => {
@@ -7720,6 +8013,9 @@
     }
     showScreen('screen-game');
     renderGame(game);
+    // No tutorial hook here: the tutorial is entirely client-side and never
+    // receives server state, so a game_state arriving mid-lesson can only
+    // mean a real game is running -- in which case the tutorial is over.
 
     if (pendingStartReveal) {
       pendingStartReveal = false;
