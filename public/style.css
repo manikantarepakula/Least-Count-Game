@@ -42,17 +42,19 @@
   --card-red-ink: #8b1a1a;
   /* Red: exactly two values now. --red-fill for filled surfaces (white text
      on it measures 7.5:1), --red-text for anything sitting ON the felt. */
-  --red-fill: #8c1c24;
+  /* REVERTED to the original bright red (Sept 2026). Darkening it was my
+     call, not a requirement: white text on #e5252c measures 4.5:1 and
+     passes. The real defect was red used as TEXT or BORDERS on the felt,
+     at 2.0:1 -- and that is fixed by --red-text below, not by dulling the
+     fill. So the fill keeps the colour that actually looked right.
+
+     THE RULE THAT MATTERS: --red / --red-fill are for FILLED surfaces with
+     white text on them, and nothing else. Anything red sitting directly on
+     the dark canvas uses --red-text. */
+  --red-fill: #e5252c;
   --red-text: #ff8a80;
-  /* Kept so existing rules and the rgba() glows keep resolving. --red now
-     points at the fill value rather than the old bright signal-red. */
-  --red: #8c1c24;
-  --red-dark: #6e141b;
-  /* Decorative glows behind the wordmark and room code, NOT a signal -- so
-     this keeps the old warm red rather than following the fill down to the
-     darker value. Darkening it made the landing screen's atmosphere muddy
-     for no benefit: a glow at 22-40% alpha communicates nothing, it just
-     has to look like warmth. */
+  --red: #e5252c;
+  --red-dark: #a8151a;
   --red-rgb: 229, 37, 44;
   /* One jade canvas for the entire app (replaces the old near-black
      landing/lobby, bright-green felt body background, plain white modals,
@@ -955,7 +957,7 @@ button.secondary { background: transparent; border: 1.5px solid rgba(255,255,255
 /* Danger = it costs you something or cannot be undone. The ONLY filled red
    in the app now, so red carries one meaning instead of five. */
 button.danger {
-  background: linear-gradient(160deg, #a82530 0%, var(--red-fill) 100%);
+  background: linear-gradient(160deg, var(--red) 0%, var(--red-dark) 100%);
   color: #fff; margin-top: 8px;
   box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.18);
 }
