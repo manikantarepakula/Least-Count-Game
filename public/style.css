@@ -3303,3 +3303,21 @@ body.game-active .bg-scrim { display: none; }
 /* While the video is loading or playing, the buttons must not be tappable --
    a second tap would request a second ad for a seat they are already getting. */
 .ad-reward-modal.busy button { opacity: 0.55; pointer-events: none; }
+
+
+/* ==========================================================================
+   In-game invite sheet (Sept 2026)
+   ========================================================================== */
+.game-invite-modal { max-width: 340px; text-align: center; }
+.game-invite-modal h2 { margin: 0 0 6px; font-size: 19px; }
+.game-invite-sub {
+  margin: 0 0 14px; font-size: 13px; line-height: 1.45; color: var(--text-muted);
+}
+/* Reuses .room-code-display from the lobby so the code reads identically in
+   both places -- same size, same letter-spacing, same weight. Only the
+   centring and spacing are set here. */
+.game-invite-modal .room-code-display { margin: 0 auto 14px; }
+.game-invite-actions { display: flex; gap: 8px; }
+.game-invite-actions button { flex: 1; }
+#btn-game-invite-close { width: 100%; margin-top: 10px; }
+#game-invite-feedback { min-height: 16px; margin: 8px 0 0; }
