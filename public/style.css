@@ -405,16 +405,65 @@ body.game-active {
 }
 .landing-wordmark {
   /* Cinzel -- Roman-inscription capitals, a regal/imperial display face --
-     reserved exclusively for this one wordmark, never used for body text or
+     reserved exclusively for this wordmark, never used for body text or
      headings elsewhere, so it stays a distinctive brand moment rather than
      getting diluted. Cinzel wants open tracking (unlike Bebas Neue, which
-     wanted it tight), so letter-spacing goes positive here. */
+     wanted it tight), so letter-spacing goes positive here.
+
+     REWRITTEN Sept 2026. Three things were wrong with the old rule:
+
+     1. It declared font-size: 40px, but every single use in index.html also
+        carried .landing-wordmark-sm, which overrode it to 18px. The 40px
+        "hero" wordmark had therefore never rendered anywhere in the app.
+        18px in the topbar is what actually shipped and what we're keeping,
+        so the size now lives here and the -sm override is deleted rather
+        than left behind as CSS that looks like an intention.
+
+     2. It was gradient-filled white -> #f2d9d9 (pink) -> var(--red), left
+        over from the red-brand experiment. It was the last element in the
+        app still asserting red as the brand identity while everything else
+        resolved through --brand gold.
+
+     3. That red base stop measured 2.67:1 against the jade background, so
+        the bottom third of every letter was below the readable threshold.
+        18px bold does NOT qualify for WCAG's large-text exemption (that
+        needs 18.66px bold), so 4.5:1 was the bar, not 3.0:1.
+
+     Now a flat --brand gold at 7.21:1. Flat, not a gradient: across 18px of
+     letter height a three-stop vertical ramp has roughly 10px to work in,
+     which reads as unevenly dim rather than as metallic depth. The glow
+     went with it -- a 24px red shadow under 18px text was only haze.
+
+     --brand-line, NOT --brand. This is light text on a dark bar, and
+     --brand-line is the token the brand switch at the top of this file
+     guarantees is the light-on-dark value; --brand is the fill value, meant
+     for button backgrounds. Under gold the two happen to be identical
+     (#f2c14e, 7.21:1), so --brand would have looked correct forever -- right
+     up until someone flipped the switch to red, where --brand is #e5252c at
+     2.67:1 and --brand-line is #ff8a80 at 5.30:1. Using the fill token here
+     would have quietly re-created the exact contrast bug this rewrite was
+     fixing, and only on the branch nobody was testing. */
   font-family: 'Cinzel', Georgia, 'Times New Roman', serif;
-  font-size: 40px; letter-spacing: 1.5px; font-weight: 800; margin: 0;
+  font-size: 18px; letter-spacing: 1.5px; font-weight: 800; margin: 0;
   line-height: 1.1;
-  background: linear-gradient(180deg, #ffffff 0%, #f2d9d9 55%, var(--red) 100%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  text-shadow: 0 6px 24px rgba(var(--red-rgb),0.25);
+  color: var(--brand-line);
+}
+
+/* Group screen topbar title. Was sharing .landing-wordmark, which meant
+   app.js line ~2939 setting it to group.name rendered whatever the user
+   typed in Roman inscription capitals in brand gold -- so an ordinary group
+   called "Sunday Cousins" looked like the product's own logo. Two problems
+   at once: it diluted the wordmark, and Cinzel (caps-only by design, tight
+   glyph set) handles arbitrary user text badly -- lowercase gets
+   small-capped, emoji fall back mid-word.
+   Same size and position in the bar, ordinary app serif, no brand colour. */
+.topbar-title {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 18px; font-weight: 700; margin: 0; line-height: 1.1;
+  color: var(--text-light);
+  /* A long group name must not shove the back button or the kebab menu out
+     of the bar -- it truncates instead. */
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .landing-tagline { color: #b9b9c0; font-size: 12px; margin: 6px 0 0; letter-spacing: 0.3px; text-align: center; }
 
@@ -480,7 +529,11 @@ body.game-active {
   border: none; padding: 0; cursor: pointer;
 }
 .landing-avatar:hover { background: rgba(255,255,255,0.16); }
-.landing-wordmark-sm { font-size: 18px; letter-spacing: 1.5px; }
+/* .landing-wordmark-sm deleted Sept 2026 -- it existed only to shrink the
+   40px hero rule to 18px, and since every use carried it, 18px was the real
+   size. That size moved into .landing-wordmark itself, so this class had
+   nothing left to do. Removed from index.html at the same time; a no-op
+   class left in the markup is the same trap as the dead 40px rule was. */
 
 /* Profile panel -- reuses the app's existing .overlay (full-screen dim +
    centered flex) and .card-panel (white rounded card) pattern, the same
