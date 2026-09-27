@@ -857,6 +857,84 @@
   let startSeqTimer = null;
   let dealAnimationCancel = null;
 
+  // WALL-CLOCK deadlines for the start sequence, in Date.now() terms.
+  //
+  // Why these exist, and why they are not timers
+  // -------------------------------------------
+  // Everything that dismissed start-sequence UI used to be a setTimeout. On
+  // Android WebView and mobile Chrome, timers in a backgrounded page are
+  // throttled hard and can stop firing altogether -- so if a player switched
+  // apps, locked the screen, or took a call during the ~10s countdown+deal,
+  // their pending "hide the badge" timer simply never ran. The game kept
+  // going (that is socket-driven, not timer-driven), and they came back to a
+  // live table with "3" or "Dealing cards..." welded on top of it.
+  //
+  // That also explains the two things that made this look mysterious:
+  //   - It hit ONE player, never the table. Each device runs its own timers;
+  //     only the phone that actually went to the background froze.
+  //   - Force-quitting and relaunching fixed it, but backgrounding and
+  //     returning did not. A relaunch resets this module's state; a return
+  //     just ran a renderGame that refused to clean up (see below).
+  //
+  // And it is why the previous attempt at this bug did not work. That fix
+  // added a "last resort" 8-second clear -- as a setTimeout, i.e. built out
+  // of the exact mechanism that was failing. A frozen timer cannot be
+  // rescued by another frozen timer.
+  //
+  // The wall clock does not freeze. So the authority on "should this UI still
+  // be on screen" moves off the flags and onto these two instants, which
+  // sweepStaleStartUi() compares against Date.now() whenever we get a chance
+  // to look: on every game_state, and the moment the page becomes visible.
+  let startSeqDeadline = 0;     // whole countdown -> deal -> reveal handoff
+  let startRevealDeadline = 0;  // the joker/open-card hold
+
+  // Hides every piece of start-sequence chrome. Collected in one place
+  // because the stuck-UI reports covered three different elements (the
+  // countdown digit, the dealing badge, and the joker/open-card overlay) and
+  // each escape route was only hiding the one it happened to know about.
+  function hideStartSeqUi() {
+    [
+      'deal-phase-badge', 'start-seq-countdown', 'deal-phase-label',
+      'deal-flyer', 'overlay-start-sequence', 'start-seq-reveal',
+    ].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.classList.add('hidden');
+    });
+  }
+
+  // Clears start-sequence UI that has outlived its wall-clock deadline.
+  // Safe to call as often as we like: nothing in the game depends on this
+  // chrome, so removing it can only ever remove something already stale.
+  function sweepStaleStartUi(reason) {
+    const now = Date.now();
+    let cleared = null;
+
+    if (startSeqDeadline && now > startSeqDeadline) {
+      startSeqDeadline = 0;
+      startSeqActive = false;
+      pendingStartReveal = false;
+      if (startSeqTimer) { clearTimeout(startSeqTimer); startSeqTimer = null; }
+      // The deal animation schedules its own timers; if those froze too it
+      // may still think it is mid-flight.
+      if (dealAnimationCancel) {
+        try { dealAnimationCancel(); } catch (e) {}
+        dealAnimationCancel = null;
+      }
+      hideStartSeqUi();
+      cleared = 'sequence';
+    }
+
+    if (startRevealDeadline && now > startRevealDeadline) {
+      startRevealDeadline = 0;
+      const overlay = document.getElementById('overlay-start-sequence');
+      if (overlay) overlay.classList.add('hidden');
+      cleared = cleared ? 'sequence+reveal' : 'reveal';
+    }
+
+    if (cleared) console.warn('[start] cleared stale ' + cleared + ' UI (' + reason + ')');
+    return !!cleared;
+  }
+
   // ---------------- seat emoji reactions (items 9 & 10) ----------------
   // playerId -> { emoji, startedAt }. Seats get fully torn down and rebuilt
   // on every renderOvalTable() call, so instead of animating a persistent
@@ -2250,6 +2328,13 @@
     const steps = 3; // "3", "2", "1"
     const stepMs = countdownMs / steps;
 
+    // The instant past which none of this chrome may still be on screen,
+    // whatever the timers did or did not do. Generous on purpose: the whole
+    // legitimate sequence plus 9s of slack for a slow phone, so a sequence
+    // that is genuinely still animating is never cut short. Cleared the
+    // moment the reveal runs normally (see showStartReveal).
+    startSeqDeadline = Date.now() + countdownMs + introMs + dealMs + 9000;
+
     function showCountdownStep(n) {
       if (n <= 0) {
         countdownEl.classList.add('hidden');
@@ -2279,17 +2364,23 @@
           }
         }, introMs + dealMs);
 
-        // Last resort. Whatever happens above -- no game_state at all, an
-        // exception inside showStartReveal, a server that never sends the
-        // state -- the badge must not outlive the sequence. Nothing about
-        // the game depends on it, so forcing it away can only ever remove
-        // something stale.
+        // Last resort for the case where this page is AWAKE but the reveal
+        // never arrives -- no game_state, an exception inside
+        // showStartReveal, a server that goes quiet. Cheap to keep, and on a
+        // foreground page it reacts faster than waiting for the next state
+        // push.
+        //
+        // It is explicitly NOT the fix for the stuck-badge bug, and must not
+        // be mistaken for it again: this is a setTimeout, so a backgrounded
+        // WebView freezes it along with everything else. The real guarantee
+        // is startSeqDeadline + sweepStaleStartUi(), which run off the wall
+        // clock. See the note by those declarations.
         setTimeout(() => {
           if (!startSeqActive) return;
           startSeqActive = false;
+          startSeqDeadline = 0;
           console.warn('[start] reveal never arrived; clearing the dealing badge');
-          document.getElementById('deal-phase-badge').classList.add('hidden');
-          countdownEl.classList.add('hidden');
+          hideStartSeqUi();
         }, introMs + dealMs + 8000);
         return;
       }
@@ -2516,6 +2607,10 @@
   // card big or held on screen, then reveals the live board underneath.
   function showStartReveal(game, revealMs) {
     startSeqActive = false;
+    // The countdown/deal phase is over, so its deadline no longer applies --
+    // clear it before arming the reveal's own, or the sweep would tear the
+    // reveal down the moment the older deadline lapsed.
+    startSeqDeadline = 0;
     document.getElementById('deal-phase-badge').classList.add('hidden');
     document.getElementById('deal-flyer').classList.add('hidden');
     const overlay = document.getElementById('overlay-start-sequence');
@@ -2533,10 +2628,18 @@
     if (game.openCard) openSlot.appendChild(cardEl(game.openCard));
 
     if (startSeqTimer) { clearTimeout(startSeqTimer); startSeqTimer = null; }
+    const holdMs = revealMs || 5000;
+    // Wall-clock backstop for this overlay specifically. It previously had
+    // NO escape route other than the timer below -- renderGame's catch-all
+    // only ever knew about the dealing badge -- which is why the joker and
+    // open card stuck on screen in exactly the same way as the countdown,
+    // and why fixing only the badge would have left half the bug in place.
+    startRevealDeadline = Date.now() + holdMs + 4000;
     startSeqTimer = setTimeout(() => {
       overlay.classList.add('hidden');
       startSeqTimer = null;
-    }, revealMs || 5000);
+      startRevealDeadline = 0;
+    }, holdMs);
   }
 
   function saveSession(roomCode, playerId) {
@@ -5271,11 +5374,23 @@
     // Once a live round is confirmed in progress, force it closed for everyone.
     if (!game.roundOver) {
       document.getElementById('overlay-round-result').classList.add('hidden');
-      // Same treatment for the dealing badge. If a live round is in progress
-      // and no start sequence is running, a visible "3-2-1"/"Dealing cards"
-      // badge is by definition stale -- it survived its own sequence. This
-      // is the catch-all behind the two specific fixes in runStartSequence:
-      // whatever route leaves it behind, the next state push clears it.
+      // Same treatment for the start-sequence chrome.
+      //
+      // THE BUG THIS GATE USED TO CAUSE. This block read:
+      //
+      //     if (!startSeqActive) { hide the dealing badge }
+      //
+      // which is exactly backwards for the case it was written to catch. When
+      // a backgrounded WebView freezes this page's timers, the only two
+      // things that ever set startSeqActive back to false are themselves
+      // timer callbacks -- so the flag stays stuck at TRUE, and this guard
+      // then refuses to clean up precisely when cleanup is the whole point.
+      // The catch-all could never fire in the one situation it existed for.
+      //
+      // So the wall clock decides first, and the flag is only consulted
+      // afterwards for the ordinary case. sweepStaleStartUi() also clears
+      // startSeqActive itself, so the check below sees the truth.
+      sweepStaleStartUi('game_state');
       if (!startSeqActive) {
         document.getElementById('deal-phase-badge').classList.add('hidden');
       }
@@ -8002,6 +8117,13 @@
   // manually reload the page mid-game.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      // Before anything else: this page may have just spent a while with its
+      // timers frozen, so any start-sequence chrome still up is probably
+      // stale. Sweeping here rather than waiting for syncWithServer's
+      // round-trip means the player sees a clean table the moment they come
+      // back, instead of a "3" sitting over a live game until the next state
+      // arrives -- which, if it is not their turn, can be many seconds.
+      sweepStaleStartUi('foreground');
       if (socket.connected) {
         syncWithServer();
       } else {
@@ -8014,7 +8136,10 @@
   // Some mobile browsers fire 'pageshow' (e.g. returning via back-forward
   // cache) without a matching visibilitychange - cover that path too.
   window.addEventListener('pageshow', () => {
-    if (document.visibilityState === 'visible') syncWithServer();
+    if (document.visibilityState === 'visible') {
+      sweepStaleStartUi('pageshow');
+      syncWithServer();
+    }
   });
 
   // ---------------- connection watchdog ----------------
