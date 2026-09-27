@@ -1,2 +1,37 @@
 node_modules/
 .DS_Store
+
+# ---------------------------------------------------------------------------
+# Firebase Admin service-account credentials.  ADDED Sept 2026 (security audit)
+#
+# server.js looks for this file in TWO places (see firebaseServiceAccountPath):
+#   /etc/secrets/<name>   -- how Render supplies it, outside the repo, safe
+#   <project root>/<name> -- supported so local dev can use the same file
+#
+# That second path is inside the repo, and before this rule nothing stopped it
+# being committed. A leaked service account is not a password you rotate at
+# leisure: it grants admin access to the whole Firebase project -- every user
+# record, all of Firestore -- bypassing security rules entirely.
+#
+# Patterns rather than the one exact filename, so a re-downloaded key with
+# Google's default name, or a key for a future project, is also covered.
+# ---------------------------------------------------------------------------
+*firebase-adminsdk*
+*-firebase-adminsdk-*.json
+serviceAccount*.json
+service-account*.json
+least-count-*firebase*
+
+# Generic credential shapes, so a stray key never rides along in a commit.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.keystore
+*.jks
+
+# Android signing / build output, if a native build is ever done in-tree.
+keystore.properties
+google-services.json
