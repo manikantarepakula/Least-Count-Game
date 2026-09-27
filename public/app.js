@@ -935,6 +935,59 @@
     return !!cleared;
   }
 
+  // ---------------- transient overlays: generic frozen-timer guard ----------
+  //
+  // Same disease as the start sequence, same cure, generalised. An overlay
+  // that is put up and then taken down by nothing but a setTimeout will stay
+  // up forever if the page is backgrounded in between, because Android
+  // WebView throttles or stops timers in a hidden page.
+  //
+  // The correct pattern was already in this file -- seat reactions and chat
+  // bubbles (see renderOvalTable) store a startedAt and recompute
+  // `Date.now() - startedAt` every render, dropping anything expired. That
+  // works because they are re-rendered constantly. These overlays are
+  // one-shot and never re-rendered, so they get the same wall-clock idea in
+  // registry form instead: whoever shows one records when it must be gone by,
+  // and the sweep enforces it at the next opportunity.
+  //
+  // Audited callers (the only timer-dismissed elements with no other escape
+  // route -- everything else was either state-driven or rebuilt from state):
+  //   draw-reveal   "You drew N cards" -- fires on EVERY penalty draw, so by
+  //                 far the most frequent exposure in the app
+  //   chain-flash   the "+2" announcement label
+  const TRANSIENT_SLACK_MS = 4000;   // grace, so a slow-but-awake phone is never cut short
+  const transientDeadlines = new Map();   // elementId -> Date.now() instant
+
+  function holdTransient(id, ms) {
+    transientDeadlines.set(id, Date.now() + ms + TRANSIENT_SLACK_MS);
+  }
+  function releaseTransient(id) {
+    transientDeadlines.delete(id);
+  }
+  function sweepStaleTransients(reason) {
+    if (!transientDeadlines.size) return false;
+    const now = Date.now();
+    const done = [];
+    transientDeadlines.forEach((deadline, id) => {
+      if (now > deadline) done.push(id);
+    });
+    done.forEach((id) => {
+      transientDeadlines.delete(id);
+      const el = document.getElementById(id);
+      if (el) el.classList.add('hidden');
+      console.warn('[ui] cleared stale overlay #' + id + ' (' + reason + ')');
+    });
+    return done.length > 0;
+  }
+
+  // Single entry point for the call sites, so adding a guarded overlay later
+  // never means hunting down three separate places to sweep it from.
+  function sweepStaleOverlays(reason) {
+    const a = sweepStaleStartUi(reason);
+    const b = sweepStaleTransients(reason);
+    return a || b;
+  }
+
   // ---------------- seat emoji reactions (items 9 & 10) ----------------
   // playerId -> { emoji, startedAt }. Seats get fully torn down and rebuilt
   // on every renderOvalTable() call, so instead of animating a persistent
@@ -4496,9 +4549,59 @@
   const QUEUE_PROMPT_DELAY_MS = 40000; // ~40s of real waiting before offering wait/bots/cancel
   let queueTimeoutTimer = null;
   let queuedPlayerCount = null;
+  // Wall-clock instant at which the wait/bots/cancel choice becomes due.
+  //
+  // THE INVERTED FROZEN-TIMER BUG. Everywhere else in this file the hazard is
+  // a timer that fails to REMOVE something, leaving stale UI on screen. Here
+  // it is the opposite and worse: the timer is what REVEALS the player's only
+  // way out of the waiting screen. If it never fires, the escape hatch never
+  // appears, and there is nothing stale to notice or dismiss -- the player
+  // just sits on "waiting for players" with no buttons until they force-quit
+  // the app.
+  //
+  // And this is the likeliest freeze of the lot. The window is 40 seconds of
+  // doing nothing but waiting, which is exactly when someone switches to
+  // another app -- so the timer is backgrounded almost by design.
+  //
+  // A missing control cannot be fixed by hiding something, so the transient
+  // registry does not apply. Instead we record when the prompt is due and
+  // re-check on every chance to look (see syncQueuePrompt).
+  let queuePromptDueAt = 0;
 
   function clearQueueTimeoutTimer() {
     if (queueTimeoutTimer) { clearTimeout(queueTimeoutTimer); queueTimeoutTimer = null; }
+    queuePromptDueAt = 0;
+  }
+
+  function showQueueChoice() {
+    document.getElementById('queue-waiting-hint').classList.add('hidden');
+    document.getElementById('queue-waiting-choice').classList.remove('hidden');
+    queuePromptDueAt = 0;
+  }
+
+  // Arms both paths: the timer (normal, foreground) and the deadline (survives
+  // a backgrounded WebView). Idempotent, so both firing is harmless.
+  function armQueuePrompt() {
+    clearQueueTimeoutTimer();
+    document.getElementById('queue-waiting-choice').classList.add('hidden');
+    document.getElementById('queue-waiting-hint').classList.remove('hidden');
+    queuePromptDueAt = Date.now() + QUEUE_PROMPT_DELAY_MS;
+    queueTimeoutTimer = setTimeout(showQueueChoice, QUEUE_PROMPT_DELAY_MS);
+  }
+
+  // Called when the page becomes visible again. If the prompt came due while
+  // the timers were frozen, show it now rather than leaving the player
+  // stranded. Only acts while actually on the waiting screen -- a stale
+  // deadline must not resurrect the prompt over some other screen.
+  function syncQueuePrompt(reason) {
+    if (!queuePromptDueAt) return false;
+    const screen = document.getElementById('screen-queue-waiting');
+    if (!screen || !screen.classList.contains('active')) return false;
+    if (Date.now() < queuePromptDueAt) return false;
+    console.warn('[queue] prompt was overdue; showing it now (' + reason + ')');
+    clearQueueTimeoutTimer();
+    showQueueChoice();
+    return true;
   }
 
   document.getElementById('btn-play-online').onclick = async () => {
@@ -4513,24 +4616,17 @@
       document.getElementById('queue-waiting-choice').classList.add('hidden');
       document.getElementById('queue-waiting-hint').classList.remove('hidden');
       showScreen('screen-queue-waiting');
-      clearQueueTimeoutTimer();
-      queueTimeoutTimer = setTimeout(() => {
-        document.getElementById('queue-waiting-hint').classList.add('hidden');
-        document.getElementById('queue-waiting-choice').classList.remove('hidden');
-      }, QUEUE_PROMPT_DELAY_MS);
+      armQueuePrompt();
     });
   };
 
   document.getElementById('btn-queue-keep-waiting').onclick = () => {
     // Just re-hides the choice and gives it another full waiting window --
     // still queued the whole time, this only affects when the prompt reappears.
-    document.getElementById('queue-waiting-choice').classList.add('hidden');
-    document.getElementById('queue-waiting-hint').classList.remove('hidden');
-    clearQueueTimeoutTimer();
-    queueTimeoutTimer = setTimeout(() => {
-      document.getElementById('queue-waiting-hint').classList.add('hidden');
-      document.getElementById('queue-waiting-choice').classList.remove('hidden');
-    }, QUEUE_PROMPT_DELAY_MS);
+    // armQueuePrompt() does the hide/show and arms BOTH the timer and the
+    // wall-clock deadline, so a background during the second window is
+    // covered exactly like the first.
+    armQueuePrompt();
   };
 
   document.getElementById('btn-queue-fill-bots').onclick = () => {
@@ -5390,7 +5486,7 @@
       // So the wall clock decides first, and the flag is only consulted
       // afterwards for the ordinary case. sweepStaleStartUi() also clears
       // startSeqActive itself, so the check below sees the truth.
-      sweepStaleStartUi('game_state');
+      sweepStaleOverlays('game_state');
       if (!startSeqActive) {
         document.getElementById('deal-phase-badge').classList.add('hidden');
       }
@@ -7767,7 +7863,13 @@
     void el.offsetWidth;
     el.style.animation = '';
     if (chainFlashTimeout) clearTimeout(chainFlashTimeout);
-    chainFlashTimeout = setTimeout(() => el.classList.add('hidden'), 2200);
+    // Timer-only dismissal, no state-driven route -- see holdTransient.
+    const CHAIN_FLASH_MS = 2200;
+    holdTransient('chain-flash', CHAIN_FLASH_MS);
+    chainFlashTimeout = setTimeout(() => {
+      el.classList.add('hidden');
+      releaseTransient('chain-flash');
+    }, CHAIN_FLASH_MS);
   }
 
   function checkChainFlash(prev, game) {
@@ -8075,9 +8177,17 @@
     cards.forEach((c) => container.appendChild(cardEl(c)));
     overlay.classList.remove('hidden');
     if (drawRevealTimeout) clearTimeout(drawRevealTimeout);
+    // This panel had exactly one reference in the whole file and no escape
+    // route but the timer below, while firing on every single penalty draw --
+    // the most frequently-exposed instance of the frozen-timer bug in the
+    // app. The timer is still the normal path; the deadline is what survives
+    // the page being backgrounded mid-draw.
+    const DRAW_REVEAL_MS = 2500;
+    holdTransient('draw-reveal', DRAW_REVEAL_MS);
     drawRevealTimeout = setTimeout(() => {
       overlay.classList.add('hidden');
-    }, 2500);
+      releaseTransient('draw-reveal');
+    }, DRAW_REVEAL_MS);
   }
   socket.on('cards_drawn', ({ cards }) => showDrawReveal(cards));
 
@@ -8123,7 +8233,8 @@
       // round-trip means the player sees a clean table the moment they come
       // back, instead of a "3" sitting over a live game until the next state
       // arrives -- which, if it is not their turn, can be many seconds.
-      sweepStaleStartUi('foreground');
+      sweepStaleOverlays('foreground');
+      syncQueuePrompt('foreground');
       if (socket.connected) {
         syncWithServer();
       } else {
@@ -8137,7 +8248,8 @@
   // cache) without a matching visibilitychange - cover that path too.
   window.addEventListener('pageshow', () => {
     if (document.visibilityState === 'visible') {
-      sweepStaleStartUi('pageshow');
+      sweepStaleOverlays('pageshow');
+      syncQueuePrompt('pageshow');
       syncWithServer();
     }
   });
