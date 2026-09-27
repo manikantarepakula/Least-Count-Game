@@ -82,13 +82,20 @@ app.use(compression());
 // --------------------------------------------------------------------------
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://*.googleapis.com https://*.gstatic.com https://*.google.com https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net",
+  // www.googletagmanager.com is NOT covered by *.google.com and must be listed
+  // separately -- omitting it blocked Google Analytics outright on every page
+  // load (found in the browser console after the first deploy of this policy).
+  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://*.googleapis.com https://*.gstatic.com https://*.google.com https://www.googletagmanager.com https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
-  "img-src 'self' data: blob: https://api.dicebear.com https://*.giphy.com https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.doubleclick.net",
+  "img-src 'self' data: blob: https://api.dicebear.com https://*.giphy.com https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.google-analytics.com https://*.doubleclick.net",
   // wss: is required -- Socket.IO upgrades to a WebSocket, and omitting this
   // breaks every multiplayer game rather than failing quietly.
-  "connect-src 'self' wss: https://*.googleapis.com https://*.google.com https://*.gstatic.com https://api.dicebear.com https://api.giphy.com",
+  // Analytics beacons go to google-analytics.com / analytics.google.com, neither
+  // of which matches *.google.com (different registrable domain), so both are
+  // listed. Without these the script loads but every event is silently dropped
+  // -- worse than the outright block above, because nothing errors.
+  "connect-src 'self' wss: https://*.googleapis.com https://*.google.com https://*.gstatic.com https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://api.dicebear.com https://api.giphy.com",
   "frame-src 'self' https://*.google.com https://*.doubleclick.net",
   "object-src 'none'",
   "base-uri 'self'",
@@ -3097,7 +3104,14 @@ io.on('connection', (socket) => {
       });
       socketIndex.set(socket.id, { roomCode: code, playerId, pending: true });
       socket.join(code);
-      ack && ack({ ok: true, pending: true, roomCode: code, playerId });
+      // Whether an ad is involved has to travel with THIS ack. It is the
+      // earliest moment the player can be told: until they tried to join we
+      // did not know the game was already running, and until the server
+      // checked we did not know whether they are exempt. They can still
+      // cancel from the waiting screen, so this is disclosure BEFORE the
+      // opt-in, not after -- the same rule the rejoin offer follows.
+      const joinNeedsAd = await needsAdToEnter(room, playerId, 'join', verifiedUid);
+      ack && ack({ ok: true, pending: true, roomCode: code, playerId, needsAd: joinNeedsAd });
       notifyHostOfJoinRequest(room);
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
