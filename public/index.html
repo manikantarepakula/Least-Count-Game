@@ -652,6 +652,12 @@
     <div class="waiting-host-spinner" aria-hidden="true"></div>
     <h2>Waiting for host</h2>
     <p class="hint">The game's already in progress -- <span id="waiting-host-name">the host</span> needs to let you in. You'll join starting next round.</p>
+    <!-- Filled in by app.js from the server's `needsAd` on the pending ack, and
+         shown ONLY when an ad actually applies. First-time players are exempt,
+         and must not be warned about an advert they will never see -- a new
+         player told to expect one might cancel instead of waiting, which is the
+         opposite of what that exemption exists for. -->
+    <p class="hint waiting-host-ad-note hidden" id="waiting-host-ad-note">A short ad plays when they let you in.</p>
     <button id="btn-cancel-waiting" class="secondary leave-btn" type="button">Cancel</button>
   </div>
 </div>
