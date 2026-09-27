@@ -71,6 +71,11 @@
 
   let session = JSON.parse(localStorage.getItem('leastcount_session') || 'null');
   let myPlayerId = session ? session.playerId : null;
+  // Restored alongside playerId: 'rejoin' needs both as of the Sept 2026
+  // security fix. A session saved by an older build carries no token --
+  // those fail the server check once and rejoin cleanly, which is the
+  // safe direction to fail.
+  let mySessionToken = session ? (session.sessionToken || null) : null;
   let myRoomCode = session ? session.roomCode : null;
 
   // Players this device has chosen to mute -- local only, resets on reload,
@@ -2695,10 +2700,26 @@
     }, holdMs);
   }
 
-  function saveSession(roomCode, playerId) {
+  // sessionToken is the credential that proves this device owns the seat, and
+  // it is required by 'rejoin' as of the Sept 2026 security fix. Before it
+  // existed, the playerId alone was enough to sit down in any seat -- and every
+  // client is handed every playerId in the game state, so that was no
+  // protection at all. See makeSessionToken() in server.js.
+  //
+  // It lives in the same localStorage blob as the rest of the session because
+  // it has exactly the same lifetime: lose it and you have lost the seat, which
+  // is the point. Never put it anywhere it could be read by another player --
+  // it is not sent in any broadcast and must never be rendered.
+  function saveSession(roomCode, playerId, sessionToken) {
     myRoomCode = roomCode;
     myPlayerId = playerId;
-    localStorage.setItem('leastcount_session', JSON.stringify({ roomCode, playerId }));
+    // Keep an existing token if this particular call didn't carry one, rather
+    // than blanking it -- a re-save that dropped the token would lock this
+    // device out of its own seat on the next reconnect.
+    if (sessionToken) mySessionToken = sessionToken;
+    localStorage.setItem('leastcount_session', JSON.stringify({
+      roomCode, playerId, sessionToken: mySessionToken || null,
+    }));
   }
 
   function escapeHtml(s) {
@@ -2994,7 +3015,7 @@
         return;
       }
       logAnalytics('room_joined');
-      saveSession(res.roomCode, res.playerId);
+      saveSession(res.roomCode, res.playerId, res.sessionToken);
       loadChatHistory(res.chatHistory);
       showChatFab();
       // Invite mode has done its job. Without this the invite card (and the
@@ -3864,7 +3885,7 @@
     socket.emit('create_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('room_created');
-      saveSession(res.roomCode, res.playerId);
+      saveSession(res.roomCode, res.playerId, res.sessionToken);
       loadChatHistory(res.chatHistory);
       showChatFab();
       showScreen('screen-lobby');
@@ -4056,11 +4077,11 @@
     showScreen('screen-landing');
   };
 
-  socket.on('join_admitted', ({ roomCode, playerId, chatHistory }) => {
+  socket.on('join_admitted', ({ roomCode, playerId, sessionToken, chatHistory }) => {
     pendingJoinRoomCode = null;
     pendingJoinPlayerId = null;
     logAnalytics('room_joined_midgame');
-    saveSession(roomCode, playerId);
+    saveSession(roomCode, playerId, sessionToken);
     // Every other join path (create_room/join_room/queue_matched) loads chat
     // history and shows the chat FAB -- this path was missing both, which is
     // why someone admitted mid-game never got a chat option at all.
@@ -4526,7 +4547,7 @@
     socket.emit('create_solo_room', { name, botCount, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('solo_game_started', { bot_count: botCount });
-      saveSession(res.roomCode, res.playerId);
+      saveSession(res.roomCode, res.playerId, res.sessionToken);
       loadChatHistory(res.chatHistory);
       showChatFab();
       // Solo play skips the lobby entirely -- the room's already mid-deal by
@@ -4644,11 +4665,11 @@
     showScreen('screen-landing');
   };
 
-  socket.on('queue_matched', ({ roomCode, playerId, chatHistory }) => {
+  socket.on('queue_matched', ({ roomCode, playerId, sessionToken, chatHistory }) => {
     clearQueueTimeoutTimer();
     queuedPlayerCount = null;
     logAnalytics('online_match_found');
-    saveSession(roomCode, playerId);
+    saveSession(roomCode, playerId, sessionToken);
     loadChatHistory(chatHistory);
     showChatFab();
     // Same as solo play -- matched rooms skip the lobby and go straight into
@@ -6801,6 +6822,7 @@
         return;
       }
       localStorage.removeItem('leastcount_session');
+      mySessionToken = null;  // the seat is gone; do not keep a credential for it
       myRoomCode = null;
       myPlayerId = null;
       latestRoom = null;
@@ -7182,7 +7204,13 @@
       return wrap;
     }
 
-    const a = AVATARS[avatarId];
+    // hasOwnProperty, not a bare lookup. AVATARS[avatarId] also matches keys
+    // inherited from Object.prototype, so an avatarId of "constructor" returned
+    // a truthy value whose .bg/.face/.d were all undefined -- rendering the
+    // literal text "undefined" into the seat. Not an injection (the values are
+    // developer-authored constants, never attacker-controlled), but the
+    // server's avatar regex does permit "constructor", so it was reachable.
+    const a = Object.prototype.hasOwnProperty.call(AVATARS, avatarId) ? AVATARS[avatarId] : null;
     if (a) {
       wrap.style.background = a.bg;
       // viewBox is fixed at 68x68 for every character, so they all sit at
@@ -8194,9 +8222,10 @@
   // ---------------- socket listeners ----------------
   function syncWithServer() {
     if (!myRoomCode || !myPlayerId) return;
-    socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId }, (res) => {
+    socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId, sessionToken: mySessionToken }, (res) => {
       if (!res.ok) {
         localStorage.removeItem('leastcount_session');
+        mySessionToken = null;  // the seat is gone; do not keep a credential for it
         // ALSO clear the in-memory copies. Removing only the stored session
         // left myRoomCode holding a dead room code for the rest of the page's
         // life, and several checks read it as "am I in a room?" -- which it
@@ -8273,7 +8302,7 @@
       socket.disconnect();
       socket.connect();
     }, 4000);
-    socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId }, () => {
+    socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId, sessionToken: mySessionToken }, () => {
       // A fresh room_update/game_state has already been emitted by the
       // server as a side effect of this rejoin -- just confirms we're alive.
       watchdogAwaitingAck = false;
