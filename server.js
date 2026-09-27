@@ -184,6 +184,42 @@ app.get('/.well-known/assetlinks.json', (req, res) => {
   res.send(JSON.stringify(ASSET_LINKS, null, 2));
 });
 
+// ---------------------------------------------------------------------------
+// Health check endpoint for Render (see the Health Checks setting on the
+// service). Render probes this every few seconds and restarts the instance if
+// it fails for 60 seconds.
+//
+// A dedicated endpoint rather than pointing the check at "/": that would serve
+// the whole 70 KB game page roughly 17,000 times a day purely for monitoring,
+// and a 200 from a static file proves only that Express is up -- not that the
+// part of the server that actually matters is working.
+//
+// What it checks is deliberately narrow. It reports unhealthy only for things
+// a RESTART would actually fix, because that is the one action Render will
+// take. So: is the process responsive, and is the game engine still able to
+// answer? Firestore being unreachable is NOT included -- that is Google's
+// outage, restarting would not help, and flapping the whole game server over
+// it would turn a stats outage into a total outage.
+// ---------------------------------------------------------------------------
+app.get('/healthz', (req, res) => {
+  try {
+    // Touch the live state the game actually runs on, so this fails if the
+    // process is wedged rather than merely listening.
+    const roomCount = rooms.size;
+    const connections = io.engine.clientsCount;
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({
+      ok: true,
+      uptimeSeconds: Math.round(process.uptime()),
+      rooms: roomCount,
+      connections,
+    });
+  } catch (e) {
+    // Something core is broken -- let Render restart us.
+    res.status(500).json({ ok: false });
+  }
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
   maxAge: '10m',
 }));
