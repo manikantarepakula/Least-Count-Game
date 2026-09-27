@@ -21,6 +21,12 @@
       hideBanner() {},
       prepareInterstitial() {},
       showInterstitial() { return Promise.resolve(false); },
+      // Rewarded ads exist only in the native app. On the website there is no
+      // ad to show, so the reward is simply granted -- resolving false here
+      // would lock website players out of rejoining, which is a game feature,
+      // not an ad feature. Never block gameplay on an ad that cannot exist.
+      prepareRewarded() {},
+      showRewarded() { return Promise.resolve(true); },
       showResultAd() {},
       hideResultAd() {},
     };
@@ -76,6 +82,17 @@
   // alongside the bottom banner and the interstitial.
   const REAL_RECT_AD_ID = 'ca-app-pub-1398110480284026/9607658553';
   const TEST_RECT_AD_ID = 'ca-app-pub-3940256099942544/6300978111';
+
+  // ---- Rewarded (opt-in video, shown only AFTER the host approves entry) ----
+  // Two separate units so AdMob reports each placement's earnings on its own --
+  // that is the number that decides whether the mid-game-join placement is
+  // worth its cost to first impressions. Created 27 Sept 2026.
+  const REAL_REWARDED_REJOIN_AD_ID = 'ca-app-pub-1398110480284026/8248197626';
+  const REAL_REWARDED_JOIN_AD_ID   = 'ca-app-pub-1398110480284026/2286172937';
+  // Google's official demo rewarded unit -- not our account, always fills, safe
+  // to click. Same role as TEST_BANNER_AD_ID above. A brand-new live unit often
+  // serves nothing for several hours, so this is what proves the wiring works.
+  const TEST_REWARDED_AD_ID = 'ca-app-pub-3940256099942544/5224354917';
 
   let useTestAds = false;
   try {
@@ -600,9 +617,78 @@
   function showResultAd() { /* intentionally disabled -- see above */ }
   function hideResultAd() { /* intentionally disabled -- see above */ }
 
+  // -------------------------------------------------------------------------
+  // Rewarded ads
+  //
+  // Contract: showRewarded(kind) resolves TRUE only if the player genuinely
+  // earned the reward, and true in every case where the failure was ours or
+  // Google's rather than theirs. It resolves false only when the player chose
+  // not to finish watching.
+  // -------------------------------------------------------------------------
+  function rewardedAdId(kind) {
+    if (useTestAds) return TEST_REWARDED_AD_ID;
+    return kind === 'join' ? REAL_REWARDED_JOIN_AD_ID : REAL_REWARDED_REJOIN_AD_ID;
+  }
+
+  // Which kind is currently loaded, so a preload for 'rejoin' is not silently
+  // shown as the 'join' unit (which would bill the wrong placement).
+  let rewardedReady = null;
+
+  async function prepareRewarded(kind) {
+    // Called when the player is ELIMINATED or their join goes pending -- not
+    // when the host approves. Fetching a video takes seconds, and approval is
+    // the one moment the player is impatient.
+    try {
+      await ensureInit();
+      await AdMob.prepareRewardVideoAd({ adId: rewardedAdId(kind), isTesting: useTestAds });
+      rewardedReady = kind;
+    } catch (e) {
+      rewardedReady = null;   // showRewarded will try again, then give up gracefully
+    }
+  }
+
+  async function showRewarded(kind) {
+    try {
+      await ensureInit();
+      if (rewardedReady !== kind) {
+        // Not preloaded, or preloaded for the other placement.
+        await AdMob.prepareRewardVideoAd({ adId: rewardedAdId(kind), isTesting: useTestAds });
+      }
+      rewardedReady = null;
+
+      // THE TRAP: onRewardedVideoAdDismissed fires whether or not anything was
+      // earned -- the plugin's own docs say so explicitly. Granting on Dismissed
+      // would reward every player who skipped the video. The ONLY signal that
+      // means "earned" is onRewardedVideoAdReward, so that is what is tracked.
+      let earned = false;
+      let sub = null;
+      try {
+        sub = await AdMob.addListener('onRewardedVideoAdReward', () => { earned = true; });
+      } catch (e) { /* listener unavailable -- fall back to the resolved value below */ }
+
+      try {
+        const item = await AdMob.showRewardVideoAd();
+        // Some plugin versions resolve with the reward item and never emit the
+        // event; treat either as proof.
+        if (item && (item.amount != null || item.type != null)) earned = true;
+      } finally {
+        if (sub && sub.remove) { try { await sub.remove(); } catch (e) {} }
+      }
+      return earned;
+    } catch (e) {
+      // No fill, failed to load, failed to show. Common in India, and none of
+      // it is the player's doing -- grant the reward. Losing an impression is
+      // far better than a player who did what we asked and got nothing.
+      console.warn('[LCAds] rewarded ad unavailable, granting anyway:', e && e.message);
+      rewardedReady = null;
+      return true;
+    }
+  }
+
   window.LCAds = {
     showBanner, hideBanner,
     prepareInterstitial, showInterstitial,
+    prepareRewarded, showRewarded,
     showResultAd, hideResultAd,
   };
 })();
