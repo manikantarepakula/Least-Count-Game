@@ -106,6 +106,27 @@
   </div>
 </div>
 
+<!-- Rewarded-ad status sheet.
+     NOT a "do you want to watch?" prompt -- that consent is given earlier, in
+     the rejoin offer, which states plainly that the host must approve and a
+     short ad then plays. By the time this appears the host has already said
+     yes, the seat is the player's, and the ad is starting. Asking again here
+     would be asking twice for the same consent at the one moment the player is
+     impatient to get back into the game.
+     So this only reports progress, and offers Try again if the video was
+     closed before it finished. The default copy below is the status case; the
+     retry case is written in by offerAdRetry() in app.js. -->
+<div id="ad-reward-offer" class="overlay hidden">
+  <div class="card-panel ad-reward-modal busy">
+    <h2 id="ad-reward-title">Taking your seat</h2>
+    <p class="ad-reward-sub" id="ad-reward-sub">Starting your ad&hellip;</p>
+    <!-- Hidden by default: only shown as "Try again" after an unfinished ad. -->
+    <button id="btn-ad-reward-watch" class="primary hidden" type="button">Try again</button>
+    <button id="btn-ad-reward-skip" class="secondary" type="button">Close</button>
+    <p class="ad-reward-note" id="ad-reward-note"></p>
+  </div>
+</div>
+
 <div id="profile-menu-panel" class="overlay hidden">
   <div class="card-panel profile-modal-panel">
     <h2>Profile</h2>
