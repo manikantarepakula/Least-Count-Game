@@ -245,7 +245,10 @@
            blocks stay in the DOM with their original ids so app.js's
            existing handlers are untouched -- only visibility switches. -->
       <div class="mode-block">
-        <h3>Quick Play</h3>
+        <!-- No <h3> here: the active "Quick Play" tab directly above already
+             names this panel, and having both said it twice on one screen.
+             The other panels keep their headings because nothing above them
+             says what they are. -->
         <!-- vs Bots is FIRST and is the mode selected on load (Sept 2026).
              Online matchmaking only works if other strangers happen to be
              waiting at that moment -- at current traffic that's usually a
@@ -316,7 +319,12 @@
         <p class="mode-block-sub">Someone sent you a code? Enter it here</p>
         <div class="mode-block-join-row">
           <input id="input-roomcode-quick" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
-          <button id="btn-join-quick" class="primary">Join</button>
+          <!-- secondary, not primary (Sept 2026): Start / Find Match above is
+               the one filled button on this pane. You only reach for Join
+               because someone handed you a code, so it does not need to
+               compete. Matches #btn-join in the Groups pane, which is the
+               same control. -->
+          <button id="btn-join-quick" class="secondary">Join</button>
         </div>
         <p class="hint">4 letters for a one-off room, 5 for a group.</p>
       </div>
@@ -347,7 +355,7 @@
         <p class="mode-block-sub">Someone sent you a code? Enter it here</p>
         <div class="mode-block-join-row">
           <input id="input-roomcode" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
-          <button id="btn-join" class="primary">Join</button>
+          <button id="btn-join" class="secondary">Join</button>
         </div>
         <p class="hint">4 letters for a one-off room, 5 for a group.</p>
       </div>
