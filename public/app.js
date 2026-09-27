@@ -1986,9 +1986,26 @@
     if (intro && intro.parentNode) intro.parentNode.removeChild(intro);
   }, 3200);
 
-  try { buildCardBackdrop(); } catch (e) {
-    console.warn('[bg] card backdrop failed (cosmetic only):', e && e.message);
-  }
+  // Deferred by one tick, deliberately.
+  //
+  // This used to call buildCardBackdrop() directly here -- and it threw on
+  // EVERY page load: "Cannot access 'BACKDROP_CARDS' before initialization".
+  // The card array is a `const` declared ~3000 lines further down, so at this
+  // point in module execution it is still in its temporal dead zone. The
+  // function itself is hoisted, which is why the call looked fine.
+  //
+  // The try/catch below then swallowed it as "cosmetic only", so the scattered
+  // card backdrop silently never appeared on any screen, in any build, since
+  // the day it shipped. Nothing logged louder than a console warning.
+  //
+  // setTimeout(0) runs it after this module has finished executing, by which
+  // point every const in the file is initialised. The backdrop is purely
+  // decorative and hidden during play, so a one-tick delay is invisible.
+  setTimeout(() => {
+    try { buildCardBackdrop(); } catch (e) {
+      console.warn('[bg] card backdrop failed (cosmetic only):', e && e.message);
+    }
+  }, 0);
 
   document.addEventListener('click', function initAudioOnce() {
     Sound.init();
@@ -3025,6 +3042,17 @@
           try { window.LCAds.prepareRewarded('join'); } catch (e) { /* no ads here */ }
         }
         document.getElementById('waiting-host-name').textContent = 'the host';
+        // Tell them an ad is coming BEFORE the host answers, not when the video
+        // starts. The rejoin path already discloses this in its offer text; the
+        // join path did not, so the first a mid-game joiner knew of it was a
+        // video appearing. Same rule, both doors.
+        //
+        // Shown only when the server says it applies -- see needsAdToEnter.
+        // A first-timer warned about an advert they will never see might cancel
+        // instead of waiting, which is the opposite of what that exemption is
+        // for, so the default when the flag is absent is to stay quiet.
+        const adNote = document.getElementById('waiting-host-ad-note');
+        if (adNote) adNote.classList.toggle('hidden', res.needsAd !== true);
         showScreen('screen-waiting-host');
         return;
       }
