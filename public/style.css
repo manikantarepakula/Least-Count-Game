@@ -3179,3 +3179,46 @@ body.game-active .bg-scrim { display: none; }
 }
 .tutorial-modal button { min-height: 48px; }
 .tutorial-modal button + button { margin-top: 8px; }
+
+/* ==========================================================================
+   Tab hierarchy on the landing screen (Sept 2026)
+   ==========================================================================
+   Two rows of tabs sat on this screen at identical size, weight and colour:
+   "Quick Play / Groups", which chooses what KIND of thing you are doing, and
+   "vs Bots / Online", which is a setting INSIDE Quick Play. Nothing said one
+   contained the other, so the screen read as four equal options.
+
+   Fixed with weight rather than a new pattern: the outer row is bigger and
+   separated by real space; the inner row is smaller, lighter and flatter, so
+   it reads as a control rather than navigation.
+
+   Both keep a 44px minimum hit area -- the inner row is quieter, not
+   smaller to the thumb. Shrinking a touch target to express hierarchy is
+   the wrong trade.
+   ========================================================================== */
+.landing-tabs { gap: 8px; margin-bottom: 18px; }
+.landing-tabs .seg {
+  min-height: 50px; font-size: 15px; letter-spacing: 0.01em;
+  border-radius: var(--radius-md);
+}
+.landing-tabs .seg.active {
+  /* The parent row's selected state is the strongest thing in this group. */
+  background: rgba(var(--brand-rgb),0.22);
+  border-color: var(--brand-line);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
+}
+
+#quickplay-toggle { gap: 6px; margin-bottom: 12px; }
+#quickplay-toggle .seg {
+  min-height: 44px;            /* unchanged: quieter, not harder to hit */
+  font-size: 12.5px; font-weight: 600;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border-color: rgba(255,255,255,0.10);
+}
+#quickplay-toggle .seg.active {
+  background: rgba(255,255,255,0.07);
+  border-color: rgba(255,255,255,0.28);
+  color: var(--text-light);
+  box-shadow: none;
+}
