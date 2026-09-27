@@ -4010,6 +4010,80 @@
       ? `${lead} to play Least Count with "${groupName}".\n${link}`
       : `${lead} to a game of Least Count. Room code: ${myRoomCode}\n${link}`;
   }
+  // -------------------------------------------------------------------------
+  // In-game invite (Sept 2026)
+  //
+  // The room code lived only on the lobby screen, so once a game started the
+  // host could not tell anyone how to join -- including the mid-game join path
+  // the rewarded ad was built around.
+  //
+  // Reuses roomInviteLink() and inviteShareText() rather than rebuilding the
+  // link here: one definition of what an invite is, so the lobby and the table
+  // can never send people to different places.
+  // -------------------------------------------------------------------------
+  function showGameInviteFeedback(text) {
+    const el = document.getElementById('game-invite-feedback');
+    if (!el) return;
+    el.textContent = text;
+    // A plain timer, deliberately -- NOT the holdTransient registry used for the
+    // stuck-overlay fixes. That registry clears things by adding .hidden, which
+    // is right for an overlay but wrong here: this is a text line that is
+    // emptied by setting textContent. Hiding it would leave it display:none for
+    // the rest of the session, so the SECOND "Copied!" would never appear.
+    //
+    // The frozen-timer risk is real but cosmetic here: worst case a stale
+    // "Copied!" sits on a sheet the player has already closed. Matches how the
+    // lobby's showRoomcodeFeedback has always behaved.
+    setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 2500);
+  }
+
+  document.getElementById('btn-game-invite').onclick = () => {
+    if (!myRoomCode) return;
+    const panel = document.getElementById('game-invite-panel');
+    const code = document.getElementById('game-invite-code');
+    const fb = document.getElementById('game-invite-feedback');
+    if (code) code.textContent = myRoomCode;
+    if (fb) fb.textContent = '';
+    if (panel) panel.classList.remove('hidden');
+  };
+
+  document.getElementById('btn-game-invite-close').onclick = () => {
+    const panel = document.getElementById('game-invite-panel');
+    if (panel) panel.classList.add('hidden');
+  };
+
+  document.getElementById('btn-game-invite-copy').onclick = async () => {
+    if (!myRoomCode) return;
+    try {
+      await navigator.clipboard.writeText(myRoomCode);
+      showGameInviteFeedback('Copied!');
+    } catch (e) {
+      // Clipboard is blocked in some WebViews and on insecure origins. The
+      // code is already on screen above, so say so rather than failing dumbly.
+      showGameInviteFeedback('Could not copy -- read out the code above.');
+    }
+  };
+
+  document.getElementById('btn-game-invite-share').onclick = async () => {
+    if (!myRoomCode) return;
+    const link = roomInviteLink();
+    const shareText = inviteShareText();
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'Least Count', text: shareText.split('\n')[0], url: link });
+        return;   // the native sheet gives its own confirmation
+      } catch (e) {
+        // Cancelled, or share unavailable -- fall through to copying the link.
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(link);
+      showGameInviteFeedback('Link copied!');
+    } catch (e) {
+      showGameInviteFeedback('Could not share -- read out the code above.');
+    }
+  };
+
   document.getElementById('btn-copy-roomcode').onclick = async () => {
     if (!myRoomCode) return;
     try {
