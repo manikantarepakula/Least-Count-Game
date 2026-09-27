@@ -53,6 +53,72 @@ const io = new Server(server, {
 // standard Accept-Encoding header.
 app.use(compression());
 
+// --------------------------------------------------------------------------
+// Security headers (added Sept 2026 -- the audit found none were being set).
+//
+// Deliberately hand-rolled rather than pulling in helmet: four headers is not
+// worth another dependency in a project with no lockfile, and writing them out
+// makes each choice reviewable.
+//
+// The CSP is the valuable one. It is defence-in-depth, not a primary control --
+// the app escapes its output properly (escapeHtml on the client, esc() in the
+// admin report) -- but if a sink is ever missed, this is what stops it becoming
+// script execution.
+//
+// Every host in the allowlist below is one the app genuinely loads from, and
+// each is there for a reason worth knowing:
+//   fonts.googleapis.com/gstatic.com  the Cinzel wordmark face
+//   cdn.jsdelivr.net                  the RevenueCat SDK (see the note in
+//                                     revenuecat-init.js -- bundling this
+//                                     locally would let it come off this list)
+//   api.dicebear.com                  avatar art, until it is served locally
+//   media*.giphy.com                  chat GIFs (img only -- never a script)
+//   *.google*/gstatic                 Firebase, Analytics and AdMob
+//
+// 'unsafe-inline' is present for script-src and style-src because index.html
+// carries inline handlers and styles today. That weakens the CSP meaningfully
+// and is the one thing worth removing later; it still blocks loading script
+// from an unlisted ORIGIN, which is the more likely injection route.
+// --------------------------------------------------------------------------
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://*.googleapis.com https://*.gstatic.com https://*.google.com https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob: https://api.dicebear.com https://*.giphy.com https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.doubleclick.net",
+  // wss: is required -- Socket.IO upgrades to a WebSocket, and omitting this
+  // breaks every multiplayer game rather than failing quietly.
+  "connect-src 'self' wss: https://*.googleapis.com https://*.google.com https://*.gstatic.com https://api.dicebear.com https://api.giphy.com",
+  "frame-src 'self' https://*.google.com https://*.doubleclick.net",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', CSP);
+  // Stops a browser second-guessing a declared Content-Type, which is how a
+  // served file can end up executed as script.
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // No reason for this app to be framed by anyone.
+  res.setHeader('X-Frame-Options', 'DENY');
+  // Don't spill the full URL to third parties. This is not cosmetic: the admin
+  // report's URL carries ADMIN_KEY in its query string, and a bare Referer
+  // would hand that key to any external host a page in this app requests.
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  // Nothing here uses the camera, microphone or location -- say so explicitly.
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  // HSTS only over real HTTPS. Render terminates TLS and forwards the original
+  // scheme, so trust that header rather than req.secure (which sees the
+  // internal hop as plain http and would never set this). Sending HSTS over
+  // plain http is meaningless, and asserting it in local dev on localhost can
+  // pin a developer's browser to https for the whole machine.
+  if (req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
+
 // Static file caching, split into two tiers:
 //  - /memes gets a long, "immutable" cache. Safe specifically because each
 //    meme file's name is a stable, randomly-generated id that never gets
@@ -155,20 +221,21 @@ if (firebaseServiceAccountPath) {
   console.warn('[Firebase] Service account file not found -- Firestore writes are disabled for now.');
 }
 
-// Temporary manual check only -- visit /api/firebase-test in a browser to
-// confirm the server can actually write to and read from Firestore. Safe to
-// remove once this is confirmed working and real stat-writing replaces it.
-app.get('/api/firebase-test', async (req, res) => {
-  if (!db) return res.status(500).json({ ok: false, error: 'Firestore is not initialized on the server -- check the secret file setup.' });
-  try {
-    const ref = db.collection('_diagnostics').doc('server-test');
-    await ref.set({ lastCheckedAt: new Date().toISOString(), ok: true });
-    const snap = await ref.get();
-    res.json({ ok: true, savedData: snap.data() });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
+// /api/firebase-test REMOVED Sept 2026 (security audit).
+//
+// It was unauthenticated and performed a Firestore WRITE on every request, so
+// anyone who knew the path could burn write quota (which costs real money) in
+// a loop, and it echoed raw `e.message` back to the caller, confirming
+// internal configuration state to a stranger. The doc path was fixed, so this
+// was never an arbitrary write -- but there is no reason to leave a free,
+// nameless button on the database in production.
+//
+// Its own comment already said "safe to remove once this is confirmed
+// working", and Firestore has been confirmed working for months. To check
+// connectivity again, read the server's startup log -- it already prints
+// either "[Firebase] Admin SDK initialized" or the warning, which is the same
+// information without an open endpoint.
+
 
 // Whitelists the platform flag the client sends (see CLIENT_PLATFORM in
 // app.js). Never trust the raw string into storage -- it lands in Firestore
@@ -251,7 +318,21 @@ app.get('/api/admin/tester-activity', async (req, res) => {
   if (!adminKey) {
     return res.status(503).json({ ok: false, error: 'ADMIN_KEY is not configured on the server, so this endpoint is disabled.' });
   }
-  if (req.query.key !== adminKey) {
+  // Accept the key from a header as well as ?key=, and prefer the header.
+  // A query string is the worst place for a credential: it is written to
+  // Render's access logs, kept in browser history, and (before the
+  // Referrer-Policy header added above) leaked to any third-party host a
+  // resource on the page was fetched from. ?key= still works so existing
+  // bookmarks don't break, but prefer:
+  //   curl -H 'X-Admin-Key: <key>' https://.../api/admin/tester-activity
+  const providedKey = req.get('X-Admin-Key') || req.query.key;
+  // Constant-time compare so the key cannot be recovered byte-by-byte from
+  // response timing. Length is checked first because timingSafeEqual throws on
+  // a length mismatch, and that throw would itself leak the length.
+  const keyOk = typeof providedKey === 'string'
+    && providedKey.length === adminKey.length
+    && crypto.timingSafeEqual(Buffer.from(providedKey, 'utf8'), Buffer.from(adminKey, 'utf8'));
+  if (!keyOk) {
     return res.status(403).json({ ok: false, error: 'Forbidden' });
   }
   if (!db) return res.status(500).json({ ok: false, error: 'Firestore is not initialized on the server.' });
@@ -957,6 +1038,60 @@ function makeRoomCode() {
 
 function makePlayerId() {
   return crypto.randomUUID();
+}
+
+// ===========================================================================
+// Seat session tokens (security fix, Sept 2026)
+// ===========================================================================
+// A playerId is an IDENTIFIER, not a credential, and it never was one -- but
+// 'rejoin' was treating it as both. It accepted { roomCode, playerId } and
+// checked only `room.players.has(playerId)`, so anything that knew a playerId
+// could bind its own socket to that seat.
+//
+// That was trivially exploitable, because every client is HANDED every other
+// player's playerId as a normal part of playing: getPublicState ships
+// `turnOrder` (see gameLogic.js), which is the full list of ids, plus
+// scores/handCounts keyed by id. So one player could read a rival's id out of
+// their own socket traffic, call rejoin with it, and receive that rival's hand
+// in the reply -- then keep playing as them, because every later event
+// resolves identity through socketIndex.get(socket.id).
+//
+// The fix is to separate the two concepts. The playerId stays public and keeps
+// working exactly as before for rendering, turn order and scores. Sitting back
+// down in a seat now additionally requires this token, which is:
+//   - 256 bits of crypto.randomBytes, so it cannot be guessed;
+//   - sent ONLY to the socket that owns the seat, never in any broadcast or
+//     public state (this is the property the whole fix rests on -- if a token
+//     ever reaches getPublicState or broadcastRoom, the hole reopens);
+//   - compared in constant time, so it cannot be probed byte-by-byte.
+//
+// DEPLOY NOTE: sessions created before this deploy have no token, so those
+// players get "Session expired, please join again" once and rejoin normally.
+// Failing closed is the only safe direction here.
+// ===========================================================================
+function makeSessionToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Constant-time compare. Both values are hex of a known length, but length is
+// still checked first because timingSafeEqual throws on a length mismatch
+// (and that throw would itself be an oracle).
+function sessionTokenMatches(expected, provided) {
+  if (typeof expected !== 'string' || typeof provided !== 'string') return false;
+  if (expected.length === 0 || expected.length !== provided.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(provided, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+// Returns the seat's token, minting one if this player predates the change.
+// Called on every path that hands a playerId back to its owner, so a returning
+// player always leaves with a usable token.
+function ensureSessionToken(player) {
+  if (!player.sessionToken) player.sessionToken = makeSessionToken();
+  return player.sessionToken;
 }
 
 // ===========================================================================
@@ -1673,12 +1808,34 @@ function findExistingSeat(room, firebaseUid, cleanName) {
     // person should occupy one chair.
     if (firebaseUid && p.firebaseUid === firebaseUid) return pid;
   }
-  if (!firebaseUid) {
-    for (const pid of room.order) {
-      const p = room.players.get(pid);
-      if (p && !p.isBot && !p.connected && p.name === cleanName) return pid;
-    }
-  }
+  // REMOVED Sept 2026 (security). This used to be here:
+  //
+  //   if (!firebaseUid) {
+  //     for (const pid of room.order) {
+  //       const p = room.players.get(pid);
+  //       if (p && !p.isBot && !p.connected && p.name === cleanName) return pid;
+  //     }
+  //   }
+  //
+  // It was a second seat-takeover path, and an easier one than the rejoin hole
+  // because it needed no account at all. Send join_room with a victim's display
+  // name and NO firebaseIdToken, and if their seat showed !connected you were
+  // handed it -- socketIndex binding, hand included via the broadcastGameState
+  // on that path. Display names are visible to the whole table, and a phone
+  // that backgrounds or blips wifi reads as !connected constantly, so catching
+  // a victim disconnected is not a hard window to hit.
+  //
+  // It existed so a guest with no Firebase account could reclaim a seat after a
+  // reconnect. That case is now covered properly by the seat session token
+  // (see makeSessionToken), which the client replays through 'rejoin' -- and
+  // unlike a display name, a token actually proves ownership. Anonymous
+  // Firebase accounts are also created automatically for every player, so the
+  // uid match above already handles real clients; this branch was reachable
+  // mainly by callers who omitted the token on purpose.
+  //
+  // Worst case for a legitimate guest who has lost both their token and their
+  // uid: they join as a new player instead of silently inheriting a seat. That
+  // is the correct failure direction.
   return null;
 }
 
@@ -1928,7 +2085,7 @@ function startMatchedRoom(entries) {
   room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
   room.game.startRound();
   for (const e of entries) {
-    io.to(e.socketId).emit('queue_matched', { roomCode: code, playerId: e.playerId, chatHistory: room.chatHistory });
+    io.to(e.socketId).emit('queue_matched', { roomCode: code, playerId: e.playerId, sessionToken: ensureSessionToken(room.players.get(e.playerId)), chatHistory: room.chatHistory });
   }
   beginStartSequence(room, code);
 }
@@ -2377,7 +2534,7 @@ io.on('connection', (socket) => {
       rooms.set(code, room);
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
-      ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+      ack && ack({ ok: true, roomCode: code, playerId, sessionToken: ensureSessionToken(room.players.get(playerId)), chatHistory: room.chatHistory });
       broadcastRoom(room);
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -2431,7 +2588,7 @@ io.on('connection', (socket) => {
       room.game.startRound();
       beginStartSequence(room, code);
 
-      ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+      ack && ack({ ok: true, roomCode: code, playerId, sessionToken: ensureSessionToken(room.players.get(playerId)), chatHistory: room.chatHistory });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
@@ -2516,7 +2673,7 @@ io.on('connection', (socket) => {
       room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
       room.game.startRound();
       for (const e of entries) {
-        io.to(e.socketId).emit('queue_matched', { roomCode: code, playerId: e.playerId, chatHistory: room.chatHistory });
+        io.to(e.socketId).emit('queue_matched', { roomCode: code, playerId: e.playerId, sessionToken: ensureSessionToken(room.players.get(e.playerId)), chatHistory: room.chatHistory });
       }
       beginStartSequence(room, code);
       ack && ack({ ok: true });
@@ -2570,7 +2727,7 @@ io.on('connection', (socket) => {
         socketIndex.set(socket.id, { roomCode: code, playerId: existingId });
         socket.join(code);
         repairHost(room);
-        ack && ack({ ok: true, roomCode: code, playerId: existingId, chatHistory: room.chatHistory });
+        ack && ack({ ok: true, roomCode: code, playerId: existingId, sessionToken: ensureSessionToken(p), chatHistory: room.chatHistory });
         broadcastRoom(room);
         if (room.game) broadcastGameState(room);
         return;
@@ -2601,7 +2758,7 @@ io.on('connection', (socket) => {
         socketIndex.set(socket.id, { roomCode: code, playerId: returningId });
         socket.join(code);
         repairHost(room);
-        ack && ack({ ok: true, roomCode: code, playerId: returningId, chatHistory: room.chatHistory });
+        ack && ack({ ok: true, roomCode: code, playerId: returningId, sessionToken: ensureSessionToken(rp), chatHistory: room.chatHistory });
         broadcastRoom(room);
         broadcastGameState(room);
         return;
@@ -2623,7 +2780,7 @@ io.on('connection', (socket) => {
         repairHost(room);
         socketIndex.set(socket.id, { roomCode: code, playerId });
         socket.join(code);
-        ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+        ack && ack({ ok: true, roomCode: code, playerId, sessionToken: ensureSessionToken(room.players.get(playerId)), chatHistory: room.chatHistory });
         broadcastRoom(room);
         return;
       }
@@ -2647,7 +2804,7 @@ io.on('connection', (socket) => {
         repairHost(room);
         socketIndex.set(socket.id, { roomCode: code, playerId });
         socket.join(code);
-        ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+        ack && ack({ ok: true, roomCode: code, playerId, sessionToken: ensureSessionToken(room.players.get(playerId)), chatHistory: room.chatHistory });
         broadcastRoom(room);
         broadcastGameState(room);
         return;
@@ -3184,7 +3341,11 @@ io.on('connection', (socket) => {
       // join_room, queue_matched) sends it so the client can render existing
       // messages and show the chat FAB; this path was missing it, which is
       // why someone admitted mid-game never got a chat option at all.
-      io.to(req.socketId).emit('join_admitted', { roomCode, playerId, chatHistory: room.chatHistory });
+      // sessionToken included for the same reason as every other path that
+      // hands a playerId to its owner: without it this player -- admitted by
+      // the host rather than joining directly -- would hold an id it cannot
+      // rejoin with, and would be silently logged out by the next reconnect.
+      io.to(req.socketId).emit('join_admitted', { roomCode, playerId, sessionToken: ensureSessionToken(room.players.get(playerId)), chatHistory: room.chatHistory });
       // Tell the host their list changed. This was missing, and it is why the
       // "X wants to join" banner stayed on screen after tapping Admit until
       // something else happened to refresh it (usually the next round).
@@ -3227,12 +3388,24 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('rejoin', ({ roomCode, playerId }, ack) => {
+  socket.on('rejoin', ({ roomCode, playerId, sessionToken }, ack) => {
     try {
       const code = (roomCode || '').trim().toUpperCase();
       const room = rooms.get(code);
       if (!room || !room.players.has(playerId)) throw new Error('Session expired, please join again.');
       const p = room.players.get(playerId);
+      // THE AUTHORIZATION CHECK. Before this existed, `room.players.has(playerId)`
+      // above was the ONLY gate -- and since every client is handed every
+      // playerId in turnOrder, that gate stopped nobody. See the note by
+      // makeSessionToken() for the full chain.
+      //
+      // Deliberately one generic message for "no token", "wrong token" and
+      // "no such seat": the reply must not tell a prober which part they got
+      // right. A seat with no token at all (pre-fix session, or a bot) can
+      // never be claimed this way.
+      if (p.isBot || !sessionTokenMatches(p.sessionToken, sessionToken)) {
+        throw new Error('Session expired, please join again.');
+      }
       // The mobile watchdog on the client calls 'rejoin' every few seconds
       // as a routine "are we still connected" ping, even while the socket
       // never actually dropped. If we replayed the game_starting sequence
@@ -3253,7 +3426,7 @@ io.on('connection', (socket) => {
       room.allHumansDisconnectedAt = null; // a human is back -- cancel any pending abandoned-room cleanup
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
-      ack && ack({ ok: true, roomCode: code, playerId, chatHistory: room.chatHistory });
+      ack && ack({ ok: true, roomCode: code, playerId, sessionToken: ensureSessionToken(p), chatHistory: room.chatHistory });
       broadcastRoom(room);
       if (!isFreshReconnect) return; // just a keepalive ping -- client already has everything
       // Don't leak hands/joker/open-card to a reconnecting client while the
