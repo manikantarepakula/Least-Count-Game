@@ -327,6 +327,14 @@
   // swapping from the Test Store to the real Play Store product later needs
   // no changes on this side -- just the API key.
   let adsRemoved = false;
+  // Rewarded-ad preload state. Declared HERE, beside the other ad flags, rather
+  // than next to the rewarded-ad code far below -- the join preload fires from
+  // the join_room callback around L3000, which is earlier in the file than that
+  // code. It would have worked (callbacks run long after this module finishes),
+  // but a `const` referenced a thousand lines above its declaration is the
+  // exact shape that has caused a silent temporal-dead-zone failure in this
+  // file before. Not worth the reasoning; move the declaration.
+  const adPreloadedFor = { rejoin: false, join: false };
   const removeAdsBtn = document.getElementById('btn-remove-ads');
 
   // Developer override: forces ads back on for THIS device even when the
@@ -3010,6 +3018,12 @@
       if (res.pending) {
         pendingJoinRoomCode = res.roomCode;
         pendingJoinPlayerId = res.playerId;
+        // Same reasoning as the rejoin preload: fetch the video while they
+        // wait on the host, so approval is instant rather than a spinner.
+        if (!adPreloadedFor.join) {
+          adPreloadedFor.join = true;
+          try { window.LCAds.prepareRewarded('join'); } catch (e) { /* no ads here */ }
+        }
         document.getElementById('waiting-host-name').textContent = 'the host';
         showScreen('screen-waiting-host');
         return;
@@ -4213,11 +4227,31 @@
     }
 
     box.classList.remove('hidden');
+    // Start fetching the rewarded video NOW, while they read the offer and
+    // decide -- not when the host approves. A video takes seconds to load, and
+    // approval is the one moment the player is impatient. Harmless if they
+    // never ask, and prepareRewarded swallows its own failures.
+    if (!rejoinAsked && !adPreloadedFor.rejoin) {
+      adPreloadedFor.rejoin = true;
+      try { window.LCAds.prepareRewarded('rejoin'); } catch (e) { /* no ads here */ }
+    }
     const back = game.rejoinScore;
     const limit = game.eliminationScore || 200;
+    // Say upfront what rejoining involves. Two things are being disclosed: the
+    // host has to approve, and (unless this player is exempt) a short ad plays
+    // once they do. Nobody should tap Ask and then be surprised by either.
+    //
+    // game.rejoinNeedsAd is per-viewer and comes from the server -- first-time
+    // players and anyone eliminated by a dropped connection are exempt, and
+    // must not be told to expect an ad they will never see.
+    const needsAd = game.rejoinNeedsAd !== false;
     text.textContent = rejoinAsked
-      ? 'Waiting for the host to answer.'
-      : `You're out. Come back in at ${back} points? The limit is ${limit}.`;
+      ? (needsAd
+          ? 'Waiting for the host. The ad starts as soon as they say yes.'
+          : 'Waiting for the host to answer.')
+      : (needsAd
+          ? `You're out. Come back in at ${back} points? The limit is ${limit}. The host has to approve, then a short ad plays.`
+          : `You're out. Come back in at ${back} points? The limit is ${limit}. The host has to approve.`);
     ask.classList.toggle('hidden', rejoinAsked);
     no.classList.toggle('hidden', rejoinAsked);
     status.classList.toggle('hidden', !rejoinAsked);
@@ -4250,6 +4284,168 @@
     // Tells the server to stop holding the round for a decision this player
     // has already made. Leaving instead is the player's own call afterwards.
     socket.emit('decline_rejoin', { roomCode: myRoomCode }, () => {});
+  };
+
+  // -------------------------------------------------------------------------
+  // Rewarded-ad entry (Sept 2026)
+  //
+  // The server decides whether an ad is needed and emits ad_required to this
+  // player alone. By the time that arrives the host has ALREADY approved -- so
+  // the seat is theirs and this sheet can honestly promise it. That ordering is
+  // a policy requirement, not a preference: a rewarded ad must deliver what it
+  // promised, which is impossible if the host could still say no afterwards.
+  // -------------------------------------------------------------------------
+  let adRewardKind = null;
+
+  function adRewardEls() {
+    return {
+      box: document.getElementById('ad-reward-offer'),
+      panel: document.querySelector('#ad-reward-offer .ad-reward-modal'),
+      title: document.getElementById('ad-reward-title'),
+      sub: document.getElementById('ad-reward-sub'),
+      note: document.getElementById('ad-reward-note'),
+      watch: document.getElementById('btn-ad-reward-watch'),
+      skip: document.getElementById('btn-ad-reward-skip'),
+    };
+  }
+
+  function hideAdRewardOffer() {
+    const { box, panel } = adRewardEls();
+    if (box) box.classList.add('hidden');
+    if (panel) panel.classList.remove('busy');
+    adRewardKind = null;
+  }
+
+  // Owners of Remove Ads never see an advert. The check lives here rather than
+  // on the server because RevenueCat runs entirely on the device -- the server
+  // has no view of entitlements. That makes it spoofable, but so is "the ad
+  // finished", and in both cases the only thing at stake is an impression: the
+  // host already approved, so no game outcome changes either way.
+  // Reuses the module-level `adsRemoved` that refreshRemoveAdsUI() maintains,
+  // rather than calling isEntitled() again here. Two reasons: isEntitled() is
+  // async and this decision has to be instant, and the entitlement key is the
+  // literal string 'remove ads' WITH A SPACE -- a detail confirmed the hard way
+  // from a live customerInfo response (see the note by that call). Re-typing it
+  // in a second place is exactly how the two drift, and the failure would be
+  // silent: paying customers quietly shown ads.
+  //
+  // It also inherits the lc_force_ads testing override for free.
+  function hasRemovedAds() {
+    return adsRemoved === true;
+  }
+
+  // The host has said yes. The seat is already theirs -- this just collects the
+  // ad they were told about when they asked.
+  //
+  // No confirmation step: they opted in at the moment they tapped Ask, having
+  // read that an ad would play. Asking twice for the same consent is friction
+  // at the one moment they are impatient to get back into the game.
+  socket.on('ad_required', async ({ kind }) => {
+    const k = kind === 'join' ? 'join' : 'rejoin';
+    adRewardKind = k;
+
+    // Paid the ads away already -- seat them without one.
+    if (hasRemovedAds()) {
+      socket.emit('claim_ad_reward', { roomCode: myRoomCode, kind: k }, () => {});
+      adRewardKind = null;
+      return;
+    }
+
+    // Tell them what is happening before the screen is taken over, so a video
+    // appearing full-screen reads as expected rather than as an interruption.
+    showAdRewardStatus(k === 'join'
+      ? 'You\u2019re in \u2014 starting your ad\u2026'
+      : 'Approved \u2014 starting your ad\u2026');
+
+    let earned = false;
+    try {
+      earned = await window.LCAds.showRewarded(k);
+    } catch (e) {
+      // showRewarded swallows its own failures and returns true; this is the
+      // impossible case. Same rule: our failure is not the player's to pay for.
+      earned = true;
+    }
+
+    if (!earned) {
+      // They closed the video early. The approval is still live for its 60
+      // seconds, so offer one retry rather than burning the seat they were
+      // granted. This is error recovery, not a second approval step.
+      offerAdRetry(k);
+      return;
+    }
+
+    socket.emit('claim_ad_reward', { roomCode: myRoomCode, kind: k }, (res) => {
+      adRewardKind = null;
+      hideAdRewardOffer();
+      if (res && res.ok) return;
+      setLandingError && setLandingError(friendlyError((res && res.error) || 'Could not take your seat.'));
+    });
+  });
+
+  // The 60-second window closed before they watched. Say so plainly rather
+  // than leaving a sheet up that no longer does anything.
+  socket.on('ad_grant_expired', () => {
+    if (!adRewardKind) return;
+    const { sub, note, watch } = adRewardEls();
+    if (sub) sub.textContent = 'That window closed. Ask again next round.';
+    if (note) note.textContent = '';
+    if (watch) watch.classList.add('hidden');
+    setTimeout(hideAdRewardOffer, 3000);
+  });
+
+  // The sheet is no longer a "do you want to watch?" prompt -- that consent was
+  // given when they tapped Ask. It now only reports status, and offers a retry
+  // if the video was closed before it finished.
+  function showAdRewardStatus(message) {
+    const { box, panel, title, sub, note, watch } = adRewardEls();
+    if (!box) return;
+    if (title) title.textContent = 'Taking your seat';
+    if (sub) sub.textContent = message;
+    if (note) note.textContent = '';
+    if (watch) watch.classList.add('hidden');
+    if (panel) panel.classList.add('busy');
+    box.classList.remove('hidden');
+  }
+
+  function offerAdRetry(kind) {
+    const { box, panel, title, sub, note, watch } = adRewardEls();
+    if (!box) return;
+    adRewardKind = kind;
+    if (panel) panel.classList.remove('busy');
+    if (title) title.textContent = 'Ad didn\u2019t finish';
+    if (sub) sub.textContent = 'The ad has to play through before you can take your seat.';
+    if (note) note.textContent = 'Your seat is held for a short while.';
+    if (watch) {
+      watch.textContent = 'Try again';
+      watch.classList.remove('hidden');
+    }
+    box.classList.remove('hidden');
+  }
+
+  document.getElementById('btn-ad-reward-watch').onclick = async () => {
+    const { panel, sub } = adRewardEls();
+    const kind = adRewardKind;
+    if (!kind) return;
+    if (panel) panel.classList.add('busy');
+    if (sub) sub.textContent = 'Loading the ad\u2026';
+
+    let earned = false;
+    try { earned = await window.LCAds.showRewarded(kind); } catch (e) { earned = true; }
+
+    if (!earned) { offerAdRetry(kind); return; }
+
+    socket.emit('claim_ad_reward', { roomCode: myRoomCode, kind }, (res) => {
+      adRewardKind = null;
+      hideAdRewardOffer();
+      if (res && res.ok) return;
+      setLandingError && setLandingError(friendlyError((res && res.error) || 'Could not take your seat.'));
+    });
+  };
+
+  document.getElementById('btn-ad-reward-skip').onclick = () => {
+    hideAdRewardOffer();
+    // Nothing to tell the server: the approval expires on its own and the
+    // sweeper releases the table.
   };
 
   socket.on('rejoin_result', ({ ok, score, reason }) => {
