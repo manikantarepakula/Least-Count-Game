@@ -3321,3 +3321,9 @@ body.game-active .bg-scrim { display: none; }
 .game-invite-actions button { flex: 1; }
 #btn-game-invite-close { width: 100%; margin-top: 10px; }
 #game-invite-feedback { min-height: 16px; margin: 8px 0 0; }
+
+
+/* The ad note on the waiting-for-host screen. Slightly dimmer than the line
+   above it: it is a heads-up, not the main message, and this screen already
+   asks the player to be patient. */
+.waiting-host-ad-note { opacity: 0.8; margin-top: 6px; }
