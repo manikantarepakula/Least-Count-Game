@@ -54,9 +54,22 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<!-- Regal display face for the landing screen's wordmark only -- everything
-     else in the app keeps the existing Georgia serif stack untouched. -->
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;800&display=swap" rel="stylesheet" />
+<!-- Regal display face for the "LEAST COUNT" wordmark only -- everything else
+     in the app keeps the existing Georgia serif stack untouched.
+
+     Trimmed Sept 2026, once the group-screen title stopped borrowing this
+     face: the request now asks for weight 800 alone (700 was never used) and
+     only the glyphs in the wordmark itself via &text=. This loads on the
+     landing screen's first paint, so a full Latin charset for an
+     eleven-character string was real cost for nothing.
+
+     CAUTION: because of &text=, this font can ONLY render the letters in
+     "LEAST COUNT" (A C E L N O S T U + space). Any other text given
+     .landing-wordmark will silently fall back to Georgia. If the wordmark
+     text ever changes, update the &text= value -- or restore the full
+     request, which was:
+     https://fonts.googleapis.com/css2?family=Cinzel:wght@700;800&display=swap -->
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@800&text=LEAST%20COUNT&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -161,7 +174,7 @@
            change, only where they physically live in the page. -->
       <button id="btn-profile-menu" class="landing-avatar" type="button" aria-label="Profile"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="7" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1Z"/></svg></button>
     </div>
-    <h1 class="landing-wordmark landing-wordmark-sm">LEAST COUNT</h1>
+    <h1 class="landing-wordmark">LEAST COUNT</h1>
     <div class="landing-topbar-right">
       <button id="btn-remove-ads" class="icon-btn hidden" type="button" title="Remove Ads"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 3 9l9 13 9-13-9-7Z"/></svg></button>
     </div>
@@ -408,7 +421,10 @@
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18 9 12l6-6"/></svg>
       </button>
     </div>
-    <h1 id="group-title" class="landing-wordmark landing-wordmark-sm">Group</h1>
+    <!-- .topbar-title, not .landing-wordmark: app.js sets this to the
+           group's name, so it is user text and must not be dressed as
+           the product logo. See .topbar-title in style.css. -->
+      <h1 id="group-title" class="topbar-title">Group</h1>
     <div class="landing-topbar-right">
       <button id="btn-group-settings" class="icon-btn" type="button" aria-label="More options" title="More options"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
     </div>
@@ -507,7 +523,7 @@
 
 <div id="screen-lobby" class="screen">
   <div class="landing-topbar">
-    <h1 class="landing-wordmark landing-wordmark-sm">LEAST COUNT</h1>
+    <h1 class="landing-wordmark">LEAST COUNT</h1>
   </div>
   <div class="landing-body">
     <div class="mode-block">
