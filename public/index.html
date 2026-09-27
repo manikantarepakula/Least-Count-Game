@@ -116,6 +116,22 @@
      So this only reports progress, and offers Try again if the video was
      closed before it finished. The default copy below is the status case; the
      retry case is written in by offerAdRetry() in app.js. -->
+<!-- In-game invite sheet. Deliberately the same code + Copy + Share trio the
+     lobby screen shows, so the two never teach different habits. -->
+<div id="game-invite-panel" class="overlay hidden">
+  <div class="card-panel game-invite-modal">
+    <h2>Invite to this table</h2>
+    <p class="game-invite-sub">They can join the game already in progress &mdash; the host approves, and they come in next round.</p>
+    <div class="room-code-display" id="game-invite-code">----</div>
+    <div class="game-invite-actions">
+      <button id="btn-game-invite-copy" class="secondary" type="button">Copy code</button>
+      <button id="btn-game-invite-share" class="primary" type="button">Share link</button>
+    </div>
+    <p id="game-invite-feedback" class="hint roomcode-feedback"></p>
+    <button id="btn-game-invite-close" class="secondary" type="button">Close</button>
+  </div>
+</div>
+
 <div id="ad-reward-offer" class="overlay hidden">
   <div class="card-panel ad-reward-modal busy">
     <h2 id="ad-reward-title">Taking your seat</h2>
@@ -687,6 +703,16 @@
       <div id="game-round" class="game-round"></div>
     </div>
     <div class="top-actions top-actions-right">
+      <!-- Invite (Sept 2026). The room code used to exist ONLY on the lobby
+           screen, so the moment a game started the host lost sight of it and
+           had no way to bring anyone else in -- the answer to "can I join?"
+           became "next game". That also stranded the mid-game join flow the
+           rewarded ad was built around: the feature was there, but the code
+           needed to reach it was not.
+           An icon rather than the code in text: the bar is already three
+           columns on a 344px phone, and this is wanted once or twice a game,
+           not continuously. -->
+      <button id="btn-game-invite" class="tiny" type="button" aria-label="Invite players" title="Invite players"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg></button>
       <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
       <!-- The only mid-round exit. Without it the table had no way out at
            all, and a refresh auto-rejoins the room, so there was no way back
