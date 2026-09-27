@@ -1000,6 +1000,9 @@ const RATE_LIMITS = {
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
   report_player: { max: 5, windowMs: 60000 },
+  // One claim per approval, so anything beyond a retry or two is not a real
+  // player finishing an advert.
+  claim_ad_reward: { max: 6, windowMs: 60000 },
   // Asking to rejoin holds up everyone else's next round, so it's kept
   // deliberately tight -- one rejoin is allowed per game anyway.
   request_rejoin: { max: 4, windowMs: 60000 },
@@ -1969,6 +1972,218 @@ function denyJoinRequest(room, playerId, reason) {
 // ---------------------------------------------------------------------------
 const REJOIN_DECISION_MS = 30000;
 
+// ===========================================================================
+// Rewarded-ad entry (Sept 2026)
+// ===========================================================================
+// Two ways into a game that is already running, both granted by the host:
+//   'rejoin'  an eliminated player coming back
+//   'join'    someone who was not in the game at all
+//
+// The host's approval no longer seats the player directly. It records an entry
+// here and asks that ONE player to watch a rewarded ad; claim_ad_reward then
+// does the seating.
+//
+// ORDER MATTERS AND IS NOT NEGOTIABLE. The ad fires only AFTER approval.
+// Google's rewarded-ad policy requires that a promised reward is actually
+// delivered once the video completes -- so an ad shown before the host decides
+// would breach it every time the host said no. That is grounds for limiting the
+// AdMob account, which is currently this app's only revenue.
+//
+// Entries are short-lived. An approval nobody acts on must not hold the table
+// up, so it expires and the room carries on without them.
+// ===========================================================================
+const AD_GRANT_TTL_MS = 60 * 1000;
+
+function adGrants(room) {
+  if (!room.awaitingAdGrant) room.awaitingAdGrant = new Map();
+  return room.awaitingAdGrant;
+}
+
+function recordAdGrant(room, playerId, kind, payload) {
+  const now = Date.now();
+  adGrants(room).set(playerId, {
+    kind,
+    payload: payload || null,
+    approvedAt: now,
+    expiresAt: now + AD_GRANT_TTL_MS,
+  });
+}
+
+function takeAdGrant(room, playerId, kind) {
+  const g = adGrants(room).get(playerId);
+  if (!g) return null;
+  adGrants(room).delete(playerId);
+  if (g.kind !== kind) return null;
+  if (Date.now() > g.expiresAt) return null;
+  return g;
+}
+
+function adGrantsPending(room) {
+  if (!room || !room.awaitingAdGrant || !room.awaitingAdGrant.size) return false;
+  const now = Date.now();
+  for (const g of room.awaitingAdGrant.values()) if (now <= g.expiresAt) return true;
+  return false;
+}
+
+// Drops approvals nobody acted on. Called from the minute sweeper and before
+// any decision that depends on whether the table is still waiting.
+function expireAdGrants(room) {
+  if (!room || !room.awaitingAdGrant || !room.awaitingAdGrant.size) return 0;
+  const now = Date.now();
+  let n = 0;
+  for (const [pid, g] of room.awaitingAdGrant) {
+    if (now > g.expiresAt) {
+      room.awaitingAdGrant.delete(pid);
+      n++;
+      const p = room.players.get(pid);
+      if (p && p.socketId) {
+        io.to(p.socketId).emit('ad_grant_expired', { kind: g.kind });
+      }
+    }
+  }
+  return n;
+}
+
+// Has this account ever actually been dealt into a round?
+//
+// Deliberately "has any activity row at all", completed or partial -- NOT
+// "has finished a game". Someone whose games always get abandoned would stay
+// new forever under the stricter test and never see an ad.
+//
+// Fails OPEN: if Firestore is down or slow we treat them as a first-timer and
+// let them in free. Losing one ad impression is a much better outcome than
+// making a real player wait on a database that is not answering.
+async function hasPlayedBefore(firebaseUid) {
+  if (!firebaseUid || !db) return false;
+  try {
+    const snap = await db.collection('activity')
+      .where('uid', '==', firebaseUid)
+      .limit(1)
+      .get();
+    return !snap.empty;
+  } catch (e) {
+    console.warn('[ads] first-timer lookup failed, treating as new:', e.message);
+    return false;
+  }
+}
+
+// Should this player be asked to watch an ad to take their seat?
+//
+// Note what is NOT here: whether they bought Remove Ads. RevenueCat runs
+// entirely on the device and the server has no view of entitlements, so the
+// client skips the ad itself for those players and claims immediately. That is
+// spoofable -- but so is the ad completion itself, and in both cases the only
+// thing at stake is an ad impression. The host still approved, so no player is
+// cheated and no game outcome changes. Server-side verification (RewardAdOptions
+// supports an `ssv` block) is the fix if this revenue ever becomes material.
+async function needsAdToEnter(room, playerId, kind, firebaseUid) {
+  // Eliminated by a dropped connection rather than on score. Three missed
+  // turns and the seat is gone -- that is this app's network handling, not a
+  // decision the player made, and charging for it would be charging them to
+  // undo our own flakiness.
+  if (kind === 'rejoin' && room.absenceEliminated && room.absenceEliminated.has(playerId)) {
+    return false;
+  }
+  // Never played before: waved in free, once. A cousin who taps a WhatsApp
+  // invite, installs the app and is made to watch an advert before seeing a
+  // single card is a player who may not come back.
+  if (!(await hasPlayedBefore(firebaseUid))) return false;
+  return true;
+}
+
+// The actual seating for an approved rejoin. Split out of respond_rejoin so
+// the same code runs whether the player was exempt from the ad or has just
+// finished watching one -- one path, so the two can never drift.
+// The actual seating for an admitted mid-game joiner. Lifted verbatim out of
+// admit_join_request so the identical code runs whether they were exempt from
+// the ad or have just watched one.
+function seatAdmittedPlayer(room, playerId, req) {
+
+  room.players.set(playerId, { name: req.name, socketId: req.socketId, connected: true, isBot: false, firebaseUid: req.firebaseUid, platform: req.platform || 'unknown' });
+  room.order.push(playerId);
+  // Admitted mid-game -- record the account here too, or this player
+  // would be the one person who could still leave and come back as
+  // somebody new (see knownPlayerIdFor).
+  rememberPlayerUid(room, req.firebaseUid, playerId);
+  const sockEntry = socketIndex.get(req.socketId);
+  if (sockEntry) sockEntry.pending = false;
+  // Actual game-engine entry (addPlayer) happens in next_round, right
+  // before startRound() -- never here. addPlayer() requires roundOver,
+  // and admitting can happen at any point in a round (or between
+  // rounds); deferring it to a single place keeps "joins next round, at
+  // the current max score" true no matter when the host actually taps
+  // Admit.
+  // Include chatHistory here too -- every other join path (create_room,
+  // join_room, queue_matched) sends it so the client can render existing
+  // messages and show the chat FAB; this path was missing it, which is
+  // why someone admitted mid-game never got a chat option at all.
+  // sessionToken included for the same reason as every other path that
+  // hands a playerId to its owner: without it this player -- admitted by
+  // the host rather than joining directly -- would hold an id it cannot
+  // rejoin with, and would be silently logged out by the next reconnect.
+  io.to(req.socketId).emit('join_admitted', { roomCode: room.code, playerId, sessionToken: ensureSessionToken(room.players.get(playerId)), chatHistory: room.chatHistory });
+  // Tell the host their list changed. This was missing, and it is why the
+  // "X wants to join" banner stayed on screen after tapping Admit until
+  // something else happened to refresh it (usually the next round).
+  // ignore_join_request never had the bug because it goes through
+  // denyJoinRequest(), which has always called this.
+  notifyHostOfJoinRequest(room);
+  broadcastRoom(room);
+  return true;
+}
+
+// Whether THIS player will be asked to watch an ad to rejoin -- worked out as
+// soon as they become eligible, so the offer they read is accurate.
+//
+// It has to be known before they decide, not at approval time, because the
+// offer now says so upfront. And it has to be per-player: telling a first-timer
+// "watch an ad" when they are exempt could make them decline something they
+// would have got free, which is the opposite of what the exemption is for.
+//
+// needsAdToEnter is async (it asks Firestore), so the answer is cached on the
+// room and the state re-broadcast once it lands. Defaults to TRUE while
+// unknown: over-disclosing costs nothing, whereas under-disclosing means an
+// unexpected advert, which is exactly what this text exists to prevent.
+function primeRejoinAdFlag(room, playerId) {
+  if (!room.rejoinAdNeeded) room.rejoinAdNeeded = new Map();
+  if (room.rejoinAdNeeded.has(playerId)) return;
+  room.rejoinAdNeeded.set(playerId, true);
+  const p = room.players.get(playerId);
+  needsAdToEnter(room, playerId, 'rejoin', p && p.firebaseUid)
+    .then((needsAd) => {
+      if (room.rejoinAdNeeded.get(playerId) === needsAd) return;
+      room.rejoinAdNeeded.set(playerId, needsAd);
+      broadcastGameState(room);   // correct the wording they are looking at
+    })
+    .catch(() => { /* leave the conservative default in place */ });
+}
+
+function seatRejoiner(room, playerId) {
+  if (!room.game) return false;
+  // Re-checked rather than trusted: rounds, eliminations and players can all
+  // have moved between the host approving and the ad finishing.
+  if (!room.game.canRejoin(playerId)) {
+    const p = room.players.get(playerId);
+    if (p && p.socketId) {
+      io.to(p.socketId).emit('rejoin_result', { ok: false, error: 'That is no longer possible.' });
+    }
+    return false;
+  }
+  room.game.rejoinEliminated(playerId);
+  // They are back in on merit now; a later absence elimination should be
+  // judged on its own, and so should a later rejoin.
+  if (room.absenceEliminated) room.absenceEliminated.delete(playerId);
+  if (room.rejoinAdNeeded) room.rejoinAdNeeded.delete(playerId);
+  const p = room.players.get(playerId);
+  if (p && p.socketId) {
+    io.to(p.socketId).emit('rejoin_result', { ok: true, score: room.game.scores[playerId] });
+  }
+  broadcastRoom(room);
+  broadcastGameState(room);
+  if (!rejoinRequestsPending(room) && !adGrantsPending(room)) scheduleAutoNextRound(room);
+  return true;
+}
+
 function rejoinRequestsPending(room) {
   return !!(room && room.pendingRejoins && room.pendingRejoins.size > 0);
 }
@@ -2068,6 +2283,12 @@ function broadcastGameState(room) {
     if (p.connected && p.socketId) {
       const state = room.game.getPublicState(pid);
       state.turnDeadline = room.turnDeadline || null;
+      // Per-viewer, like canRejoin/rejoinScore above it: the rejoin offer needs
+      // to say whether an ad is involved BEFORE this player decides to ask.
+      if (state.canRejoin) {
+        primeRejoinAdFlag(room, pid);
+        state.rejoinNeedsAd = room.rejoinAdNeeded.get(pid) !== false;
+      }
       // Milliseconds left before the round advances on its own, or null when
       // no countdown is running (mid-round, or on the final scorecard, which
       // players read at their own pace). Sent as a REMAINING duration rather
@@ -2292,6 +2513,13 @@ function scheduleAutoNextRound(room) {
   // moved on. denyRejoin()/approve re-arm this once the last one resolves,
   // and the request's own 30s timer guarantees that happens.
   if (rejoinRequestsPending(room)) return;
+  // Same reasoning for a player the host has just approved who is partway
+  // through a rewarded ad. Both entry types are between-rounds only, and a
+  // 30-second video eats most of that window -- deal now and they finish
+  // watching an ad for a seat that no longer exists, which is exactly the
+  // "reward not delivered" outcome the policy forbids.
+  expireAdGrants(room);
+  if (adGrantsPending(room)) return;
 
   room.autoNextRoundAt = Date.now() + AUTO_NEXT_ROUND_MS;
   room.autoNextTimer = setTimeout(() => {
@@ -2334,6 +2562,13 @@ function applyAbsenceEliminations(room) {
   for (const pid of gone) {
     try {
       game.eliminateAbsent(pid);
+      // Durable record that THIS elimination was a network drop, not a score.
+      // game.lastRoundResult.absentEliminated says the same thing, but that
+      // object is replaced every round -- and a player usually asks to rejoin
+      // a round or two later, by which time it is long gone. The rewarded-ad
+      // exemption needs to still know, so it is recorded on the room.
+      if (!room.absenceEliminated) room.absenceEliminated = new Set();
+      room.absenceEliminated.add(pid);
       const p = room.players.get(pid);
       if (p) { p.botMode = false; p.awayStrikes = 0; }
     } catch (e) {
@@ -3331,17 +3566,32 @@ io.on('connection', (socket) => {
         throw new Error('That player can no longer rejoin.');
       }
 
-      room.game.rejoinEliminated(playerId);
+      // Approval and seating are two steps now (see recordAdGrant). Whether
+      // this player watches an ad first is decided here, server-side -- the
+      // client is told what to do, never asked.
+      const seatP = room.players.get(playerId);
+      const uid = seatP && seatP.firebaseUid;
       clearRejoinRequest(room, playerId);
-      const p = room.players.get(playerId);
-      if (p && p.socketId) {
-        io.to(p.socketId).emit('rejoin_result', { ok: true, score: room.game.scores[playerId] });
-      }
       notifyHostOfRejoinRequests(room);
-      broadcastRoom(room);
-      broadcastGameState(room);
-      // Play resumes only once nothing else is still waiting.
-      if (!rejoinRequestsPending(room)) scheduleAutoNextRound(room);
+
+      needsAdToEnter(room, playerId, 'rejoin', uid).then((needsAd) => {
+        if (!needsAd) {
+          seatRejoiner(room, playerId);
+          return;
+        }
+        recordAdGrant(room, playerId, 'rejoin', null);
+        // Only to the player whose seat it is. Nobody else at the table needs
+        // to know, and the host must not be told to wait on an advert.
+        if (seatP && seatP.socketId) {
+          io.to(seatP.socketId).emit('ad_required', { kind: 'rejoin', roomCode: room.code });
+        }
+        broadcastRoom(room);
+      }).catch((e) => {
+        // Never strand an approved player behind a failed lookup -- seat them.
+        console.warn('[ads] rejoin gate failed, seating without an ad:', e.message);
+        seatRejoiner(room, playerId);
+      });
+
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -3358,37 +3608,26 @@ io.on('connection', (socket) => {
       const req = room.pendingJoins.get(playerId);
       clearTimeout(req.timer);
       room.pendingJoins.delete(playerId);
+      const uid = req.firebaseUid;
 
-      room.players.set(playerId, { name: req.name, socketId: req.socketId, connected: true, isBot: false, firebaseUid: req.firebaseUid, platform: req.platform || 'unknown' });
-      room.order.push(playerId);
-      // Admitted mid-game -- record the account here too, or this player
-      // would be the one person who could still leave and come back as
-      // somebody new (see knownPlayerIdFor).
-      rememberPlayerUid(room, req.firebaseUid, playerId);
-      const sockEntry = socketIndex.get(req.socketId);
-      if (sockEntry) sockEntry.pending = false;
-      // Actual game-engine entry (addPlayer) happens in next_round, right
-      // before startRound() -- never here. addPlayer() requires roundOver,
-      // and admitting can happen at any point in a round (or between
-      // rounds); deferring it to a single place keeps "joins next round, at
-      // the current max score" true no matter when the host actually taps
-      // Admit.
-      // Include chatHistory here too -- every other join path (create_room,
-      // join_room, queue_matched) sends it so the client can render existing
-      // messages and show the chat FAB; this path was missing it, which is
-      // why someone admitted mid-game never got a chat option at all.
-      // sessionToken included for the same reason as every other path that
-      // hands a playerId to its owner: without it this player -- admitted by
-      // the host rather than joining directly -- would hold an id it cannot
-      // rejoin with, and would be silently logged out by the next reconnect.
-      io.to(req.socketId).emit('join_admitted', { roomCode, playerId, sessionToken: ensureSessionToken(room.players.get(playerId)), chatHistory: room.chatHistory });
-      // Tell the host their list changed. This was missing, and it is why the
-      // "X wants to join" banner stayed on screen after tapping Admit until
-      // something else happened to refresh it (usually the next round).
-      // ignore_join_request never had the bug because it goes through
-      // denyJoinRequest(), which has always called this.
-      notifyHostOfJoinRequest(room);
-      broadcastRoom(room);
+      // Same two-step as rejoin: approval here, seating in seatAdmittedPlayer,
+      // possibly with a rewarded ad in between. Decided server-side.
+      needsAdToEnter(room, playerId, 'join', uid).then((needsAd) => {
+        if (!needsAd) {
+          seatAdmittedPlayer(room, playerId, req);
+          return;
+        }
+        recordAdGrant(room, playerId, 'join', req);
+        if (req.socketId) {
+          io.to(req.socketId).emit('ad_required', { kind: 'join', roomCode: room.code });
+        }
+        notifyHostOfJoinRequest(room);
+        broadcastRoom(room);
+      }).catch((e) => {
+        console.warn('[ads] join gate failed, seating without an ad:', e.message);
+        seatAdmittedPlayer(room, playerId, req);
+      });
+
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -3419,6 +3658,38 @@ io.on('connection', (socket) => {
       if (!hostEntry || hostEntry.playerId !== room.hostPlayerId) throw new Error('Only the host can respond to join requests.');
       denyJoinRequest(room, playerId, 'declined');
       ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Seats a player who has just finished a rewarded ad (or who skipped it
+  // because they own Remove Ads -- the client decides that, see needsAdToEnter).
+  //
+  // The caller's identity comes from socketIndex, NOT the payload, so this
+  // cannot be used to seat somebody else. The only thing the client supplies
+  // is which of the two rewards it is claiming.
+  socket.on('claim_ad_reward', ({ roomCode, kind }, ack) => {
+    try {
+      if (isRateLimited(socket, 'claim_ad_reward')) throw new Error('Too many requests. Please wait a moment.');
+      const room = rooms.get((roomCode || '').trim().toUpperCase());
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      if (kind !== 'rejoin' && kind !== 'join') throw new Error('Unknown reward.');
+
+      const grant = takeAdGrant(room, entry.playerId, kind);
+      // One message for "no approval", "wrong kind" and "expired" -- a claim
+      // that failed should not tell a prober which part it got right.
+      if (!grant) throw new Error('That is no longer available. Please ask again.');
+
+      const seated = kind === 'rejoin'
+        ? seatRejoiner(room, entry.playerId)
+        : seatAdmittedPlayer(room, entry.playerId, grant.payload);
+
+      // The table has been held up waiting for this ad; let it move again.
+      if (!rejoinRequestsPending(room) && !adGrantsPending(room)) scheduleAutoNextRound(room);
+      ack && ack({ ok: !!seated });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
@@ -4026,6 +4297,12 @@ setInterval(() => {
       rooms.delete(code);
       console.log(`[Cleanup] Deleted abandoned room ${code} (no human connected for 10+ minutes).`);
     }
+  }
+  // Approvals nobody acted on. An expired one must not hold a table's next
+  // round hostage, and expireAdGrants also tells that player their window
+  // closed rather than leaving them staring at a dead "watch to rejoin" sheet.
+  for (const room of rooms.values()) {
+    if (expireAdGrants(room) > 0 && !rejoinRequestsPending(room)) scheduleAutoNextRound(room);
   }
   // Same sweep also prunes expired IP rate-limit buckets -- otherwise every
   // distinct visitor IP the server has ever seen stays in memory forever.
