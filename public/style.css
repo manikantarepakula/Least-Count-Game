@@ -3275,3 +3275,31 @@ body.game-active .bg-scrim { display: none; }
   color: var(--text-light);
   box-shadow: none;
 }
+
+
+/* ==========================================================================
+   Rewarded-ad sheet (Sept 2026)
+   ==========================================================================
+   Reuses .overlay + .card-panel, the same pattern as the tutorial offer and
+   the profile panel, so it inherits the dim, the centring and the dark card
+   without inventing a third modal style.
+
+   The only additions are spacing and the note line. Deliberately plain: this
+   appears at a moment the player is already impatient to get back into a
+   game, and a decorated advertisement pitch would read as pushier than it is.
+   ========================================================================== */
+.ad-reward-modal { max-width: 340px; text-align: center; }
+.ad-reward-modal h2 { margin: 0 0 6px; font-size: 19px; }
+.ad-reward-sub {
+  margin: 0 0 16px; font-size: 13.5px; line-height: 1.45;
+  color: var(--text-muted);
+}
+.ad-reward-modal button { width: 100%; }
+.ad-reward-modal button + button { margin-top: 8px; }
+.ad-reward-note {
+  margin: 12px 0 0; font-size: 11.5px; line-height: 1.4;
+  color: var(--text-muted); opacity: 0.85;
+}
+/* While the video is loading or playing, the buttons must not be tappable --
+   a second tap would request a second ad for a seat they are already getting. */
+.ad-reward-modal.busy button { opacity: 0.55; pointer-events: none; }
