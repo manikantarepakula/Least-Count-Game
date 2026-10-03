@@ -517,10 +517,12 @@ body.game-active {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.08);
 }
-/* Lobby's topbar only ever has the wordmark in it (no avatar/icons -- those
-   are landing-only) -- centered rather than space-between, which would
-   otherwise shove a single child over to one side. */
-#screen-lobby .landing-topbar { justify-content: center; }
+/* space-between, not center (Oct 2026). This was centred back when the lobby
+   top bar held nothing but the wordmark -- centring a lone child was right
+   then. It now carries a rules button on the right and a matching empty
+   spacer on the left, so the three columns must spread; centring would bunch
+   them in the middle and push the wordmark off-axis. */
+#screen-lobby .landing-topbar { justify-content: space-between; }
 .landing-topbar-left, .landing-topbar-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .landing-topbar-left { position: relative; }
 .landing-avatar {
@@ -3384,3 +3386,10 @@ body.game-active .bg-scrim { display: none; }
    order and CSS cannot look backwards. */
 #screen-game.deal-phase .table-center { opacity: 0; transition: opacity 0.2s; }
 #screen-game.deal-phase .stock-badge { display: none; }
+
+
+/* .rules-btn is now unused: the lobby's Game Rules went from a full-width
+   button in the panel to an icon in the top bar (Oct 2026), and nothing else
+   in index.html carries the class. Left in place rather than deleted because
+   it is harmless and removing styles for markup that might come back is how
+   you get a button with no styling six months later. */
