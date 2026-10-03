@@ -633,6 +633,20 @@
     <div class="mode-block">
       <h3>Players</h3>
       <ul id="lobby-players" class="player-list"></ul>
+      <!-- Host-only, lobby-only bot controls (Oct 2026). A two-player game is
+           thin, so the host can pad the table out. Shown to the host alone --
+           everyone else just sees the bots appear in the list above.
+           Sits INSIDE the Players panel rather than as a fourth block: this
+           screen had already run out of vertical room, and a new panel would
+           have given back the space the Game Rules move just recovered. -->
+      <div id="lobby-bots-row" class="lobby-bots-row hidden">
+        <span class="lobby-bots-label">Bots</span>
+        <div class="lobby-bots-stepper">
+          <button id="btn-bot-remove" class="icon-btn" type="button" aria-label="Remove a bot">&minus;</button>
+          <span id="lobby-bot-count" class="lobby-bots-count">0</span>
+          <button id="btn-bot-add" class="icon-btn" type="button" aria-label="Add a bot">+</button>
+        </div>
+      </div>
     </div>
 
 
