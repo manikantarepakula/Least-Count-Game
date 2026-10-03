@@ -335,6 +335,28 @@
   // exact shape that has caused a silent temporal-dead-zone failure in this
   // file before. Not worth the reasoning; move the declaration.
   const adPreloadedFor = { rejoin: false, join: false };
+
+  // ---- Bot difficulty ----
+  // Picks WHICH characters take the seats, not how well any of them plays --
+  // the tier orders live in server.js (BOT_TIERS). Remembered per device so
+  // someone who likes Hard is not re-choosing it every session.
+  const BOT_DIFFICULTY_KEY = 'leastcount_bot_difficulty';
+  function botDifficulty() {
+    const el = document.getElementById('input-bot-difficulty');
+    const v = el && el.value;
+    return (v === 'easy' || v === 'hard') ? v : 'medium';
+  }
+  function rememberBotDifficulty(v) {
+    try { localStorage.setItem(BOT_DIFFICULTY_KEY, v); } catch (e) { /* session only */ }
+  }
+  function restoreBotDifficulty() {
+    let saved = 'medium';
+    try { saved = localStorage.getItem(BOT_DIFFICULTY_KEY) || 'medium'; } catch (e) { /* fine */ }
+    ['input-bot-difficulty', 'lobby-bot-difficulty'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.value = saved;
+    });
+  }
   const removeAdsBtn = document.getElementById('btn-remove-ads');
 
   // Developer override: forces ads back on for THIS device even when the
@@ -4761,6 +4783,12 @@
   // own unstyleable popup everywhere in the app (see initDropdown above).
   initDropdown('input-online-playercount');
   initDropdown('input-bot-count');
+  // Restore the saved difficulty BEFORE the themed dropdown wraps the select --
+  // initDropdown reads the current value to build its trigger label, so setting
+  // it afterwards would leave the visible label showing Medium while the real
+  // value was Hard.
+  restoreBotDifficulty();
+  initDropdown('input-bot-difficulty');
   initDropdown('input-maxscore');
   initDropdown('round-maxscore-select');
 
@@ -4863,7 +4891,7 @@
     if (!name) return setLandingError('Enter your name');
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_solo_room', { name, botCount, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
+    socket.emit('create_solo_room', { name, botCount, botDifficulty: botDifficulty(), firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('solo_game_started', { bot_count: botCount });
       saveSession(res.roomCode, res.playerId, res.sessionToken);
@@ -5071,6 +5099,13 @@
     const players = Array.isArray(room.players) ? room.players : [];
     const bots = players.filter((p) => p && p.isBot).length;
     document.getElementById('lobby-bot-count').textContent = String(bots);
+    // Driven by the ROOM, not by this device: whatever the host chose is what
+    // everyone is actually playing against, and a host on a second device must
+    // not see a stale local value.
+    const diffEl = document.getElementById('lobby-bot-difficulty');
+    if (diffEl && room.botDifficulty && diffEl.value !== room.botDifficulty) {
+      diffEl.value = room.botDifficulty;
+    }
     // Mirrors the server's own limits so the buttons grey out instead of
     // firing a request that comes back as an error.
     document.getElementById('btn-bot-add').disabled = players.length >= 10;
@@ -5087,6 +5122,23 @@
     el.textContent = friendlyError(msg || 'Could not change the bots.');
     setTimeout(() => { if (el.textContent) el.textContent = ''; }, 3000);
   }
+
+  document.getElementById('lobby-bot-difficulty').onchange = (e) => {
+    const level = e.target.value;
+    rememberBotDifficulty(level);
+    // Also keep the landing screen's picker in step, so a host who sets Hard
+    // here does not find Medium waiting next time they start a solo game.
+    const solo = document.getElementById('input-bot-difficulty');
+    if (solo) solo.value = level;
+    if (!myRoomCode) return;
+    socket.emit('set_bot_difficulty', { roomCode: myRoomCode, level }, (res) => {
+      if (res && !res.ok) showLobbyBotError(res.error);
+    });
+  };
+
+  document.getElementById('input-bot-difficulty').onchange = (e) => {
+    rememberBotDifficulty(e.target.value);
+  };
 
   document.getElementById('btn-bot-add').onclick = () => {
     if (!myRoomCode) return;
@@ -5114,7 +5166,14 @@
       const li = document.createElement('li');
       li.dataset.playerId = p.playerId;
       const hostTag = p.playerId === room.hostPlayerId ? '<span class="host-tag">HOST</span>' : '';
-      li.innerHTML = `<span>${escapeHtml(displayName(p.name))} ${hostTag}</span><span class="status">${p.connected ? 'online' : 'offline'}</span>`;
+      // Bots carry a one-line trait instead of a name, since the name is
+      // generic. That line is what makes the characters learnable -- a
+      // difference a player can name is worth far more than one they only
+      // sense. Humans have no trait, so this collapses to the old markup.
+      const traitHtml = p.trait
+        ? `<span class="player-trait">${escapeHtml(p.trait)}</span>`
+        : '';
+      li.innerHTML = `<span>${escapeHtml(displayName(p.name))} ${hostTag}${traitHtml}</span><span class="status">${p.connected ? 'online' : 'offline'}</span>`;
       // Tap a player's row to report/mute them before the game even starts --
       // same popover the seats use once play begins. Not wired for yourself
       // or for bots (lobby rows are only ever real players anyway, but the
@@ -8009,6 +8068,20 @@
     const pop = document.createElement('div');
     pop.className = 'player-action-popover' + (alignClass ? ' ' + alignClass : '');
     pop.onclick = (e) => e.stopPropagation(); // don't let the outside-click closer catch this
+
+    // A bot's trait line, above its stats. This is where a player actually
+    // learns the characters -- the names are generic on purpose, so without
+    // this the differences are felt but never nameable, which is most of the
+    // work for a fraction of the payoff.
+    const botInfo = latestRoom && Array.isArray(latestRoom.players)
+      ? latestRoom.players.find((p) => p && p.playerId === playerId && p.trait)
+      : null;
+    if (botInfo) {
+      const traitEl = document.createElement('div');
+      traitEl.className = 'player-action-trait';
+      traitEl.textContent = botInfo.trait;
+      pop.appendChild(traitEl);
+    }
 
     const statsEl = document.createElement('div');
     statsEl.className = 'player-action-stats';
