@@ -329,8 +329,25 @@
           <button type="button" class="seg" data-mode="online">Online</button>
         </div>
         <div id="quickplay-bots">
-          <label for="input-bot-count">No. of bots</label>
-          <select id="input-bot-count"></select>
+          <!-- Bot count and difficulty on one row (Oct 2026). Difficulty picks
+               WHICH characters take the seats, not how well any of them plays --
+               see BOT_TIERS in server.js. Side by side because they are one
+               decision ("who am I playing") and this screen has no room to
+               spare. -->
+          <div class="bot-setup-row">
+            <div class="bot-setup-field">
+              <label for="input-bot-count">No. of bots</label>
+              <select id="input-bot-count"></select>
+            </div>
+            <div class="bot-setup-field">
+              <label for="input-bot-difficulty">Difficulty</label>
+              <select id="input-bot-difficulty">
+                <option value="easy">Easy</option>
+                <option value="medium" selected>Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+          </div>
           <div class="row">
             <button id="btn-solo-start" class="primary">Start</button>
           </div>
@@ -641,6 +658,14 @@
            have given back the space the Game Rules move just recovered. -->
       <div id="lobby-bots-row" class="lobby-bots-row hidden">
         <span class="lobby-bots-label">Bots</span>
+        <!-- Difficulty sits on the SAME row as the stepper, not a new one. This
+             screen only just got Start Game above the fold; a second row hands
+             that space straight back. -->
+        <select id="lobby-bot-difficulty" class="lobby-bots-difficulty" aria-label="Bot difficulty">
+          <option value="easy">Easy</option>
+          <option value="medium" selected>Medium</option>
+          <option value="hard">Hard</option>
+        </select>
         <div class="lobby-bots-stepper">
           <button id="btn-bot-remove" class="icon-btn" type="button" aria-label="Remove a bot">&minus;</button>
           <span id="lobby-bot-count" class="lobby-bots-count">0</span>
