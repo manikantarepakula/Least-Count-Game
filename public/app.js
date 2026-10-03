@@ -906,6 +906,12 @@
   // countdown digit, the dealing badge, and the joker/open-card overlay) and
   // each escape route was only hiding the one it happened to know about.
   function hideStartSeqUi() {
+    // Also drops the class that empties the table centre. Doing it here rather
+    // than at each call site means every escape route -- normal finish, the
+    // wall-clock sweep, the awake-page backstop -- restores the open card and
+    // joker, instead of one of them leaving the table blank.
+    const scr = document.getElementById('screen-game');
+    if (scr) scr.classList.remove('deal-phase');
     [
       'deal-phase-badge', 'start-seq-countdown', 'deal-phase-label',
       'deal-flyer', 'overlay-start-sequence', 'start-seq-reveal',
@@ -2373,6 +2379,10 @@
     const countdownEl = document.getElementById('start-seq-countdown');
     const dealingLabel = document.getElementById('deal-phase-label');
     startSeqActive = true;
+    // Frees the centre of the table for the countdown -- see
+    // #screen-game.deal-phase in style.css. Paired with the removal in
+    // hideStartSeqUi(), which every exit route already goes through.
+    document.getElementById('screen-game').classList.add('deal-phase');
     badge.classList.remove('hidden');
     countdownEl.classList.remove('hidden');
     dealingLabel.classList.add('hidden');
@@ -2694,6 +2704,10 @@
     // clear it before arming the reveal's own, or the sweep would tear the
     // reveal down the moment the older deadline lapsed.
     startSeqDeadline = 0;
+    // The reveal takes over the centre of the table next, so the deal class
+    // comes off here too -- this path hides the badge directly rather than
+    // going through hideStartSeqUi().
+    document.getElementById('screen-game').classList.remove('deal-phase');
     document.getElementById('deal-phase-badge').classList.add('hidden');
     document.getElementById('deal-flyer').classList.add('hidden');
     const overlay = document.getElementById('overlay-start-sequence');
