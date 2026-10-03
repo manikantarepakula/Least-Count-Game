@@ -751,6 +751,17 @@
          open card / joker vacate (see #screen-game.reveal-phase in
          style.css), so it costs no extra room. -->
     <div id="reveal-banner" class="reveal-banner hidden"></div>
+    <!-- Countdown + "Dealing cards..." (moved here Oct 2026).
+         This used to be a position:fixed element on the body at top:12% of the
+         VIEWPORT, which on a phone lands squarely on top of the seat at the top
+         of the oval -- so the deal announcement covered whoever was sitting
+         there. Now it is a child of the table and centred in it, exactly like
+         #reveal-banner above, which is how the round outcome has always been
+         announced. Same place, same way, whatever the screen size. -->
+    <div id="deal-phase-badge" class="deal-phase-badge hidden">
+      <div id="start-seq-countdown" class="start-seq-countdown">3</div>
+      <div id="deal-phase-label" class="deal-phase-label hidden">Dealing cards...</div>
+    </div>
     <!-- .seat elements injected by app.js -->
     <div id="deal-flyer" class="deal-flyer hidden"></div>
     <!-- Pre-deal intro: shows the actual number of decks in play, then a
@@ -832,14 +843,6 @@
 </div>
 
 <canvas id="confetti-canvas" class="confetti-canvas hidden"></canvas>
-
-<!-- Countdown + "dealing" label float over the real oval table (now visible
-     underneath) instead of a full-screen takeover, since the deal animation
-     itself flies cards to the actual chair positions on that table. -->
-<div id="deal-phase-badge" class="deal-phase-badge hidden">
-  <div id="start-seq-countdown" class="start-seq-countdown">3</div>
-  <div id="deal-phase-label" class="deal-phase-label hidden">Dealing cards...</div>
-</div>
 
 <div id="overlay-start-sequence" class="start-sequence hidden">
   <div class="start-seq-box">
