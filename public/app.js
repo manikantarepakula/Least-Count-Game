@@ -5514,6 +5514,14 @@
       // about to show the ACTUAL cards, and a fan of backs with a count
       // badge next to it was the same fact stated a second time in a seat
       // with no room to spare.
+      // Cards and points now share ONE row (.seat-stats) instead of stacking
+      // as two. Two near-empty lines in a 96px box was most of why the seat
+      // read as too tall for what it said -- and your own seat already put
+      // them together as "8 cards . 0 pts", so the bots and you were showing
+      // the same facts in two different shapes.
+      const statsRow = document.createElement('div');
+      statsRow.className = 'seat-stats';
+
       if (count !== undefined && count > 0 && p.playerId !== myPlayerId && !revealPhaseActive) {
         const fan = document.createElement('div');
         fan.className = 'seat-fan';
@@ -5528,7 +5536,7 @@
         badge.className = 'seat-fan-count';
         badge.textContent = String(count);
         fan.appendChild(badge);
-        chipEl.appendChild(fan);
+        statsRow.appendChild(fan);
       }
 
       const metaEl = document.createElement('div');
@@ -5551,11 +5559,17 @@
       } else if (count === undefined) {
         metaEl.textContent = '';
       } else if (fanShowsCount) {
-        metaEl.textContent = chipHidesScore ? '' : score + ' pts';
+        // The fan's badge is immediately to the left on the same row now, so
+        // the dot separates "8" from "0 pts" rather than two stacked lines
+        // needing none.
+        metaEl.textContent = chipHidesScore ? '' : '· ' + score + ' pts';
       } else {
         metaEl.textContent = count + ' cards' + (chipHidesScore ? '' : ' · ' + score + ' pts');
       }
-      chipEl.appendChild(metaEl);
+      statsRow.appendChild(metaEl);
+      // :empty on the row keeps it from reserving height during the deal and
+      // the reveal, when both children are deliberately blank.
+      chipEl.appendChild(statsRow);
 
       // Recent discards for THIS player, this round -- lets you track what
       // opponents have been throwing away, same as you naturally would
