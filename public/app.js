@@ -7243,6 +7243,18 @@
   // hand of theirs to wait for. Without this the person most likely to want
   // out (they've just been knocked out and the table plays on for another
   // ten minutes) was the only one who couldn't.
+  // True when this player is the only human at the table -- everyone else is a
+  // bot. Read from the room rather than from how the game was created: a solo
+  // room someone was later admitted into is a real multiplayer game, and a
+  // multiplayer game everyone else has left is effectively solo. Mirrors the
+  // same test on the server (see leave_room), so the two cannot disagree about
+  // who is allowed to walk out mid-round.
+  function amSoloVsBots() {
+    if (!latestRoom || !Array.isArray(latestRoom.players)) return false;
+    const humans = latestRoom.players.filter((p) => p && !p.isBot);
+    return humans.length === 1 && humans[0].playerId === myPlayerId;
+  }
+
   function amSpectator() {
     if (!latestGame || !myPlayerId) return false;
     const out = (latestGame.eliminated || []).concat(latestGame.quit || []);
@@ -7297,6 +7309,13 @@
     // moment they're knocked out, rather than making them sit through the
     // rest of a hand they're no longer in.
     if (amSpectator()) { setLeavePending(false); leaveRoom(); return; }
+    // Solo vs bots goes immediately too (Oct 2026). The server now permits a
+    // mid-round exit when no other human is seated -- there is nobody whose
+    // hand would be disrupted. Without this branch the client would still
+    // queue the leave and the player would be told to wait for a round they
+    // had already decided to stop playing, with the server's permission going
+    // unused.
+    if (amSoloVsBots()) { setLeavePending(false); leaveRoom(); return; }
     if (leaveAfterRound) return;   // "Keep leaving" -- nothing to change
     if (latestGame && !latestGame.roundOver && !latestGame.gameOver) {
       setLeavePending(true);
