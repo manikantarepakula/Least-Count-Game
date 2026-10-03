@@ -4050,7 +4050,26 @@ io.on('connection', (socket) => {
       // couldn't go. (isSpectator covers quit too, though that one can't
       // reach here.)
       const spectating = room.game && room.game.isSpectator(playerId);
-      if (room.phase === 'playing' && room.game && !room.game.roundOver && !spectating) {
+
+      // Solo-vs-bots is exempt from the mid-round hold entirely (Oct 2026).
+      //
+      // The hold exists to protect the OTHER people at the table: you cannot
+      // pull a hand out of a live round that three other humans are playing.
+      // When the only other players are bots there is nobody to protect, so
+      // the rule was doing nothing but making someone sit through a round
+      // against bots they had already decided to stop playing.
+      //
+      // Measured on the humans still seated, not on how the room was created:
+      // a solo room someone was later admitted into is a real multiplayer game
+      // and keeps the hold, while a multiplayer game everyone else has left is
+      // effectively solo and does not.
+      const humansSeated = room.order.filter((id) => {
+        const pl = room.players.get(id);
+        return pl && !pl.isBot;
+      });
+      const soloVsBots = humansSeated.length === 1 && humansSeated[0] === playerId;
+
+      if (room.phase === 'playing' && room.game && !room.game.roundOver && !spectating && !soloVsBots) {
         throw new Error('Cannot leave in the middle of a round. Wait for it to finish.');
       }
 
@@ -4071,7 +4090,16 @@ io.on('connection', (socket) => {
       // going - if it already ended (e.g. because the last leave dropped the
       // active count to 1), removePlayer() would throw and wrongly block
       // this person from leaving a finished game.
-      if (room.game && !room.game.gameOver) {
+      // Skipped when the last human is walking out of a solo game mid-round.
+      // removePlayer() enforces the same between-rounds rule the gate above
+      // just waived, so calling it here would throw "Cannot leave in the middle
+      // of a round" and trap the player after all -- the exemption would have
+      // looked like it worked and then failed one line later.
+      //
+      // Nothing is lost by skipping it: the room is deleted a few lines below,
+      // so the engine state it would have updated is about to stop existing.
+      const binningSoloRoom = soloVsBots && room.game && !room.game.roundOver;
+      if (room.game && !room.game.gameOver && !binningSoloRoom) {
         room.game.removePlayer(playerId);
         if (room.game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
       }
