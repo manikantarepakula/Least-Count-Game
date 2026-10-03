@@ -3393,3 +3393,34 @@ body.game-active .bg-scrim { display: none; }
    in index.html carries the class. Left in place rather than deleted because
    it is harmless and removing styles for markup that might come back is how
    you get a button with no styling six months later. */
+
+
+/* ==========================================================================
+   Lobby bot controls (Oct 2026)
+   ==========================================================================
+   One row, inside the Players panel. The lobby was already overflowing on a
+   phone -- Start Game and Leave Table sat below the fold -- so this had to
+   cost almost nothing: a label and a stepper on a single 36px line, not a
+   fourth panel with its own padding and heading.
+   ========================================================================== */
+.lobby-bots-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--jade-border);
+}
+.lobby-bots-row.hidden { display: none; }
+.lobby-bots-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+.lobby-bots-stepper { display: flex; align-items: center; gap: 4px; }
+/* 36px, not the 44px touch minimum used elsewhere: these sit well away from
+   any destructive control, a mis-tap costs one tap to undo, and 44px here
+   would push the panel taller than the space this screen can spare. */
+.lobby-bots-stepper .icon-btn {
+  width: 36px; min-width: 36px; height: 32px; min-height: 32px;
+  font-size: 17px; font-weight: 700; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.lobby-bots-count {
+  min-width: 22px; text-align: center;
+  font-size: 14px; font-weight: 700; color: var(--text-light);
+}
+.lobby-bots-stepper .icon-btn:disabled { opacity: 0.35; pointer-events: none; }
