@@ -2171,6 +2171,38 @@ function seatRejoiner(room, playerId) {
   // have moved between the host approving and the ad finishing.
   if (!room.game.canRejoin(playerId)) {
     const p = room.players.get(playerId);
+
+    // SPECIAL CASE, AND THE IMPORTANT ONE. canRejoin() refuses mid-round, and
+    // a round starting while someone watched their ad is precisely how this
+    // flow fails: they paid with 30 seconds of attention and got nothing.
+    //
+    // startNextRound() now waits for a pending grant, so this should not
+    // happen -- but "should not happen" is not good enough when the cost is
+    // taking a rewarded ad and not delivering the reward. So instead of
+    // discarding it, the seat is OWED, and startNextRound() pays it at the
+    // next round boundary (where roundOver is true and rejoinEliminated will
+    // accept it). The player is told they are in, next round.
+    //
+    // Guarded by the conditions that make the debt payable later: still
+    // eliminated, not walked out, has not already used their rejoin, game
+    // still running. Only the round being in progress is forgivable.
+    const g = room.game;
+    const payableLater = !g.gameOver && !g.roundOver
+      && g.eliminated.has(playerId) && !g.quit.has(playerId) && !g.rejoinsUsed.has(playerId);
+
+    if (payableLater) {
+      if (!room.owedRejoins) room.owedRejoins = new Set();
+      room.owedRejoins.add(playerId);
+      if (p && p.socketId) {
+        io.to(p.socketId).emit('rejoin_result', {
+          ok: true, pending: true,
+          reason: 'A round had already started -- you are in at the end of it.',
+        });
+      }
+      broadcastRoom(room);
+      return true;   // the reward IS being delivered, just not this instant
+    }
+
     if (p && p.socketId) {
       io.to(p.socketId).emit('rejoin_result', { ok: false, error: 'That is no longer possible.' });
     }
@@ -2279,8 +2311,9 @@ function denyRejoin(room, playerId, reason) {
   if (p && p.socketId) io.to(p.socketId).emit('rejoin_result', { ok: false, reason });
   notifyHostOfRejoinRequests(room);
   // Held only while SOMETHING is pending -- with several eliminated in one
-  // round, the table waits for the last of them, not the first.
-  if (!rejoinRequestsPending(room)) scheduleAutoNextRound(room);
+  // round, the table waits for the last of them, not the first. Includes
+  // anyone part-way through a rewarded ad, for the same reason.
+  if (!rejoinRequestsPending(room) && !adGrantsPending(room)) scheduleAutoNextRound(room);
 }
 
 function broadcastGameState(room) {
@@ -2478,6 +2511,23 @@ function startNextRound(room, eliminationScore) {
   // Blocks the host's "Start Now" too, not just the countdown -- otherwise
   // the one person who must answer the rejoin request could skip past it.
   if (rejoinRequestsPending(room)) return false;
+  // THE SAME RULE FOR A PLAYER WHO IS MID-AD, and the bug that made this
+  // necessary: the ad check was added to scheduleAutoNextRound() only, so the
+  // COUNTDOWN waited but the "Next Round" button did not. next_round is open to
+  // anyone seated, not just the host, so during a 30-second rewarded ad it was
+  // near-certain somebody tapped it. The round dealt, roundOver flipped false,
+  // and when the ad finished canRejoin() refused -- the player had watched an
+  // advert and been handed spectator mode. Exactly the "reward not delivered"
+  // outcome the whole flow exists to prevent.
+  //
+  // Gating here rather than in next_round covers every caller at once: the
+  // button, the countdown, and anything added later.
+  //
+  // expireAdGrants first, so an approval nobody acted on cannot hold the table
+  // hostage -- without it a player who closed the app mid-ad would stall the
+  // next round until the minute sweeper happened to run.
+  expireAdGrants(room);
+  if (adGrantsPending(room)) return false;
   if (!room || !room.game) return false;
   if (!room.game.roundOver || room.game.gameOver) return false;
   clearAutoNextRoundTimer(room);
@@ -2491,6 +2541,33 @@ function startNextRound(room, eliminationScore) {
     if (n !== room.game.eliminationScore) {
       if (!MAX_SCORE_OPTIONS.includes(n)) throw new Error('Invalid max score option.');
       room.game.setEliminationScore(n);
+    }
+  }
+
+  // Seats owed to players who finished a rewarded ad while a round was running
+  // (see seatRejoiner). This is the one moment they can be paid: roundOver is
+  // still true here, which is what rejoinEliminated() requires, and the deal is
+  // about to happen so they come straight into it.
+  //
+  // Paid BEFORE addPlayer below, deliberately -- a rejoiner returns on the
+  // highest score among players still IN, so they must be back in the game
+  // before any brand-new joiner's starting score is worked out.
+  if (room.owedRejoins && room.owedRejoins.size) {
+    for (const pid of [...room.owedRejoins]) {
+      room.owedRejoins.delete(pid);
+      try {
+        if (room.game.canRejoin(pid)) {
+          room.game.rejoinEliminated(pid);
+          if (room.absenceEliminated) room.absenceEliminated.delete(pid);
+          if (room.rejoinAdNeeded) room.rejoinAdNeeded.delete(pid);
+          const p = room.players.get(pid);
+          if (p && p.socketId) {
+            io.to(p.socketId).emit('rejoin_result', { ok: true, score: room.game.scores[pid] });
+          }
+        }
+      } catch (e) {
+        console.warn(`[Room ${room.code}] owed rejoin for ${pid} failed:`, e.message);
+      }
     }
   }
 
@@ -3917,6 +3994,11 @@ io.on('connection', (socket) => {
       if (!entry || !room.players.has(entry.playerId)) throw new Error('You are not in this room.');
       if (!room.game.roundOver) throw new Error('Round is still in progress.');
       if (room.game.gameOver) throw new Error('Game is already over.');
+      // Checked here as well as inside startNextRound purely for the message.
+      // Without it the refusal surfaced as "Round is no longer waiting to
+      // start", which tells the tapper nothing and looks like a glitch.
+      expireAdGrants(room);
+      if (adGrantsPending(room)) throw new Error('Waiting for a player to take their seat.');
 
       // This is now the host's "Start now" override, not the only way a round
       // can begin -- the auto-advance countdown (scheduleAutoNextRound) starts
@@ -4025,7 +4107,7 @@ io.on('connection', (socket) => {
       // unless the round is genuinely over, so this is safe on both the
       // mid-round spectator exit and the ordinary between-rounds one.
       notifyHostOfRejoinRequests(room);
-      if (!rejoinRequestsPending(room)) scheduleAutoNextRound(room);
+      if (!rejoinRequestsPending(room) && !adGrantsPending(room)) scheduleAutoNextRound(room);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
