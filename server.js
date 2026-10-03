@@ -95,15 +95,48 @@ const CSP = [
   // of which matches *.google.com (different registrable domain), so both are
   // listed. Without these the script loads but every event is silently dropped
   // -- worse than the outright block above, because nothing errors.
-  "connect-src 'self' wss: https://*.googleapis.com https://*.google.com https://*.gstatic.com https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://api.dicebear.com https://api.giphy.com",
-  "frame-src 'self' https://*.google.com https://*.doubleclick.net",
+  "connect-src 'self' wss: https://*.firebaseapp.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://*.googleapis.com https://*.google.com https://*.gstatic.com https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://api.dicebear.com https://api.giphy.com",
+  // firebaseapp.com is REQUIRED, not optional. Firebase Auth runs its session
+  // handshake inside a hidden iframe at
+  //   https://<project>.firebaseapp.com/__/auth/iframe
+  // and blocking it breaks Google sign-in and token refresh. It does not match
+  // *.google.com -- different registrable domain -- so leaving it out silently
+  // broke authentication for everyone, with the only evidence a console line
+  // nobody was reading. Same omission as www.googletagmanager.com earlier:
+  // writing a CSP by listing the hosts you can think of means the ones you
+  // cannot think of fail quietly.
+  // accounts.google.com is the sign-in popup/redirect itself.
+  "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com https://*.google.com https://*.doubleclick.net",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
 ].join('; ');
 
+// ---------------------------------------------------------------------------
+// CSP enforcement switch.
+//
+// Set CSP_REPORT_ONLY=1 in the Render dashboard to send the policy as
+// Content-Security-Policy-Report-Only instead: violations are still logged to
+// the browser console, but NOTHING is blocked.
+//
+// This exists because this policy has now broken production twice -- first by
+// omitting www.googletagmanager.com (analytics silently stopped), then by
+// omitting the Firebase Auth iframe host (sign-in broke). An allowlist written
+// by listing the hosts you can remember fails exactly where your memory does,
+// and it fails silently, as a console line nobody is watching.
+//
+// The CSP is defence-in-depth here, not a primary control: the app escapes its
+// output properly (escapeHtml on the client, esc() in the admin report, both
+// checked in the Sept 2026 audit). So an hour in report-only mode costs very
+// little, while a wrong allowlist costs a day of the app being broken.
+// Flip it on if anything else breaks, read the console, then flip it back.
+// ---------------------------------------------------------------------------
+const CSP_HEADER = process.env.CSP_REPORT_ONLY === '1'
+  ? 'Content-Security-Policy-Report-Only'
+  : 'Content-Security-Policy';
+
 app.use((req, res, next) => {
-  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader(CSP_HEADER, CSP);
   // Stops a browser second-guessing a declared Content-Type, which is how a
   // served file can end up executed as script.
   res.setHeader('X-Content-Type-Options', 'nosniff');
