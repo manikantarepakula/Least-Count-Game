@@ -157,7 +157,14 @@ check('player right after a penalty-taker faces a normal single-card rule (open 
   const p3 = g.currentPlayer();
   // p3 has no 2 -> normal rule: discard anything + take exactly 1 penalty card (not 2)
   const handBefore = g.hands[p3].length;
-  const nonTwoCard = g.hands[p3].find((c) => c.rank !== '2');
+  // Must also exclude JOKER. The engine refuses to discard one ("Jokers are
+  // worth zero -- keep them, discard something else"), and p3's hand is dealt
+  // at random, so roughly one run in 25 this picked a Joker and the test threw
+  // on a move the engine was right to reject. That made the whole suite fail
+  // intermittently for a reason that had nothing to do with what it was
+  // testing -- and an intermittently red suite is one people stop reading.
+  const nonTwoCard = g.hands[p3].find((c) => c.rank !== '2' && c.rank !== 'JOKER');
+  assert.ok(nonTwoCard, 'p3 should hold at least one ordinary card');
   g.playTurn(p3, [nonTwoCard.id]);
   assert.strictEqual(g.hands[p3].length, handBefore, 'discard 1 + draw 1 penalty = net unchanged (normal rule, not x2)');
 });
