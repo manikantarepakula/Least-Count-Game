@@ -4550,7 +4550,7 @@
     // sweeper releases the table.
   };
 
-  socket.on('rejoin_result', ({ ok, score, reason }) => {
+  socket.on('rejoin_result', ({ ok, score, reason, pending }) => {
     rejoinAsked = false;
     stopRejoinTicker();
     const { box, text, status, ask, no } = rejoinEls();
@@ -4558,7 +4558,14 @@
     ask.classList.add('hidden');
     no.classList.add('hidden');
     status.classList.remove('hidden');
-    if (ok) {
+    if (ok && pending) {
+      // The ad was watched and the seat is granted, but a round was already
+      // running so the engine cannot seat them until it ends (see owedRejoins
+      // on the server). Say so plainly -- without this branch the message read
+      // "Rejoined at undefined points", because no score exists yet.
+      text.textContent = 'You’re in.';
+      status.textContent = reason || 'A round had already started -- you join at the end of it.';
+    } else if (ok) {
       text.textContent = 'You’re back in.';
       status.textContent = `Rejoined at ${score} points. Next round deals shortly.`;
       // The seats, scores and your hand all arrive on the next game_state --
