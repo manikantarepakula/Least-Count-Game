@@ -1295,13 +1295,24 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
    A seat used to be two lines of text. Now it's a face, a name, and a
    visible hand -- the three things a player at a real table can see. */
 .seat-id {
-  display: flex; align-items: center; gap: 5px;
-  min-width: 0;
+  /* STACKED, not side-by-side (Oct 2026).
+     Side by side, the 22px avatar plus its 5px gap ate 27px of the chip's
+     82px of usable width, leaving 55px for the name -- about six characters
+     at 11.5px, so anything longer than "Manika" was already an ellipsis.
+     Stacking gives the name the full 82px, roughly thirteen characters, for
+     no extra width at all. It costs ~14px of seat height, which is the
+     trade: at 96px wide there is no other way to find that space.
+     It also fixes the alignment: the name was text-align:left inside a
+     centre-aligned column, so it never lined up with anything above or
+     below it. */
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 0; width: 100%;
 }
 .seat-name {
-  flex: 1 1 auto; min-width: 0;
+  max-width: 100%; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  text-align: left;
+  text-align: center;
+  font-weight: 600;
 }
 .avatar {
   flex: 0 0 auto;
@@ -1389,6 +1400,19 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
 @keyframes popoverFadeIn { from { opacity: 0; } to { opacity: 1; } }
 .seat .player-action-popover {
   bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 8px;
+}
+/* Seats at the top of the table open their popover DOWNWARDS.
+   The rule above hard-codes bottom:100%, so the popover always grew upwards --
+   fine for the seats around the sides and bottom, but for the seat at the top
+   of the oval "upwards" is off the top of the screen, behind the Scores/Mute
+   bar. Tapping the top player to see their stats showed nothing at all.
+   .anchor-top is already applied by renderOvalTable to any seat sitting within
+   30px of the table's top edge, so the signal existed -- it just was not being
+   used for this. Same approach as .seat.revealing.grow-up, which solved the
+   identical problem for the round-reveal box. */
+.seat.anchor-top .player-action-popover {
+  bottom: auto; top: 100%;
+  margin-bottom: 0; margin-top: 8px;
 }
 .seat .player-action-popover.align-left { left: 0; transform: none; }
 .seat .player-action-popover.align-right { left: auto; right: 0; transform: none; }
@@ -1493,10 +1517,22 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
   85% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
   100% { transform: translate(-50%, -50%) scale(0.85); opacity: 0; }
 }
-.seat-name {
-  font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* .seat-name was defined twice -- here and up at the .seat-id block. The two
+   disagreed on alignment and on display, and whichever came last silently won.
+   Folded into the single definition above; this note is all that remains. */
+.seat-meta { font-size: 10px; opacity: 0.85; }
+/* Cards and points on one line (Oct 2026). They used to be two stacked rows
+   -- a fan of card backs with its count, then "0 pts" underneath -- which in a
+   96px box was two mostly-empty lines and a large part of why the seat looked
+   oversized for what it actually said. */
+.seat-stats {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  min-width: 0; max-width: 100%;
 }
-.seat-meta { font-size: 10px; opacity: 0.85; display: block; }
+.seat-stats:empty { display: none; }
+/* The fan sat in its own block with vertical margins when it was a row of its
+   own; inside the shared row those margins would push the line off centre. */
+.seat-stats .seat-fan { margin: 0; }
 
 /* Reserved space for the 320x100 native ad on the round-result screen. The
    ad floats over the WebView and contributes no layout height of its own, so
