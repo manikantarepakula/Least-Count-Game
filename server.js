@@ -378,6 +378,87 @@ function cleanAvatar(a) {
 // Numbering walks past names already taken rather than counting seats, so
 // removing "Bot 2" and adding another gives you a fresh number instead of a
 // second "Bot 2" -- the host is free to add and remove in any order.
+// ===========================================================================
+// Bot characters (Oct 2026)
+// ===========================================================================
+// Eight archetypes. Every one keeps its own rules at every difficulty -- the
+// tier decides WHICH of them take seats, never how well any of them plays.
+//
+// That distinction is the whole design. One brain with a dial on it gives you a
+// table where all the bots play identically, which is the repetition this
+// feature exists to remove.
+//
+// This first build wires up the identity: which archetype sits where, what the
+// player is told about them, and how fast each one moves. The strategy rules
+// (declare thresholds, discard styles, chain behaviour) land next, and need the
+// 10,000-game balance run before they ship. Until then every bot still plays
+// today's logic, so nothing here can unbalance a game.
+// ===========================================================================
+const BOT_ARCHETYPES = [
+  { id: 1, trait: 'Won\u2019t risk it. Ever.',               speed: 1.7  },
+  { id: 2, trait: 'Calls it before he\u2019s counted.',      speed: 0.55 },
+  { id: 3, trait: 'Just plays better than you.',              speed: 1.0  },
+  { id: 4, trait: 'Will make you draw cards.',                speed: 0.8  },
+  { id: 5, trait: 'Still thinking. Give him a minute.',       speed: 1.6  },
+  { id: 6, trait: 'Says nothing. Wins anyway.',               speed: 1.3  },
+  { id: 7, trait: 'Talks more than she plays.',               speed: 1.1  },
+  { id: 8, trait: 'Keeping a 2 for you.',                     speed: 0.9  },
+];
+
+// Each tier is an ORDER OF PREFERENCE over all eight, not a fixed set of three.
+// Take the first N. Asking for six Easy bots drifts up into the middle of the
+// pack, which is correct -- six opponents is harder than three however weak
+// each one is -- and it means any bot count from 1 to 9 is covered without a
+// special case.
+const BOT_TIERS = {
+  easy:   [2, 4, 7, 8, 1, 3, 5, 6],
+  medium: [1, 8, 7, 4, 3, 2, 5, 6],
+  hard:   [3, 5, 6, 1, 8, 7, 4, 2],
+};
+const DEFAULT_BOT_DIFFICULTY = 'medium';
+
+function cleanBotDifficulty(level) {
+  const v = String(level || '').toLowerCase();
+  return Object.prototype.hasOwnProperty.call(BOT_TIERS, v) ? v : DEFAULT_BOT_DIFFICULTY;
+}
+
+function archetypeById(id) {
+  return BOT_ARCHETYPES.find((a) => a.id === id) || BOT_ARCHETYPES[2];
+}
+
+// The next archetype for this room: first one in the tier's order that is not
+// already at the table. Two identical bots would undo the point of having
+// characters at all.
+//
+// Falls back to the first unused id overall, then to the tier's head, so this
+// always returns something even in a room with more bots than archetypes.
+function nextArchetypeFor(room) {
+  const tier = BOT_TIERS[cleanBotDifficulty(room.botDifficulty)];
+  const seated = new Set(
+    [...room.players.values()].filter((p) => p.isBot && p.archetype).map((p) => p.archetype)
+  );
+  const free = tier.find((id) => !seated.has(id));
+  if (free) return free;
+  const anyFree = BOT_ARCHETYPES.map((a) => a.id).find((id) => !seated.has(id));
+  return anyFree || tier[0];
+}
+
+// Re-assigns every seated bot to the current tier, in order. Called when the
+// host changes difficulty: nothing has been dealt yet, so there is no cost, and
+// a lobby labelled Hard with two Easy bots sitting in it would just look broken.
+function reassignBotArchetypes(room) {
+  const tier = BOT_TIERS[cleanBotDifficulty(room.botDifficulty)];
+  let i = 0;
+  for (const pid of room.order) {
+    const p = room.players.get(pid);
+    if (!p || !p.isBot) continue;
+    const id = tier[i % tier.length];
+    p.archetype = id;
+    p.trait = archetypeById(id).trait;
+    i += 1;
+  }
+}
+
 function addBotToRoom(room) {
   let n = 1;
   const taken = new Set(
@@ -385,12 +466,19 @@ function addBotToRoom(room) {
   );
   while (taken.has(`\u{1F916} Bot ${n}`)) n += 1;
   const botId = makePlayerId();
+  // Character assignment. The visible name stays "Bot 1, Bot 2" -- the trait
+  // line is what carries the personality, so there are no names to choose and
+  // nothing to mistranslate.
+  const archetypeId = nextArchetypeFor(room);
+  const arch = archetypeById(archetypeId);
   room.players.set(botId, {
     name: `\u{1F916} Bot ${n}`,
     socketId: null,
     connected: true,
     isBot: true,
     avatar: botAvatar(n),
+    archetype: archetypeId,
+    trait: arch.trait,
   });
   room.order.push(botId);
   return botId;
@@ -974,7 +1062,32 @@ const DEFAULT_ELIMINATION_SCORE = 200;
 // Solo play (item: "Play Solo" on the landing screen) -- bots act fast, well
 // under the human turn timer, using the exact same auto-play logic already
 // used when a human times out (see runBotTurn/scheduleTurnTimer below).
-const BOT_MOVE_MS = 3000;
+// Lowered from 3000 to 1600 (Oct 2026) so per-character speeds actually differ.
+//
+// At 3000 every multiplier of 1.0 or above hit the 2500 ceiling, so six of the
+// eight bots moved at exactly the same speed and the feature did nothing. The
+// base has to sit low enough that the whole 0.55x-1.7x range fits inside the
+// clamp.
+//
+// Side effect worth knowing: bots are quicker than before across the board.
+// Average move goes from 3.0s to about 1.7s, so with three bots you wait ~5s
+// between your turns instead of ~9s. That reads as a snappier table, but it IS
+// a pacing change, not just a personality one.
+const BOT_MOVE_MS = 1600;
+// Per-character pace. A bot that answers instantly and one that pauses read as
+// different players before you have seen a single card -- the cheapest change
+// in the whole feature and the first thing anyone notices.
+//
+// Clamped deliberately: below 400ms the table is frantic and players cannot
+// follow what just happened; above 2500ms it feels broken, and several slow
+// bots in a row compound badly.
+const BOT_MOVE_MIN_MS = 400;
+const BOT_MOVE_MAX_MS = 2800;
+function botMoveMsFor(room, playerId) {
+  const p = room.players.get(playerId);
+  const mult = (p && p.archetype) ? archetypeById(p.archetype).speed : 1;
+  return Math.max(BOT_MOVE_MIN_MS, Math.min(BOT_MOVE_MAX_MS, Math.round(BOT_MOVE_MS * mult)));
+}
 const MAX_BOTS = 7;
 
 // ---------------------------------------------------------------------------
@@ -1330,6 +1443,8 @@ async function createRoomForGroup(code) {
     chatHistory: [],
     statsRecorded: false,
     pendingJoins: new Map(),
+    // Which tier new bots are drawn from. Host-settable in the lobby.
+    botDifficulty: DEFAULT_BOT_DIFFICULTY,
     allHumansDisconnectedAt: null,
   };
   rooms.set(code, room);
@@ -1866,11 +1981,17 @@ function publicRoomInfo(room) {
     // off to decide whether to show the group name and leaderboard.
     groupCode: room.groupCode || null,
     groupName: room.groupName || null,
+    // Shown on the lobby bots row and used to label the table. Clients render
+    // this, so it travels with every room broadcast rather than being inferred.
+    botDifficulty: cleanBotDifficulty(room.botDifficulty),
     players: room.order.map((pid) => ({
       playerId: pid,
       name: room.players.get(pid).name,
       connected: room.players.get(pid).connected,
       isBot: !!room.players.get(pid).isBot,
+      // The one-liner that carries the character, since the name is generic.
+      // Null for humans.
+      trait: room.players.get(pid).trait || null,
       // Chosen avatar (Sept 2026). Travels with every room broadcast so
       // other players' seats can render a face rather than a grey chip.
       // A plain id, never a URL or markup -- the art lives in the client as
@@ -2434,6 +2555,8 @@ function startMatchedRoom(entries) {
     chatHistory: [],
     statsRecorded: false,
     pendingJoins: new Map(),
+    // Which tier new bots are drawn from. Host-settable in the lobby.
+    botDifficulty: DEFAULT_BOT_DIFFICULTY,
   };
   for (const e of entries) {
     room.players.set(e.playerId, { name: e.name, socketId: e.socketId, connected: true, isBot: false, firebaseUid: e.firebaseUid || null, platform: e.platform || 'unknown' });
@@ -2484,9 +2607,10 @@ function scheduleTurnTimer(room) {
   // Solo play: if it's a bot's turn, they act quickly on their own timer
   // instead of waiting out the full human turn countdown -- no deadline
   // shown to the human either, since there's nothing for them to react to.
-  const currentPlayerRecord = room.players.get(room.game.currentPlayer());
+    const currentId = room.game.currentPlayer();
+    const currentPlayerRecord = room.players.get(currentId);
   if (currentPlayerRecord && currentPlayerRecord.isBot) {
-    room.turnTimer = setTimeout(() => runBotTurn(room), BOT_MOVE_MS);
+    room.turnTimer = setTimeout(() => runBotTurn(room), botMoveMsFor(room, currentId));
     return;
   }
   // A human seat that has been abandoned (ABSENCE_STRIKES auto-plays in a row
@@ -2946,6 +3070,8 @@ io.on('connection', (socket) => {
         chatHistory: [],
         statsRecorded: false,
         pendingJoins: new Map(), // mid-game join requests awaiting host approval -- see join_room below
+        // Which tier new bots are drawn from. Host-settable in the lobby.
+        botDifficulty: DEFAULT_BOT_DIFFICULTY,
         allHumansDisconnectedAt: null, // set once every human is gone -- see the cleanup sweep below
       };
       room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
@@ -2966,13 +3092,17 @@ io.on('connection', (socket) => {
   // countdown -> deal -> reveal sequence, exactly like a real multiplayer
   // game starting -- bots are just regular players to the game engine, the
   // only special handling is how quickly they act (see scheduleTurnTimer).
-  socket.on('create_solo_room', async ({ name, botCount, firebaseIdToken, platform, avatar }, ack) => {
+  socket.on('create_solo_room', async ({ name, botCount, botDifficulty, firebaseIdToken, platform, avatar }, ack) => {
     try {
       if (isRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       if (isIpRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
       const n = Math.max(1, Math.min(MAX_BOTS, Math.round(Number(botCount)) || 3));
+      // Set BEFORE the bots are created: addBotToRoom reads room.botDifficulty
+      // to pick each archetype, so assigning it afterwards would seat everyone
+      // from the default tier and silently ignore the player's choice.
+      const soloDifficulty = cleanBotDifficulty(botDifficulty);
       const code = makeRoomCode();
       const playerId = makePlayerId();
       const room = {
@@ -2991,6 +3121,11 @@ io.on('connection', (socket) => {
         chatHistory: [],
         statsRecorded: false,
         allHumansDisconnectedAt: null,
+          // The difficulty the player picked on the landing screen. Must be set
+          // HERE, in the literal, because addBotToRoom below reads it to choose
+          // each archetype -- assigning it after the loop would seat everyone
+          // from the default tier and silently ignore the choice.
+          botDifficulty: soloDifficulty,
       };
       room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
       room.order.push(playerId);
@@ -3068,6 +3203,8 @@ io.on('connection', (socket) => {
         code, hostPlayerId, players: new Map(), order: [], phase: 'lobby', game: null,
         turnTimer: null, turnDeadline: null, dealTimer: null, revealTimer: null,
         chatHistory: [], statsRecorded: false, pendingJoins: new Map(),
+        // Which tier new bots are drawn from. Host-settable in the lobby.
+        botDifficulty: DEFAULT_BOT_DIFFICULTY,
         allHumansDisconnectedAt: null,
       };
       for (const e of entries) {
@@ -3932,6 +4069,27 @@ io.on('connection', (socket) => {
       addBotToRoom(room);
       broadcastRoom(room);
       ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Difficulty is a property of the ROOM, not of each bot. The host sets it,
+  // same as the elimination score and admitting players, and it re-assigns the
+  // bots already seated -- nothing has been dealt, so there is no cost.
+  socket.on('set_bot_difficulty', ({ roomCode, level }, ack) => {
+    try {
+      if (isRateLimited(socket, 'add_bot')) throw new Error('Too many changes too quickly. Please slow down.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can change bot difficulty.');
+      if (room.phase !== 'lobby') throw new Error('Difficulty can only be changed before the game starts.');
+
+      room.botDifficulty = cleanBotDifficulty(level);
+      reassignBotArchetypes(room);
+      broadcastRoom(room);
+      ack && ack({ ok: true, level: room.botDifficulty });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
