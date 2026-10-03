@@ -2250,8 +2250,17 @@ a.install-card-btn:hover {
    a full-screen takeover) so the real oval table underneath stays visible
    while cards fly to the actual chair positions during dealing. */
 .deal-phase-badge {
-  position: fixed; top: 12%; left: 50%; transform: translateX(-50%);
-  z-index: 45; text-align: center; pointer-events: none;
+  /* Centred ON THE TABLE, not on the viewport (Oct 2026).
+     Was: position: fixed; top: 12%. Twelve percent of a phone's viewport is
+     roughly where the top seat sits, so "Dealing cards..." was printed across
+     whoever was sitting there -- the one seat guaranteed to be covered.
+     Now absolutely positioned inside .oval-table (which is position:relative)
+     and centred with the same left/top/translate trio .reveal-banner uses for
+     the round outcome. The deal announcement and the round announcement now
+     appear in the same spot, which is what the player expects. */
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 7; text-align: center; pointer-events: none;
 }
 .deal-phase-badge.hidden { display: none; }
 .deal-phase-badge .start-seq-countdown { font-size: 64px; }
@@ -3363,3 +3372,15 @@ body.game-active .bg-scrim { display: none; }
    above it: it is a heads-up, not the main message, and this screen already
    asks the player to be patient. */
 .waiting-host-ad-note { opacity: 0.8; margin-top: 6px; }
+
+
+/* The open card and joker slots occupy the centre of the table, which is now
+   also where the deal countdown appears. They hold nothing during the deal --
+   there IS no open card until the cards have been dealt -- so the empty
+   "Open Card" and "Joker" labels fade out while the badge is up rather than
+   sitting behind it. Mirrors #screen-game.reveal-phase, which frees the same
+   space for the round outcome. Keyed off a class on the screen rather than a
+   sibling selector, because the badge sits after .table-center in source
+   order and CSS cannot look backwards. */
+#screen-game.deal-phase .table-center { opacity: 0; transition: opacity 0.2s; }
+#screen-game.deal-phase .stock-badge { display: none; }
