@@ -334,6 +334,35 @@ function cleanAvatar(a) {
 // Bots stay on the built-in ids: the server has no idea which files a given
 // client has, and a bot pointing at a missing avatar would render as a gap.
 // The client maps these onto pack art when a pack is installed.
+// Creates a bot and seats it. ONE definition, because there were three
+// separate inline versions of this and they had already drifted: two gave the
+// bot an avatar via botAvatar(), the third did not -- so bots in a
+// queue-filled game rendered as faceless grey chips while bots in a solo game
+// had faces. Same bug shape as the duplicated .seat-name rule and the four
+// copies of button.primary: the moment one place is fixed, the others quietly
+// keep the old behaviour.
+//
+// Numbering walks past names already taken rather than counting seats, so
+// removing "Bot 2" and adding another gives you a fresh number instead of a
+// second "Bot 2" -- the host is free to add and remove in any order.
+function addBotToRoom(room) {
+  let n = 1;
+  const taken = new Set(
+    [...room.players.values()].filter((p) => p.isBot).map((p) => p.name)
+  );
+  while (taken.has(`\u{1F916} Bot ${n}`)) n += 1;
+  const botId = makePlayerId();
+  room.players.set(botId, {
+    name: `\u{1F916} Bot ${n}`,
+    socketId: null,
+    connected: true,
+    isBot: true,
+    avatar: botAvatar(n),
+  });
+  room.order.push(botId);
+  return botId;
+}
+
 function botAvatar(i) {
   return AVATAR_IDS[(i * 3) % AVATAR_IDS.length];
 }
@@ -1007,6 +1036,9 @@ const RATE_LIMITS = {
   create_solo_room: { max: 5, windowMs: 60000 },
   join_room: { max: 10, windowMs: 60000 },
   report_player: { max: 5, windowMs: 60000 },
+  // Shared by add_bot and remove_bot: a host nudging the count up and down is
+  // normal, a script hammering it is not.
+  add_bot: { max: 30, windowMs: 30000 },
   // One claim per approval, so anything beyond a retry or two is not a real
   // player finishing an advert.
   claim_ad_reward: { max: 6, windowMs: 60000 },
@@ -2929,11 +2961,7 @@ io.on('connection', (socket) => {
       };
       room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
       room.order.push(playerId);
-      for (let i = 1; i <= n; i++) {
-        const botId = makePlayerId();
-        room.players.set(botId, { name: `🤖 Bot ${i}`, socketId: null, connected: true, isBot: true, avatar: botAvatar(i) });
-        room.order.push(botId);
-      }
+      for (let i = 1; i <= n; i++) addBotToRoom(room);
       rooms.set(code, room);
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
@@ -3016,13 +3044,10 @@ io.on('connection', (socket) => {
         const s = io.sockets.sockets.get(e.socketId);
         if (s) s.join(code);
       }
-      let botNum = 1;
-      while (room.order.length < n) {
-        const botId = makePlayerId();
-        room.players.set(botId, { name: `🤖 Bot ${botNum}`, socketId: null, connected: true, isBot: true });
-        room.order.push(botId);
-        botNum += 1;
-      }
+      // Was an inline copy that forgot the avatar, so queue-filled bots had no
+      // face while solo-game bots did -- the same fact written in two places,
+      // drifting. Uses the shared factory now.
+      while (room.order.length < n) addBotToRoom(room);
       rooms.set(code, room);
       clearAllRejoinRequests(room);
       room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
@@ -3846,6 +3871,70 @@ io.on('connection', (socket) => {
         state.turnDeadline = room.turnDeadline || null;
         io.to(socket.id).emit('game_state', state);
       }
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // ---- Bots at a shared table (Oct 2026) ----
+  // A two-player game is thin; the host can pad it out. Deliberately NOT
+  // automatic and NOT tied to how many people are in the room -- the host
+  // decides, and can change their mind right up until the deal.
+  //
+  // Lobby only. Once a round is dealt the deck count is fixed by the number of
+  // players (see deckCountForPlayers), so a bot appearing mid-game would change
+  // the size of the shoe everyone is counting against.
+  socket.on('add_bot', ({ roomCode }, ack) => {
+    try {
+      if (isRateLimited(socket, 'add_bot')) throw new Error('Too many changes too quickly. Please slow down.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can add bots.');
+      if (room.phase !== 'lobby') throw new Error('Bots can only be added before the game starts.');
+      // The one hard limit: seats. Not a rule about how many humans are
+      // present -- that is the host's call.
+      if (room.order.length >= 10) throw new Error('Table is full (max 10 players).');
+
+      addBotToRoom(room);
+      broadcastRoom(room);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Removes one bot -- the most recently seated, so repeated taps peel them
+  // off in the reverse of the order they were added. A specific botId can be
+  // passed to remove a particular one from the player list.
+  socket.on('remove_bot', ({ roomCode, botId }, ack) => {
+    try {
+      if (isRateLimited(socket, 'add_bot')) throw new Error('Too many changes too quickly. Please slow down.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || entry.playerId !== room.hostPlayerId) throw new Error('Only the host can remove bots.');
+      if (room.phase !== 'lobby') throw new Error('Bots can only be removed before the game starts.');
+
+      let target = null;
+      if (botId) {
+        const p = room.players.get(botId);
+        // Checked rather than trusted: this id comes from the client, and
+        // without the isBot test it would be a way for the host to remove a
+        // real player from the table with no warning.
+        if (p && p.isBot) target = botId;
+      } else {
+        for (let i = room.order.length - 1; i >= 0; i--) {
+          const p = room.players.get(room.order[i]);
+          if (p && p.isBot) { target = room.order[i]; break; }
+        }
+      }
+      if (!target) throw new Error('No bots to remove.');
+
+      room.players.delete(target);
+      room.order = room.order.filter((id) => id !== target);
+      broadcastRoom(room);
+      ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
