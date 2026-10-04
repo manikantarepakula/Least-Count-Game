@@ -5358,11 +5358,13 @@
   function seatInitial(name) {
     const n = String(name || '').trim();
     if (!n) return '?';
-    // "Bot 3" -> "3", not "B": eight bots all showing B would defeat the
-    // purpose. Any name ending in a digit uses the digit.
-    const trailing = n.match(/(\d)\s*$/);
-    if (trailing) return trailing[1];
-    return n[0].toUpperCase();
+    // The first LETTER, not the first character: a name that starts with a
+    // digit or an emoji would otherwise put that in the disc, which is not an
+    // initial. Falls back to the first character only if there is no letter at
+    // all. Bots all showing B is fine -- the disc colour is what separates
+    // them, and the name is right there next to it.
+    const letter = n.match(/[a-z]/i);
+    return (letter ? letter[0] : n[0]).toUpperCase();
   }
 
   function cardEl(card, opts) {
@@ -5584,15 +5586,64 @@
     // readability floor and cannot shrink any further.
     const ringR = n >= 9 ? 48 : (n >= 7 ? 46 : 43);
 
-    // Where every seat centre will be, in real pixels.
-    const centres = [];
-    for (let k = 0; k < n; k++) {
-      const a = Math.PI / 2 + (k / n) * 2 * Math.PI;
-      centres.push({
-        x: tableW * (0.5 + (ringR / 100) * Math.cos(a)),
-        y: tableH * (0.5 + (ringR / 100) * Math.sin(a)),
-      });
+    // ------------------------------------------------------------------
+    // Equal SPACING, not equal angles (Oct 2026).
+    //
+    // Seats used to be placed at even angular steps: angle = PI/2 + k/n*2PI.
+    // On a circle that gives even spacing. This table is not a circle -- it is
+    // 1:1.05, and the seat ring is a percentage of width horizontally and a
+    // percentage of height vertically, so it is an ellipse in real pixels. On
+    // an ellipse, equal angles do NOT give equal distances: the steps bunch up
+    // where the curve is flat and stretch where it is tight. That is why the
+    // gap between two chairs looked different depending on where they were
+    // sitting, and why it looked different again on a differently shaped
+    // screen.
+    //
+    // So the seats are spaced by ARC LENGTH along the ellipse instead. Walk
+    // the curve in small steps, total up the real distance travelled, then
+    // place seat k at the point k/n of the way round by distance. Every
+    // neighbouring pair is then exactly the same distance apart, on any
+    // screen shape.
+    //
+    // 720 steps is a tenth of a degree -- far finer than a pixel at these
+    // radii, and a one-off loop per render.
+    // ------------------------------------------------------------------
+    const rx = tableW * (ringR / 100);
+    const ry = tableH * (ringR / 100);
+    const START_ANGLE = Math.PI / 2;           // bottom centre: your own seat
+    const ARC_STEPS = 720;
+    const arc = [0];                            // cumulative distance at each step
+    for (let k = 1; k <= ARC_STEPS; k++) {
+      const t0 = START_ANGLE + ((k - 1) / ARC_STEPS) * 2 * Math.PI;
+      const t1 = START_ANGLE + (k / ARC_STEPS) * 2 * Math.PI;
+      arc.push(arc[k - 1] + Math.hypot(
+        rx * (Math.cos(t1) - Math.cos(t0)),
+        ry * (Math.sin(t1) - Math.sin(t0))
+      ));
     }
+    const perimeter = arc[ARC_STEPS];
+    // Distance round the ring -> the angle that lands there.
+    function angleAtDistance(d) {
+      if (!(perimeter > 0)) return START_ANGLE;
+      const target = ((d % perimeter) + perimeter) % perimeter;
+      let lo = 0, hi = ARC_STEPS;
+      while (lo < hi) {                         // first step at or past target
+        const mid = (lo + hi) >> 1;
+        if (arc[mid] < target) lo = mid + 1; else hi = mid;
+      }
+      const i = Math.max(1, lo);
+      const span = arc[i] - arc[i - 1];
+      const frac = span > 0 ? (target - arc[i - 1]) / span : 0;
+      return START_ANGLE + ((i - 1 + frac) / ARC_STEPS) * 2 * Math.PI;
+    }
+    const seatAngles = [];
+    for (let k = 0; k < n; k++) seatAngles.push(angleAtDistance((k / n) * perimeter));
+
+    // Where every seat centre will be, in real pixels.
+    const centres = seatAngles.map((a) => ({
+      x: tableW * 0.5 + rx * Math.cos(a),
+      y: tableH * 0.5 + ry * Math.sin(a),
+    }));
     // The tightest neighbour pair decides the size for everyone -- seats must
     // stay uniform or the table looks broken rather than responsive.
     let minGap = Infinity;
@@ -5649,6 +5700,14 @@
     const CHIP_FULL_H = 58 * seatScale;
     const compact = isFinite(minVGap) && minVGap < CHIP_FULL_H;
     oval.classList.toggle('compact-seats', compact);
+    // Six or more chairs and the reveal panel has to go on a diet -- see
+    // .compact-reveal in style.css. Driven by the player count rather than a
+    // measured gap because the panel only exists for a few seconds a round:
+    // the layout must be decided before it is drawn, not after it overlaps.
+    oval.classList.toggle('compact-reveal', n >= 6);
+    // Nine and ten need one more notch -- the compact tier alone still left
+    // them 16px into each other. See .tight-reveal in style.css.
+    oval.classList.toggle('tight-reveal', n >= 9);
     const centreCardW = Math.round(Math.max(34, Math.min(58, tableW * 0.155)));
     const centreGap = Math.round(Math.max(8, Math.min(18, tableW * 0.04)));
     oval.style.setProperty('--table-w', px(tableW));
@@ -5657,7 +5716,10 @@
     oval.style.setProperty('--centre-gap', px(centreGap));
 
     seatOrder.forEach((p, i) => {
-      const angle = Math.PI / 2 + (i / n) * 2 * Math.PI;
+      // Same arc-length angles the gap measurement above was based on -- these
+      // two used to compute the angle independently, which is the kind of
+      // duplicate that drifts the moment one of them is touched.
+      const angle = seatAngles[i];
       const left = 50 + ringR * Math.cos(angle);
       const top = 50 + ringR * Math.sin(angle);
 
@@ -6381,7 +6443,14 @@
       + (isPenalty ? ' penalty' : '')
       + (isWinner && !isPenalty ? ' winner' : '');
 
-    if (isDeclarer || isWinner) {
+    const seatCount = (game.turnOrder && game.turnOrder.length)
+      || (latestRoom && latestRoom.players && latestRoom.players.length) || 6;
+    // The separate "DECLARED / LOWEST" line is what tips the panel over the
+    // height budget on a crowded table. Above five players the same fact is
+    // already carried by the panel's border -- gold for the declarer, red for
+    // a wrong call -- so the line is dropped rather than the cards.
+    const revealCompact = seatCount >= 6;
+    if ((isDeclarer || isWinner) && !revealCompact) {
       const tag = document.createElement('div');
       tag.className = 'seat-reveal-tag';
       // Says what HAPPENED, not just that they acted -- "DECLARED" alone
@@ -6446,17 +6515,22 @@
     // players there is space to show a whole hand; at 8-10 there is barely
     // room for one row. So the cap scales with the table.
     // ------------------------------------------------------------------
-    const seatCount = (game.turnOrder && game.turnOrder.length)
-      || (latestRoom && latestRoom.players && latestRoom.players.length) || 6;
-    // Modelled against the real seat spacing on a 393px phone: a panel is
-    // ~86px wide, which fits 2 tiles per row, and the gap between adjacent
-    // seats falls from 284px at 2 players to 103px at 10. These four bands
-    // keep the panel shorter than that gap at every size, with the tightest
-    // margin (76 vs 103) at a full table.
-    const maxTiles = seatCount <= 4 ? 9
-      : seatCount <= 6 ? 6
-      : seatCount <= 8 ? 4
-      : 2;
+    //  3. A single cap of 5 for every table size, with the rest behind the
+    //     "+N more" chip and the round value carrying what the hidden cards
+    //     cost. Sliding the cap with the player count was an attempt to show
+    //     as much as would fit, but it meant the panel changed shape between
+    //     tables AND still did not fit -- measured at six players the panels
+    //     overlapped by 94px. A fixed five fits one row at every size once
+    //     the grid is allowed to go wider than three columns (see
+    //     .compact-reveal in style.css), so the panel is one row of cards
+    //     plus one line of numbers, always.
+    //
+    //  4. Three. Five tiles plus the "+N more" chip is six items, and six
+    //     across an 84px panel leaves each card 13px wide -- a card you can
+    //     see but not read, which is worse than one you are told is hidden.
+    //     Three tiles plus the chip is four items at ~19px each: the three
+    //     priciest cards legible, and the round value carrying the rest.
+    const maxTiles = 3;
     const shown = groups.slice(0, maxTiles);
     shown.forEach((g) => {
       const el = cardEl(g.cards[0]);
