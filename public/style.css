@@ -3684,3 +3684,13 @@ body.game-active .bg-scrim { display: none; }
 .oval-table.tight-reveal .seat-reveal-score { font-size: calc(10.5px * var(--seat-scale)); }
 .oval-table.tight-reveal .seat-reveal-total { font-size: calc(9.5px * var(--seat-scale)); }
 .oval-table.tight-reveal .seat-reveal-arrow { margin: 0 1px; font-size: calc(8.5px * var(--seat-scale)); }
+
+/* ---- Waiting on a seat (Oct 2026) ---------------------------------------
+   The table is held while a player the host has already approved watches
+   their rewarded ad. button:disabled above already dims it; this is the
+   in-flight state for the tap itself, so a slow reply never reads as a dead
+   button -- which is what the old optimistic dismissal was hiding. */
+#overlay-round-result.busy #btn-next-round {
+  opacity: 0.55; pointer-events: none;
+}
+#btn-next-round.waiting-seat { cursor: progress; }
