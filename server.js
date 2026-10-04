@@ -1154,7 +1154,10 @@ async function recordGameResult(room) {
   }
   try {
     await Promise.all(writes);
-    console.log(`[Firebase] Recorded game result for room ${room.code} (${writes.length} player(s) with linked accounts).`);
+    // writes.length counted TWO writes per player (the users doc and the
+    // activity row), so this line reported double the real number -- "6
+    // player(s)" for a 3-player game.
+    console.log(`[Firebase] Recorded game result for room ${room.code} (${writes.length / 2} player(s) with linked accounts).`);
   } catch (e) {
     console.error(`[Firebase] Failed to record game result for room ${room.code}:`, e.message);
   }
@@ -2368,7 +2371,15 @@ function denyJoinRequest(room, playerId, reason) {
 //     freeze the table for everyone with no way out. After 30 seconds an
 //     unanswered request resolves itself as a decline and play continues.
 // ---------------------------------------------------------------------------
-const REJOIN_DECISION_MS = 30000;
+// Was 30 seconds, and that is very likely why a host reported approving a
+// rejoin that never happened: the request auto-denied, her banner vanished,
+// and her tap landed on "That request is no longer waiting."
+//
+// Nothing was waiting on that clock. A pending request already freezes the
+// table -- startNextRound() returns early on rejoinRequestsPending() -- so the
+// short limit bought no one anything. Two minutes is long enough for a host
+// who is mid-conversation, and the request still cannot outlive the game.
+const REJOIN_DECISION_MS = 120000;
 
 // ===========================================================================
 // Rewarded-ad entry (Sept 2026)
@@ -2390,7 +2401,9 @@ const REJOIN_DECISION_MS = 30000;
 // Entries are short-lived. An approval nobody acts on must not hold the table
 // up, so it expires and the room carries on without them.
 // ===========================================================================
-const AD_GRANT_TTL_MS = 60 * 1000;
+// Overridable so the expiry path can actually be tested -- waiting a real
+// minute per assertion is why this branch went unverified in the first place.
+const AD_GRANT_TTL_MS = Number(process.env.AD_GRANT_TTL_MS) || 60 * 1000;
 
 function adGrants(room) {
   if (!room.awaitingAdGrant) room.awaitingAdGrant = new Map();
@@ -2399,17 +2412,29 @@ function adGrants(room) {
 
 function recordAdGrant(room, playerId, kind, payload) {
   const now = Date.now();
+  // Its OWN timer, not just a timestamp. expireAdGrants() used to run only
+  // when something else happened to call it -- the minute sweeper, or a
+  // decision that needed to know. If the table went quiet (which is exactly
+  // what happens when everyone is waiting on this one player), nothing called
+  // it, so an abandoned grant did not expire after 60 seconds; it expired
+  // whenever the room was next touched, and the player waited that whole time
+  // as a spectator. A test with the TTL turned down to 3 seconds showed them
+  // still unseated afterwards.
+  const prev = adGrants(room).get(playerId);
+  if (prev && prev.timer) clearTimeout(prev.timer);
   adGrants(room).set(playerId, {
     kind,
     payload: payload || null,
     approvedAt: now,
     expiresAt: now + AD_GRANT_TTL_MS,
+    timer: setTimeout(() => expireAdGrants(room), AD_GRANT_TTL_MS + 50),
   });
 }
 
 function takeAdGrant(room, playerId, kind) {
   const g = adGrants(room).get(playerId);
   if (!g) return null;
+  if (g.timer) clearTimeout(g.timer);
   adGrants(room).delete(playerId);
   if (g.kind !== kind) return null;
   if (Date.now() > g.expiresAt) return null;
@@ -2431,11 +2456,30 @@ function expireAdGrants(room) {
   let n = 0;
   for (const [pid, g] of room.awaitingAdGrant) {
     if (now > g.expiresAt) {
+      if (g.timer) clearTimeout(g.timer);
       room.awaitingAdGrant.delete(pid);
       n++;
       const p = room.players.get(pid);
       if (p && p.socketId) {
         io.to(p.socketId).emit('ad_grant_expired', { kind: g.kind });
+      }
+      // SEAT THEM ANYWAY. The host already approved -- the seat was theirs the
+      // moment that happened, and the advert is a revenue step we attempt on
+      // the way in, not a second gate they have to pass. An expiry here means
+      // the ad never came back on their device (no fill, a wedged native call,
+      // a backgrounded app). Dropping them for that is charging the player for
+      // our plumbing, and it is exactly the failure that was reported: host
+      // approves, no ad appears, player stays a spectator for good.
+      //
+      // The trade this accepts, stated plainly: someone who deliberately
+      // ignores the ad for 60 seconds gets in without watching it. That is the
+      // same spoofability the client-side entitlement check already accepts
+      // (see needsAdToEnter) -- an impression, not a game outcome.
+      try {
+        if (g.kind === 'rejoin') seatRejoiner(room, pid);
+        else if (g.kind === 'join' && g.payload) seatAdmittedPlayer(room, pid, g.payload);
+      } catch (err) {
+        console.warn(`[Room ${room.code}] seating ${pid} after ad-grant expiry failed:`, err.message);
       }
     }
   }
