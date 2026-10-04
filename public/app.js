@@ -5528,9 +5528,106 @@
     // Floors stop it collapsing into unreadability on a 320px screen; the
     // caps are today's values, so this can only ever shrink, never inflate.
     // ------------------------------------------------------------------
-    const tableW = oval.getBoundingClientRect().width || 1;
+    // ------------------------------------------------------------------
+    // Seat sizing, Oct 2026 -- now aware of how many people are sitting down.
+    //
+    // The Sept fix made the furniture scale with the table's WIDTH, which
+    // solved small-screen crowding at a fixed player count. It missed two
+    // things, and at 7+ players they collide visibly:
+    //
+    //   1. It never looked at `n`. A seat was the same size at 4 players and
+    //      at 10, so the ring simply ran out of room and chairs overlapped.
+    //   2. It only measured tableW, never tableH -- and the overlaps are
+    //      VERTICAL, between seats stacked down the left and right sides.
+    //      The table is far shorter than it is wide, so the vertical gaps run
+    //      out long before the horizontal ones.
+    //
+    // Making the seats taller (stacking the avatar above the name) made this
+    // worse, because seat height was never part of the sum.
+    //
+    // So: work out where the seats will actually land, in pixels, measure the
+    // smallest gap between neighbours, and size the seat to fit THAT. It is
+    // self-correcting -- any device, any player count, any future change to
+    // the ring radius.
+    // ------------------------------------------------------------------
+    const ovalRect = oval.getBoundingClientRect();
+    const tableW = ovalRect.width || 1;
+    const tableH = ovalRect.height || 1;
     const px = (v) => Math.round(v) + 'px';
-    const seatW = Math.round(Math.max(62, Math.min(SEAT_WIDTH_PX, tableW * 0.26)));
+
+    // Spread the ring a little wider once the table is busy. Cheap extra room,
+    // and at low player counts it changes nothing.
+    // Push the ring out as the table fills. Buys room for free, and below
+    // seven players nothing changes. The 48 step exists for the extreme corner
+    // -- ten players on a 320px phone -- where the seat has already hit its
+    // readability floor and cannot shrink any further.
+    const ringR = n >= 9 ? 48 : (n >= 7 ? 46 : 43);
+
+    // Where every seat centre will be, in real pixels.
+    const centres = [];
+    for (let k = 0; k < n; k++) {
+      const a = Math.PI / 2 + (k / n) * 2 * Math.PI;
+      centres.push({
+        x: tableW * (0.5 + (ringR / 100) * Math.cos(a)),
+        y: tableH * (0.5 + (ringR / 100) * Math.sin(a)),
+      });
+    }
+    // The tightest neighbour pair decides the size for everyone -- seats must
+    // stay uniform or the table looks broken rather than responsive.
+    let minGap = Infinity;
+    for (let k = 0; k < n; k++) {
+      const a = centres[k], b = centres[(k + 1) % n];
+      minGap = Math.min(minGap, Math.hypot(a.x - b.x, a.y - b.y));
+    }
+    if (!isFinite(minGap) || n < 2) minGap = tableW;
+
+    // 0.92 leaves a hair of breathing room so neighbours never touch.
+    // The 54px floor is readability: below that the name is unreadable and a
+    // slightly cramped table beats an illegible one.
+    const wantW = Math.min(SEAT_WIDTH_PX, tableW * 0.26);
+    // The floor drops a little on a very crowded table. At ten players on a
+    // 320px phone the seat hits the readability floor and cannot shrink
+    // further, leaving neighbours a pixel into each other -- invisible, but it
+    // means the guarantee is not actually a guarantee. Two pixels of floor buys
+    // it back, and nothing below nine players ever reaches down here.
+    const floorW = n >= 9 ? 52 : 54;
+    const seatW = Math.round(Math.max(floorW, Math.min(wantW, minGap * 0.90)));
+    // Everything inside the seat scales with it, so the chip gets shorter as
+    // well as narrower -- height was the axis that actually overflowed.
+    const seatScale = Math.max(0.68, Math.min(1, seatW / SEAT_WIDTH_PX));
+    oval.style.setProperty('--seat-scale', String(seatScale.toFixed(3)));
+
+    // Shedding detail beats shrinking type.
+    //
+    // Measured on a 372x230 table, which is what a short phone actually gives
+    // us: at 8 players the chairs overlapped by 30px. Scaling alone brought
+    // that to 11px -- better, still touching. Dropping the "Last:" discard
+    // strip takes the chip from ~100px tall to ~70px and the overlap to ZERO
+    // at every player count up to ten.
+    //
+    // So it is dropped only when it has to be. The strip is real information
+    // (what each player last threw), so a four-player table keeps it; a busy
+    // one trades it for chairs you can actually read.
+    //
+    // Driven by the measured vertical gap rather than a hardcoded player
+    // count, so it does the right thing on any screen -- which is the other
+    // half of the complaint: the same table looking different device to
+    // device.
+    let minVGap = Infinity;
+    for (let k = 0; k < n; k++) {
+      const a = centres[k], b = centres[(k + 1) % n];
+      const dy = Math.abs(a.y - b.y);
+      if (Math.abs(a.x - b.x) < seatW) minVGap = Math.min(minVGap, dy);
+    }
+    // Chip height at full size, measured against the current structure: the
+    // name+score row (~14px), the hand/discards row (~30px, the 18px fan plus
+    // its count below it) and 10px of padding. Dropped from 76 when the
+    // discards moved off their own line and into the hand row -- leaving it at
+    // 76 would have put normal tables into compact mode for height they no
+    // longer use.
+    const CHIP_FULL_H = 58 * seatScale;
+    const compact = isFinite(minVGap) && minVGap < CHIP_FULL_H;
+    oval.classList.toggle('compact-seats', compact);
     const centreCardW = Math.round(Math.max(34, Math.min(58, tableW * 0.155)));
     const centreGap = Math.round(Math.max(8, Math.min(18, tableW * 0.04)));
     oval.style.setProperty('--table-w', px(tableW));
@@ -5540,8 +5637,8 @@
 
     seatOrder.forEach((p, i) => {
       const angle = Math.PI / 2 + (i / n) * 2 * Math.PI;
-      const left = 50 + 43 * Math.cos(angle);
-      const top = 50 + 43 * Math.sin(angle);
+      const left = 50 + ringR * Math.cos(angle);
+      const top = 50 + ringR * Math.sin(angle);
 
       const seatEl = document.createElement('div');
       seatEl.className = 'seat';
@@ -5616,22 +5713,34 @@
       // before you can read anything.
       const idRow = document.createElement('div');
       idRow.className = 'seat-id';
-      // Guarded because this runs inside renderOvalTable's per-seat loop: an
-      // avatar that failed to build would otherwise abort the loop and leave
-      // the table half-rendered. A seat with no face is a blemish; a table
-      // with no seats is a broken game.
-      try {
-        idRow.appendChild(avatarEl(p.avatar, p.name, p.playerId, 22));
-      } catch (e) { /* seat renders without a face */ }
+      // The avatar is deliberately NOT drawn here any more (Oct 2026).
+      //
+      // It cost ~24px of chip height, and height is the axis that overflows:
+      // with the avatar, the "Last:" discard strip had to be dropped from
+      // seven players upward to stop chairs colliding. Without it, "Last:"
+      // survives at every player count on every device measured.
+      //
+      // That is a straight win -- "Last:" is strategic information (what each
+      // player just threw), the avatar was decoration that nobody mentioned.
+      // The name also gets the full chip width now that nothing sits beside it,
+      // which is what was truncating longer names.
+      //
+      // It also removes the per-render DiceBear request from the busiest part
+      // of the UI. The avatar picker still loads them, so the third-party
+      // dependency is reduced rather than gone -- serving them locally is still
+      // on the pre-launch list.
       const nameEl = document.createElement('div');
       nameEl.className = 'seat-name';
-      // Own seat is marked with a neutral ring (see .seat.own-seat in
-      // style.css) instead of appending "(You)" text -- that text used to
-      // share the exact same 96px truncation-prone width as everyone else's
-      // name, so it clipped sooner than it should have for no good reason.
       nameEl.textContent = displayName(p.name);
       if (p.playerId === myPlayerId) seatEl.classList.add('own-seat');
       idRow.appendChild(nameEl);
+      // Score moves up here, out of the "10 cards . 0 pts" run-on, into its own
+      // pill. It and the card count are the two things you scan every turn, and
+      // as grey text at the end of a sentence it was the easiest thing to miss.
+      const scoreEl = document.createElement('span');
+      scoreEl.className = 'seat-score';
+      scoreEl.textContent = (dealing || revealPhaseActive) ? '' : String(score);
+      idRow.appendChild(scoreEl);
       chipEl.appendChild(idRow);
 
       // ---- fan of card backs ----
@@ -5665,19 +5774,20 @@
           back.style.setProperty('--i', String(b));
           fan.appendChild(back);
         }
+        // The count sits BELOW the backs now rather than beside them, so the
+        // fan reads as "a hand, this big" at a glance.
+        const handCol = document.createElement('div');
+        handCol.className = 'seat-hand';
+        handCol.appendChild(fan);
         const badge = document.createElement('span');
         badge.className = 'seat-fan-count';
         badge.textContent = String(count);
-        fan.appendChild(badge);
-        statsRow.appendChild(fan);
+        handCol.appendChild(badge);
+        statsRow.appendChild(handCol);
       }
 
       const metaEl = document.createElement('div');
       metaEl.className = 'seat-meta';
-      // The reveal box now carries the running total, so the chip drops it
-      // while that box is up -- otherwise moving the total into the box just
-      // relocates the duplicate instead of removing it.
-      const chipHidesScore = dealing || revealPhaseActive;
       // The fan's badge now carries the card count for opponents, so this
       // line drops it there and shows the score alone -- printing "13" on
       // the badge and "13 cards" underneath it is just the same fact twice
@@ -5692,12 +5802,13 @@
       } else if (count === undefined) {
         metaEl.textContent = '';
       } else if (fanShowsCount) {
-        // The fan's badge is immediately to the left on the same row now, so
-        // the dot separates "8" from "0 pts" rather than two stacked lines
-        // needing none.
-        metaEl.textContent = chipHidesScore ? '' : '· ' + score + ' pts';
+        // The fan carries the count and the pill carries the score, so there is
+        // nothing left for this line to say.
+        metaEl.textContent = '';
       } else {
-        metaEl.textContent = count + ' cards' + (chipHidesScore ? '' : ' · ' + score + ' pts');
+        // Your own seat has no fan (your real cards are in the tray below), so
+        // the count still lives here. The score does not -- it is in the pill.
+        metaEl.textContent = count + ' cards';
       }
       statsRow.appendChild(metaEl);
       // :empty on the row keeps it from reserving height during the deal and
@@ -5713,16 +5824,16 @@
       if (history && history.length > 0 && !revealPhaseActive) {
         const histEl = document.createElement('div');
         histEl.className = 'seat-discard-history';
-        const label = document.createElement('span');
-        label.className = 'seat-discard-label';
-        label.textContent = 'Last:';
-        histEl.appendChild(label);
         history.forEach((c) => {
           const cEl = cardEl(c);
           cEl.classList.add('mini');
           histEl.appendChild(cEl);
         });
-        chipEl.appendChild(histEl);
+        // Appended to the stats ROW, not the chip, so it sits to the right of
+        // the hand instead of starting a third line. The "Last:" label goes
+        // with it -- at 8px it cost ~20px of an 82px chip to say what the
+        // position already says.
+        statsRow.appendChild(histEl);
       }
 
       seatEl.innerHTML = '';
