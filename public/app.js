@@ -5344,6 +5344,27 @@
     host.appendChild(frag);
   }
 
+  // Eight hues spaced round the wheel, picked to stay clear of the gold the
+  // active seat uses. Chosen by a hash of the playerId rather than by seat
+  // index, so a player's colour does not change when somebody else leaves and
+  // the seats renumber -- the whole point is that the colour IS the player.
+  const SEAT_HUES = [150, 18, 205, 275, 45, 0, 320, 95];
+  function seatColour(playerId) {
+    const id = String(playerId || '');
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+    return 'hsl(' + SEAT_HUES[Math.abs(h) % SEAT_HUES.length] + ', 55%, 62%)';
+  }
+  function seatInitial(name) {
+    const n = String(name || '').trim();
+    if (!n) return '?';
+    // "Bot 3" -> "3", not "B": eight bots all showing B would defeat the
+    // purpose. Any name ending in a digit uses the digit.
+    const trailing = n.match(/(\d)\s*$/);
+    if (trailing) return trailing[1];
+    return n[0].toUpperCase();
+  }
+
   function cardEl(card, opts) {
     opts = opts || {};
     const el = document.createElement('div');
@@ -5729,6 +5750,16 @@
       // of the UI. The avatar picker still loads them, so the third-party
       // dependency is reduced rather than gone -- serving them locally is still
       // on the pre-launch list.
+      // A 15px disc carrying the player's initial, in a colour that is theirs
+      // for the whole game. This is what the avatar used to do -- tell eight
+      // near-identical chips apart at a glance -- at a fifth of the width and
+      // with no network request at all, which is what forced the avatar out in
+      // the first place.
+      const dotEl = document.createElement('span');
+      dotEl.className = 'seat-dot';
+      dotEl.style.background = seatColour(p.playerId);
+      dotEl.textContent = seatInitial(p.name);
+      idRow.appendChild(dotEl);
       const nameEl = document.createElement('div');
       nameEl.className = 'seat-name';
       nameEl.textContent = displayName(p.name);
@@ -5740,6 +5771,9 @@
       const scoreEl = document.createElement('span');
       scoreEl.className = 'seat-score';
       scoreEl.textContent = (dealing || revealPhaseActive) ? '' : String(score);
+      // The dash is drawn by CSS (.seat-score::before) rather than put in the
+      // text, so :empty still hides the whole thing during the deal and the
+      // reveal instead of leaving a stranded separator behind.
       idRow.appendChild(scoreEl);
       chipEl.appendChild(idRow);
 
@@ -5985,8 +6019,22 @@
     if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
     if (!deadline) { el.classList.add('hidden'); return; }
 
+    // How long this turn was given, measured rather than hardcoded: the server
+    // uses TURN_SECONDS for people and a shorter, per-character delay for bots,
+    // and a ring drawn against the wrong span would drain at the wrong rate.
+    // Captured once, when the deadline changes, not on every tick.
+    const span = Math.max(1, deadline - Date.now());
     function tick() {
       const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      // The ring on the active chair. One style write per tick on one element.
+      const activeChip = document.querySelector('.seat.active .seat-chip');
+      if (activeChip) {
+        const pct = Math.max(0, Math.min(100, ((deadline - Date.now()) / span) * 100));
+        activeChip.style.setProperty('--turn-pct', pct.toFixed(1));
+        // Red for the last three seconds -- the same warning .low already
+        // gives the global timer, moved to where the eye actually is.
+        activeChip.style.setProperty('--turn-ring', remaining <= 3 ? '#e4564f' : 'var(--gold-bright)');
+      }
       document.getElementById('timer-seconds').textContent = remaining;
       el.classList.remove('hidden');
       el.classList.toggle('low', remaining <= 10);
