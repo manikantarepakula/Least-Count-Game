@@ -1288,9 +1288,56 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
   gap: 3px; z-index: 3; width: var(--seat-w, 96px); text-align: center;
 }
 .seat-chip {
-  background: rgba(255,255,255,0.14); border-radius: var(--radius-sm); padding: 5px 7px;
+  /* Outlined rather than a flat wash (Oct 2026). With the avatar gone, eight
+     identical translucent rectangles read as a list, not as eight chairs. The
+     outline and the shadow give each one an edge, so it sits ON the felt
+     instead of being a lighter patch OF it. Costs 2px of width. */
+  background: rgba(255,255,255,0.10); border-radius: var(--radius-sm); padding: 5px 7px;
+  border: 1px solid rgba(255,255,255,0.20);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
   font-size: 11.5px; text-align: center;
   max-width: 100%; width: 100%;
+  position: relative;
+}
+.seat.active .seat-chip { border-color: rgba(255,255,255,0.55); }
+
+/* The player's colour + initial. Replaces the avatar: same job -- tell eight
+   chips apart instantly -- for 15px instead of 22px and no network request.
+   "Bot 3" shows 3 rather than B, since eight B's would tell you nothing. */
+.seat-dot {
+  flex: 0 0 auto;
+  width: 15px; height: 15px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  color: #0d1a16;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.3);
+}
+
+/* ---- Turn countdown ring ------------------------------------------------
+   The server already runs a real per-turn clock (TURN_SECONDS for people, a
+   shorter per-character delay for bots) and already broadcasts turnDeadline,
+   so this is the existing clock drawn in a second place -- on the chair whose
+   turn it is -- rather than a new timer. --turn-pct is written by the tick in
+   updateTurnTimerDisplay().
+
+   Drawn as a masked conic gradient so it is a RING, not a filled wedge. The
+   @supports guard matters: without mask-composite the ::after would paint a
+   solid gold rectangle over the whole chip, so a WebView too old for it gets
+   no ring at all rather than a broken one. */
+@supports ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
+  .seat.active .seat-chip::after {
+    content: ''; position: absolute; inset: -2px;
+    border-radius: calc(var(--radius-sm) + 2px);
+    padding: 2px;
+    background: conic-gradient(from -90deg,
+      var(--turn-ring, var(--gold-bright)) calc(var(--turn-pct, 100) * 1%),
+      rgba(0,0,0,0.30) 0);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    pointer-events: none;
+  }
 }
 
 /* ---- Seat identity + hand (Sept 2026) ----------------------------------
@@ -1324,16 +1371,25 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
 }
 /* The score used to be grey text at the tail of "10 cards . 0 pts" -- the
    number you check most often, in the least visible place in the chip.
-   Now it is a pill: own background, gold, heavier weight. */
+   Now it is gold and bold, right after the name. */
 .seat-score {
   flex: 0 0 auto;
   font-size: 11.5px; font-weight: 800; line-height: 1.1;
   color: var(--gold-bright);
 }
+/* The separator. In the markup rather than the text so that :empty below
+   still collapses the score cleanly during the deal and the reveal -- a
+   dash left hanging after the name would be worse than no score at all. */
+.seat-score::before {
+  content: '\2013';
+  margin-right: 3px;
+  color: var(--text-muted); font-weight: 400;
+}
 .seat-score:empty { display: none; }
 /* The active seat's chip turns gold with dark text, so gold-on-gold would
    vanish. Same flip the rest of the chip already does. */
 .seat.active .seat-score { color: #1a1a1a; }
+.seat.active .seat-score::before { color: rgba(0,0,0,0.45); }
 .avatar {
   flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
@@ -1551,8 +1607,20 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
    96px box was two mostly-empty lines and a large part of why the seat looked
    oversized for what it actually said. */
 .seat-stats {
-  display: flex; align-items: center; justify-content: center; gap: 4px;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
   min-width: 0; max-width: 100%;
+}
+/* Your hand and your discards are two different facts; butted together at a
+   4px gap they read as one run of cards. A hairline between them separates
+   the two without costing a pixel of width the way a label would. */
+.seat-stats .seat-hand + .seat-meta + .seat-discard-history::before,
+.seat-stats .seat-hand ~ .seat-discard-history::before {
+  content: ''; align-self: stretch;
+  width: 1px; margin-right: 5px;
+  background: rgba(255,255,255,0.16);
+}
+.seat.active .seat-stats .seat-hand ~ .seat-discard-history::before {
+  background: rgba(0,0,0,0.22);
 }
 .seat-stats:empty { display: none; }
 /* The fan sat in its own block with vertical margins when it was a row of its
@@ -3510,8 +3578,13 @@ body.game-active .bg-scrim { display: none; }
 .seat-name   { font-size: calc(11.5px * var(--seat-scale)); }
 .seat-meta   { font-size: calc(10px   * var(--seat-scale)); }
 .seat-id     { gap: calc(4px * var(--seat-scale)); }
-.seat-stats  { gap: calc(4px * var(--seat-scale)); }
+.seat-stats  { gap: calc(7px * var(--seat-scale)); }
 .seat-hand   { gap: calc(1px * var(--seat-scale)); }
+.seat-dot    {
+  width:  calc(15px * var(--seat-scale));
+  height: calc(15px * var(--seat-scale));
+  font-size: calc(9px * var(--seat-scale));
+}
 .seat-score  { font-size: calc(11.5px * var(--seat-scale)); }
 /* The seat no longer draws an avatar (Oct 2026) -- see renderOvalTable. The
    rule is kept, scoped and scaled, so that if one is ever put back it inherits
