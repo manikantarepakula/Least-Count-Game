@@ -1307,15 +1307,33 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
      It also fixes the alignment: the name was text-align:left inside a
      centre-aligned column, so it never lined up with anything above or
      below it. */
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  /* Back to a ROW (Oct 2026). The avatar it used to stack above is gone,
+     so the only two things on this line are the name and the score, and
+     side by side they read as one label: "Ravi 25". Stacking them would
+     cost a whole extra line of chip height to say the same thing. */
+  display: flex; flex-direction: row; align-items: center;
+  justify-content: center; gap: 4px;
   min-width: 0; width: 100%;
 }
 .seat-name {
+  flex: 0 1 auto;
   max-width: 100%; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   text-align: center;
   font-weight: 600;
 }
+/* The score used to be grey text at the tail of "10 cards . 0 pts" -- the
+   number you check most often, in the least visible place in the chip.
+   Now it is a pill: own background, gold, heavier weight. */
+.seat-score {
+  flex: 0 0 auto;
+  font-size: 11.5px; font-weight: 800; line-height: 1.1;
+  color: var(--gold-bright);
+}
+.seat-score:empty { display: none; }
+/* The active seat's chip turns gold with dark text, so gold-on-gold would
+   vanish. Same flip the rest of the chip already does. */
+.seat.active .seat-score { color: #1a1a1a; }
 .avatar {
   flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
@@ -1354,9 +1372,14 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
   transform: rotate(calc((var(--i) - 1) * 7deg));
 }
 .seat-fan-count {
-  margin-left: 5px;
   font-size: 10.5px; font-weight: 700;
   color: var(--text-light);
+}
+/* Fan on top, count underneath. Beside the backs the number read as a
+   separate fact; below them it reads as a label on the hand. */
+.seat-hand {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  flex: 0 0 auto; min-width: 0;
 }
 .seat-meta:empty { display: none; }
 
@@ -1666,7 +1689,8 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
    needs its own edge-aware positioning (see renderOvalTable()). */
 .seat-discard-history {
   display: flex; align-items: center; justify-content: center; gap: 2px;
-  white-space: normal; margin-top: 3px;
+  white-space: normal; margin-top: 0;
+  flex: 0 1 auto; min-width: 0; overflow: hidden;
 }
 .seat-discard-label { font-size: 8px; color: var(--gold-bright); font-weight: 700; margin-right: 1px; }
 .mini-card-back {
@@ -3458,4 +3482,71 @@ body.game-active .bg-scrim { display: none; }
   border-bottom: 1px solid var(--jade-border);
   margin-bottom: 6px;
   max-width: 180px; line-height: 1.3;
+}
+
+
+/* ==========================================================================
+   Seat scaling by player count (Oct 2026)
+   ==========================================================================
+   --seat-scale is set per render in renderOvalTable, from the measured gap
+   between neighbouring seats. 1 at four players on a roomy phone, down to
+   about 0.68 on a busy table or a short screen.
+
+   Scaling the WIDTH alone was not enough: the overlaps at 7+ players are
+   vertical, between seats stacked down the left and right sides, so the chip
+   has to get shorter too. Everything inside it is therefore expressed in terms
+   of the scale -- type, avatar, padding, the card fan.
+
+   Done with real sizes rather than transform: scale(), because .seat is
+   absolutely positioned with translate(-50%, -50%) and a second transform on
+   the same element would fight it.
+   ========================================================================== */
+.oval-table { --seat-scale: 1; }
+
+.seat-chip {
+  padding: calc(5px * var(--seat-scale)) calc(7px * var(--seat-scale));
+  font-size: calc(11.5px * var(--seat-scale));
+}
+.seat-name   { font-size: calc(11.5px * var(--seat-scale)); }
+.seat-meta   { font-size: calc(10px   * var(--seat-scale)); }
+.seat-id     { gap: calc(4px * var(--seat-scale)); }
+.seat-stats  { gap: calc(4px * var(--seat-scale)); }
+.seat-hand   { gap: calc(1px * var(--seat-scale)); }
+.seat-score  { font-size: calc(11.5px * var(--seat-scale)); }
+/* The seat no longer draws an avatar (Oct 2026) -- see renderOvalTable. The
+   rule is kept, scoped and scaled, so that if one is ever put back it inherits
+   the sizing rather than reintroducing the fixed 22px that caused the overflow
+   in the first place. */
+.seat .avatar {
+  width:  calc(22px * var(--seat-scale));
+  height: calc(22px * var(--seat-scale));
+}
+/* The fan of card backs and the "Last:" strip are the two blocks that add the
+   most height, so they shrink hardest on a crowded table. */
+.seat-back {
+  width:  calc(13px * var(--seat-scale));
+  height: calc(18px * var(--seat-scale));
+}
+.seat-fan-count { font-size: calc(10.5px * var(--seat-scale)); }
+.seat-discard-label { font-size: calc(8px * var(--seat-scale)); }
+.seat-discard-history { gap: calc(2px * var(--seat-scale)); margin-top: calc(3px * var(--seat-scale)); }
+.seat-discard-history .card.mini {
+  width:  calc(20px * var(--seat-scale));
+  height: calc(26px * var(--seat-scale));
+}
+
+
+/* Crowded table (revised Oct 2026).
+   This used to hide the discard strip outright at 7+ players, which meant
+   the busiest tables -- the ones where knowing what people are throwing
+   matters most -- were the ones that stopped showing it. Now that the strip
+   shares a row with the hand instead of starting a third line, it costs no
+   height at all, so compact mode trims it to the two most recent cards and
+   shrinks them rather than removing the information.
+   Set by renderOvalTable when the measured vertical gap between neighbouring
+   chairs is smaller than a full-height chip. */
+.oval-table.compact-seats .seat-discard-history .card.mini:nth-child(n+3) { display: none; }
+.oval-table.compact-seats .seat-discard-history .card.mini {
+  width:  calc(16px * var(--seat-scale));
+  height: calc(21px * var(--seat-scale));
 }
