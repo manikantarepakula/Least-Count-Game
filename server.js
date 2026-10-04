@@ -2179,6 +2179,24 @@ async function broadcastGroup(code) {
   }
 }
 
+// Who, if anyone, the table is currently held up for. Returns null when it is
+// not waiting, so the client can treat it as a simple presence check.
+function awaitingSeatInfo(room) {
+  if (!room || !room.awaitingAdGrant || !room.awaitingAdGrant.size) return null;
+  const now = Date.now();
+  for (const [pid, g] of room.awaitingAdGrant) {
+    if (now > g.expiresAt) continue;
+    // A rejoiner is already in room.players; a mid-game joiner is NOT -- they
+    // are only seated when the ad is claimed, so until then their name exists
+    // only on the stored request. Checking players alone made every join wait
+    // read "A player is taking their seat", which tells nobody anything.
+    const p = room.players.get(pid);
+    const name = (p && p.name) || (g.payload && g.payload.name) || 'A player';
+    return { playerId: pid, name, kind: g.kind };
+  }
+  return null;
+}
+
 function publicRoomInfo(room) {
   return {
     roomCode: room.code,
@@ -2192,6 +2210,14 @@ function publicRoomInfo(room) {
     // Shown on the lobby bots row and used to label the table. Clients render
     // this, so it travels with every room broadcast rather than being inferred.
     botDifficulty: cleanBotDifficulty(room.botDifficulty),
+    // Somebody the host has already approved is part-way through a rewarded ad,
+    // so the next round cannot start yet (startNextRound / next_round both
+    // refuse while a grant is pending). Broadcast to EVERY client, not just the
+    // one watching the ad: without it the Start button stayed enabled for
+    // everyone else, they tapped it, the server refused -- and the client had
+    // already dismissed the scorecard, leaving them on a dead game screen.
+    // Named rather than a bare boolean so the wait can say who it is waiting on.
+    awaitingSeat: awaitingSeatInfo(room),
     players: room.order.map((pid) => ({
       playerId: pid,
       name: room.players.get(pid).name,
