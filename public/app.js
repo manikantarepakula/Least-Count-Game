@@ -6952,6 +6952,14 @@
     // this is only the "we're all ready, skip the wait" shortcut.
     const nextBtn = document.getElementById('btn-next-round');
     nextBtn.classList.toggle('hidden', game.gameOver);
+    // Held for a player the host has already approved who is part-way through
+    // their rewarded ad. The server refuses next_round throughout, so leaving
+    // the button live just invites a tap that cannot work -- which is how the
+    // frozen screen above was reached in the first place. Disable it and say
+    // who we are waiting for.
+    const waitingFor = latestRoom && latestRoom.awaitingSeat;
+    nextBtn.disabled = !!waitingFor;
+    nextBtn.classList.toggle('waiting-seat', !!waitingFor);
     // On the final round there's no next round to start -- instead everyone
     // (not just the host) gets a "See Final Result" button that leads into
     // the separate celebratory trophy screen, at their own pace rather than
@@ -6964,7 +6972,12 @@
     // override on top of the countdown, not the only way forward.
     const hintEl = document.getElementById('round-result-hint');
     const secs = autoNextRoundSecondsLeft();
-    if (game.gameOver) {
+    if (waitingFor) {
+      // Takes priority over the countdown: the countdown is paused anyway, and
+      // "Next round in 3s..." sitting there while nothing happens is precisely
+      // the thing that reads as a freeze.
+      hintEl.textContent = waitingFor.name + ' is taking their seat\u2026';
+    } else if (game.gameOver) {
       hintEl.textContent = ''; // final scorecard is read at each player's own pace
     } else if (secs !== null) {
       hintEl.textContent = secs > 0
@@ -7082,17 +7095,34 @@
   }
 
   document.getElementById('btn-next-round').onclick = () => {
-    document.getElementById('overlay-round-result').classList.add('hidden');
+    const overlay = document.getElementById('overlay-round-result');
     const maxScoreRow = document.getElementById('round-maxscore-row');
     const sel = document.getElementById('round-maxscore-select');
     const eliminationScore = !maxScoreRow.classList.contains('hidden') && sel.value
       ? Number(sel.value) : undefined;
+    // The scorecard used to be hidden HERE, before asking the server. When the
+    // server refused -- and it legitimately does, while an approved player is
+    // watching their rewarded ad -- the overlay was already gone and the
+    // player was left looking at the previous round's game screen with nothing
+    // running on it. Reported from a real game as "the screen froze".
+    //
+    // So the dismissal now waits for the answer. The round-start sequence
+    // arrives on its own (game_starting) and hides this overlay anyway, so
+    // nothing is lost on the success path.
+    overlay.classList.add('busy');
     socket.emit('next_round', { roomCode: myRoomCode, eliminationScore }, (res) => {
+      overlay.classList.remove('busy');
+      if (res && res.ok) { overlay.classList.add('hidden'); return; }
       // Losing the race with the auto-advance countdown is a normal outcome,
-      // not an error worth showing: the host tapped Start Now at the same
-      // instant the timer fired, and the round is starting either way.
-      // Anything else (not host, game already over) still surfaces.
-      if (!res.ok && res.error !== 'Round is no longer waiting to start.') setGameError(res.error);
+      // not an error worth showing: the tap landed at the same instant the
+      // timer fired, and the round is starting either way. Hide, because it
+      // really is starting.
+      if (res && res.error === 'Round is no longer waiting to start.') {
+        overlay.classList.add('hidden');
+        return;
+      }
+      // Anything else: stay exactly where we are and say why.
+      setGameError((res && res.error) || 'Could not start the next round.');
     });
   };
 
