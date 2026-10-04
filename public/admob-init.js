@@ -647,12 +647,42 @@
     }
   }
 
+  // Every await below crosses the bridge into native code, and a native call
+  // that neither resolves nor rejects leaves the await hanging forever. That
+  // is not theoretical: a player reported asking to rejoin, the host approving,
+  // and then nothing at all -- no ad, no seat, no error. A hung
+  // showRewardVideoAd() produces exactly that, and it strands the whole table
+  // too, because the server holds the next round until the grant is claimed or
+  // expires.
+  //
+  // So the whole path gets a wall-clock deadline. On timeout it resolves TRUE,
+  // the same answer every other failure here gives: a player who did what we
+  // asked must not pay for our plumbing. Losing an impression is the cheap
+  // outcome; a player stuck in spectator mode is the expensive one.
+  const REWARDED_TIMEOUT_MS = 25000;
+  function withDeadline(promise, ms, label) {
+    let timer = null;
+    const deadline = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        console.warn('[LCAds] ' + label + ' did not return within ' + ms + 'ms -- granting anyway');
+        resolve({ __timedOut: true });
+      }, ms);
+    });
+    return Promise.race([promise, deadline]).finally(() => { if (timer) clearTimeout(timer); });
+  }
+
   async function showRewarded(kind) {
+    const started = Date.now();
+    const timeLeft = () => Math.max(1000, REWARDED_TIMEOUT_MS - (Date.now() - started));
     try {
-      await ensureInit();
+      const init = await withDeadline(ensureInit(), timeLeft(), 'ensureInit');
+      if (init && init.__timedOut) return true;
       if (rewardedReady !== kind) {
         // Not preloaded, or preloaded for the other placement.
-        await AdMob.prepareRewardVideoAd({ adId: rewardedAdId(kind), isTesting: useTestAds });
+        const prep = await withDeadline(
+          AdMob.prepareRewardVideoAd({ adId: rewardedAdId(kind), isTesting: useTestAds }),
+          timeLeft(), 'prepareRewardVideoAd');
+        if (prep && prep.__timedOut) { rewardedReady = null; return true; }
       }
       rewardedReady = null;
 
@@ -667,10 +697,13 @@
       } catch (e) { /* listener unavailable -- fall back to the resolved value below */ }
 
       try {
-        const item = await AdMob.showRewardVideoAd();
+        const item = await withDeadline(AdMob.showRewardVideoAd(), timeLeft(), 'showRewardVideoAd');
+        // A timeout here means the video never came back. Grant it: the host
+        // has already approved the seat and the player is waiting on us.
+        if (item && item.__timedOut) earned = true;
         // Some plugin versions resolve with the reward item and never emit the
         // event; treat either as proof.
-        if (item && (item.amount != null || item.type != null)) earned = true;
+        else if (item && (item.amount != null || item.type != null)) earned = true;
       } finally {
         if (sub && sub.remove) { try { await sub.remove(); } catch (e) {} }
       }
