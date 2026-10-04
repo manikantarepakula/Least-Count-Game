@@ -1727,10 +1727,45 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
    stretching it to the column -- a card stretched to fill a 1fr column comes
    out wider than it is tall, which stops reading as a playing card at all. */
 .seat-reveal-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; margin-top: 2px;
+  /* FOUR columns, not three. The cap is three cards plus the "+N more" chip,
+     which is four items -- at three columns the chip wrapped onto a row of its
+     own, so the panel paid a whole extra row of height to say "+4 more". */
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; margin-top: 2px;
   justify-items: center;
 }
 .seat-reveal-grid .card.mini { width: 20px; height: 24px; }
+
+/* ---- Crowded reveal (Oct 2026) -----------------------------------------
+   Set on the table whenever there are 6+ players. Measured at six players the
+   reveal panels overlapped their neighbours by 94px -- the panel was ~135px
+   tall and the vertical gap between chairs is about 60px. Three things get it
+   under budget, in order of how much they buy:
+
+     - ONE ROW. Three cards plus the "+N more" chip across four columns
+       instead of wrapping to two or three rows. Worth ~50px.
+     - NO TAG LINE. "DECLARED / LOWEST" is dropped; the panel border already
+       says it in gold. Worth ~12px (set in app.js, not here).
+     - TIGHTER EVERYTHING. Smaller cards, less padding, no margin above.
+
+   Below six players none of this applies and the panel is unchanged -- there
+   is room, and the fuller panel is better when there is. */
+.oval-table.compact-reveal .seat-reveal-grid { gap: 1px; margin-top: 1px; }
+.oval-table.compact-reveal .seat-reveal-grid .card.mini {
+  width:  calc(19px * var(--seat-scale));
+  height: calc(23px * var(--seat-scale));
+}
+.oval-table.compact-reveal .seat-reveal-grid .card.mini .center-rank { font-size: calc(9px * var(--seat-scale)); }
+.oval-table.compact-reveal .seat-reveal-grid .card.mini .center-suit { font-size: calc(7px * var(--seat-scale)); }
+.oval-table.compact-reveal .seat-reveal-more {
+  width:  calc(19px * var(--seat-scale));
+  height: calc(23px * var(--seat-scale));
+  font-size: calc(6px * var(--seat-scale)); line-height: 1;
+}
+.oval-table.compact-reveal .seat-reveal-box { margin-top: 2px; padding: 2px; }
+.oval-table.compact-reveal .seat-reveal-value { font-size: calc(11px * var(--seat-scale)); }
+.oval-table.compact-reveal .seat-reveal-score { font-size: calc(12px * var(--seat-scale)); }
+.oval-table.compact-reveal .seat-reveal-total { font-size: calc(11px * var(--seat-scale)); }
+.oval-table.compact-reveal .seat-reveal-arrow { margin: 0 2px; font-size: calc(10px * var(--seat-scale)); }
 /* Bigger than .card.mini's stock 7.5px -- at this size the rank is the whole
    point (it's what tells you the card's value), so it gets the pixels. */
 .seat-reveal-grid .card.mini .center-rank { font-size: 10px; font-weight: 700; }
@@ -3623,3 +3658,29 @@ body.game-active .bg-scrim { display: none; }
   width:  calc(16px * var(--seat-scale));
   height: calc(21px * var(--seat-scale));
 }
+
+
+/* ---- Nine and ten players -----------------------------------------------
+   The compact panel above clears 6, 7 and 8 players outright. At ten it was
+   still 16px into its neighbours, so this tier takes the last of the fat off:
+   smaller cards, smaller numbers, and the chip's own padding reduced for the
+   duration of the reveal. Nothing is removed that the compact tier kept --
+   three cards, the "+N more" chip and the round value are all still there,
+   just drawn tighter. Ten players on a phone is the hardest case the layout
+   has, and this is what fits. */
+.oval-table.tight-reveal .seat.revealing .seat-chip { padding: 3px 5px 3px; }
+.oval-table.tight-reveal .seat.revealing .seat-name { font-size: calc(10px * var(--seat-scale)); }
+.oval-table.tight-reveal .seat-reveal-box { margin-top: 1px; padding: 1px; }
+.oval-table.tight-reveal .seat-reveal-grid { gap: 1px; margin-top: 0; }
+.oval-table.tight-reveal .seat-reveal-grid .card.mini,
+.oval-table.tight-reveal .seat-reveal-more {
+  width:  calc(16px * var(--seat-scale));
+  height: calc(19px * var(--seat-scale));
+}
+.oval-table.tight-reveal .seat-reveal-grid .card.mini .center-rank { font-size: calc(8px * var(--seat-scale)); }
+.oval-table.tight-reveal .seat-reveal-grid .card.mini .center-suit { font-size: calc(6px * var(--seat-scale)); }
+.oval-table.tight-reveal .seat-reveal-more { font-size: calc(5.5px * var(--seat-scale)); }
+.oval-table.tight-reveal .seat-reveal-value { font-size: calc(9.5px * var(--seat-scale)); }
+.oval-table.tight-reveal .seat-reveal-score { font-size: calc(10.5px * var(--seat-scale)); }
+.oval-table.tight-reveal .seat-reveal-total { font-size: calc(9.5px * var(--seat-scale)); }
+.oval-table.tight-reveal .seat-reveal-arrow { margin: 0 1px; font-size: calc(8.5px * var(--seat-scale)); }
