@@ -530,9 +530,9 @@
         code: 'LEARN',
         hostPlayerId: ME,
         players: [
-          { playerId: ME, name: getPlayerName() || 'You', isBot: false, connected: true, avatar: myAvatar },
-          { playerId: 'tut-b1', name: 'Bot 1', isBot: true, connected: true, avatar: 'fox' },
-          { playerId: 'tut-b2', name: 'Bot 2', isBot: true, connected: true, avatar: 'owl' },
+          { playerId: ME, name: getPlayerName() || 'You', isBot: false, connected: true },
+          { playerId: 'tut-b1', name: 'Bot 1', isBot: true, connected: true },
+          { playerId: 'tut-b2', name: 'Bot 2', isBot: true, connected: true },
         ],
       };
     }
@@ -3062,7 +3062,7 @@
     if (!name) return setLandingError('Enter your name');
     if (!roomCode) return setLandingError('Enter room code');
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
+    socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       // room.phase was already 'playing' when the request landed -- the
       // server held it as a pending request instead of joining outright
@@ -3960,7 +3960,7 @@
     const name = getPlayerName();
     if (!name) return setLandingError('Enter your name');
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
+    socket.emit('create_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('room_created');
       saveSession(res.roomCode, res.playerId, res.sessionToken);
@@ -4891,7 +4891,7 @@
     if (!name) return setLandingError('Enter your name');
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_solo_room', { name, botCount, botDifficulty: botDifficulty(), firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
+    socket.emit('create_solo_room', { name, botCount, botDifficulty: botDifficulty(), firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('solo_game_started', { bot_count: botCount });
       saveSession(res.roomCode, res.playerId, res.sessionToken);
@@ -4977,7 +4977,7 @@
     if (!name) return setLandingError('Enter your name');
     const playerCount = Number(document.getElementById('input-online-playercount').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('queue_join', { playerCount, name, firebaseIdToken, platform: CLIENT_PLATFORM, avatar: myAvatar }, (res) => {
+    socket.emit('queue_join', { playerCount, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
       queuedPlayerCount = playerCount;
       document.getElementById('queue-waiting-count').textContent = String(playerCount);
@@ -7739,299 +7739,6 @@
   // Stable per-player avatar colour: same name/id always gets the same hue,
   // for everyone in the room, with no server round-trip. A plain string hash
   // is enough -- this only needs to be consistent, not unpredictable.
-  // ====================================================================
-  // Avatars (Sept 2026)
-  //
-  // Ten original characters, drawn as inline SVG. Inline rather than image
-  // files because they cost no requests, stay sharp at every seat size on
-  // every screen density, and recolour from CSS -- and because the whole set
-  // ships with the app, so a seat never renders empty while something loads.
-  //
-  // Built from circles and simple paths on purpose: at 26px in a seat chip
-  // (the smallest they're drawn) anything more detailed turns to mud, and
-  // these have to read instantly at a glance mid-turn.
-  //
-  // Each carries its own background colour so players are distinguishable
-  // by colour alone from across the table, before you can make out the face.
-  // The id list must stay in step with AVATAR_IDS in server.js.
-  // ====================================================================
-  const AVATARS = {
-    fox:     { bg: '#D9622F', face: '#F3A469', ink: '#40200C', d: '<path d="M12 46 L22 14 L34 28 L46 14 L56 46 Z"/><circle cx="26" cy="36" r="3.4" fill="#40200C"/><circle cx="42" cy="36" r="3.4" fill="#40200C"/><path d="M30 45 Q34 49 38 45" stroke="#40200C" stroke-width="2.6" fill="none" stroke-linecap="round"/>' },
-    owl:     { bg: '#6E5BB8', face: '#9C8BD8', ink: '#241C46', d: '<circle cx="34" cy="34" r="22"/><circle cx="26" cy="30" r="8" fill="#FFF"/><circle cx="42" cy="30" r="8" fill="#FFF"/><circle cx="26" cy="30" r="3.6" fill="#241C46"/><circle cx="42" cy="30" r="3.6" fill="#241C46"/><path d="M30 41 L34 46 L38 41 Z" fill="#E8A33D"/>' },
-    cat:     { bg: '#3E9B92', face: '#7FCFC6', ink: '#123833', d: '<path d="M14 24 L20 10 L28 20 Z"/><path d="M54 24 L48 10 L40 20 Z"/><circle cx="34" cy="36" r="20"/><circle cx="27" cy="33" r="3.2" fill="#123833"/><circle cx="41" cy="33" r="3.2" fill="#123833"/><path d="M30 39 L38 39 L34 44 Z" fill="#E88BA0"/><path d="M34 44 L30 47 M34 44 L38 47" stroke="#123833" stroke-width="2.2" fill="none" stroke-linecap="round"/>' },
-    panda:   { bg: '#D8D8DE', face: '#FFFFFF', ink: '#22222A', d: '<circle cx="20" cy="18" r="8" fill="#22222A"/><circle cx="48" cy="18" r="8" fill="#22222A"/><circle cx="34" cy="36" r="21"/><ellipse cx="26" cy="33" rx="6" ry="7" fill="#22222A"/><ellipse cx="42" cy="33" rx="6" ry="7" fill="#22222A"/><circle cx="26" cy="33" r="2.2" fill="#FFF"/><circle cx="42" cy="33" r="2.2" fill="#FFF"/><ellipse cx="34" cy="44" rx="4" ry="3" fill="#22222A"/>' },
-    tiger:   { bg: '#D98E22', face: '#F6C87C', ink: '#3A2206', d: '<circle cx="34" cy="34" r="22"/><path d="M17 30 L24 31 M17 37 L24 37 M51 30 L44 31 M51 37 L44 37" stroke="#3A2206" stroke-width="3" stroke-linecap="round"/><circle cx="27" cy="33" r="3.2" fill="#3A2206"/><circle cx="41" cy="33" r="3.2" fill="#3A2206"/><path d="M28 44 Q34 49 40 44" stroke="#3A2206" stroke-width="2.6" fill="none" stroke-linecap="round"/>' },
-    frog:    { bg: '#6BA630', face: '#9BD45C', ink: '#1E3A08', d: '<circle cx="22" cy="20" r="9"/><circle cx="46" cy="20" r="9"/><circle cx="22" cy="20" r="4" fill="#1E3A08"/><circle cx="46" cy="20" r="4" fill="#1E3A08"/><ellipse cx="34" cy="40" rx="21" ry="17"/><path d="M24 44 Q34 52 44 44" stroke="#1E3A08" stroke-width="3" fill="none" stroke-linecap="round"/>' },
-    bear:    { bg: '#9A653F', face: '#C08E63', ink: '#3A2413', d: '<circle cx="18" cy="20" r="8"/><circle cx="50" cy="20" r="8"/><circle cx="34" cy="36" r="21"/><circle cx="27" cy="33" r="3" fill="#3A2413"/><circle cx="41" cy="33" r="3" fill="#3A2413"/><ellipse cx="34" cy="43" rx="7" ry="5" fill="#E3C6A8"/><circle cx="34" cy="41" r="2.6" fill="#3A2413"/>' },
-    monkey:  { bg: '#A87345', face: '#CE9A66', ink: '#3A2210', d: '<circle cx="15" cy="34" r="8"/><circle cx="53" cy="34" r="8"/><circle cx="34" cy="34" r="20"/><ellipse cx="34" cy="40" rx="13" ry="11" fill="#E8C9A0"/><circle cx="28" cy="31" r="3" fill="#3A2210"/><circle cx="40" cy="31" r="3" fill="#3A2210"/><path d="M29 43 Q34 47 39 43" stroke="#3A2210" stroke-width="2.4" fill="none" stroke-linecap="round"/>' },
-    penguin: { bg: '#34608C', face: '#2B4C6F', ink: '#10263B', d: '<ellipse cx="34" cy="36" rx="21" ry="23"/><ellipse cx="34" cy="41" rx="13" ry="17" fill="#FFF"/><circle cx="28" cy="28" r="3" fill="#10263B"/><circle cx="40" cy="28" r="3" fill="#10263B"/><path d="M30 35 L34 40 L38 35 Z" fill="#E8A33D"/>' },
-    rabbit:  { bg: '#C97A96', face: '#F2C3D2', ink: '#43172A', d: '<ellipse cx="25" cy="16" rx="6" ry="14"/><ellipse cx="43" cy="16" rx="6" ry="14"/><circle cx="34" cy="40" r="19"/><circle cx="28" cy="37" r="3" fill="#43172A"/><circle cx="40" cy="37" r="3" fill="#43172A"/><path d="M31 46 Q34 49 37 46" stroke="#43172A" stroke-width="2.4" fill="none" stroke-linecap="round"/>' },
-  };
-  const AVATAR_IDS = Object.keys(AVATARS);
-
-  // ==================================================================
-  // AVATAR PACK (Sept 2026)
-  //
-  // The ten built-in faces above are hand-drawn SVG paths and read as a
-  // children's app -- wrong for an 18-35 audience. Rather than redrawing
-  // them blind, this loads real artwork from public/avatars/ when it is
-  // present, and keeps the built-ins as the fallback when it isn't.
-  //
-  // Install: drop image files into public/avatars/ and list them in
-  // public/avatars/manifest.json. No code change, and no SERVER change
-  // either -- avatar ids are now validated by shape rather than against a
-  // hardcoded list, so a new avatar is a pure file drop.
-  //
-  // Manifest shape:
-  //   { "avatars": [ { "id": "px01", "file": "px01.svg", "label": "Scout" } ],
-  //     "bots": { "fox": "px03", "owl": "px07" } }
-  //
-  // "bots" is optional and maps the built-in ids the SERVER assigns to bots
-  // onto pack art. The server can't know which files a client has, so it
-  // keeps sending built-in ids for bots; without this mapping bots would
-  // keep their cartoon animals while humans had pixel art, which would look
-  // like a bug rather than a mixed set.
-  // ==================================================================
-  const PACK = { byId: Object.create(null), order: [], bots: Object.create(null), loaded: false };
-
-  async function loadAvatarPack() {
-    if (!window.fetch) return;
-    let m = null;
-    try {
-      const res = await fetch('avatars/manifest.json', { cache: 'force-cache' });
-      if (!res.ok) return;                 // no pack installed -- built-ins stand
-      m = await res.json();
-    } catch (e) {
-      return;                               // offline, or malformed JSON
-    }
-    const list = m && Array.isArray(m.avatars) ? m.avatars : [];
-    list.forEach((a) => {
-      // Same id rule the server enforces. A manifest is authored by hand,
-      // so it WILL contain typos; anything that wouldn't survive the server
-      // is dropped here rather than being picked and then silently lost for
-      // everyone else at the table.
-      if (!a || typeof a.id !== 'string' || typeof a.file !== 'string') return;
-      const id = a.id.trim().toLowerCase();
-      if (!/^[a-z0-9][a-z0-9_-]{0,23}$/.test(id)) {
-        console.warn('[avatars] skipping unusable id:', a.id);
-        return;
-      }
-      if (PACK.byId[id]) return;            // first definition wins
-      PACK.byId[id] = { file: a.file, label: typeof a.label === 'string' ? a.label : '' };
-      PACK.order.push(id);
-    });
-    if (m && m.bots && typeof m.bots === 'object') {
-      Object.keys(m.bots).forEach((k) => {
-        const v = m.bots[k];
-        if (typeof v === 'string' && PACK.byId[v]) PACK.bots[k] = v;
-      });
-    }
-    if (!PACK.order.length) return;
-    PACK.loaded = true;
-    console.log('[avatars] pack active: ' + PACK.order.length + ' avatars'
-      + (Object.keys(PACK.bots).length ? ', bot mapping on' : ', no bot mapping'));
-    // Anyone who picked a robot before bot art was hidden from the picker
-    // still has that id stored, and would keep looking like a bot forever
-    // with no way to see why. Drop it back to initials so the next tap in
-    // the picker gives them a real choice.
-    try {
-      const botArt = new Set(Object.keys(PACK.bots).map((k) => PACK.bots[k]));
-      if (myAvatar && botArt.has(myAvatar)) {
-        myAvatar = null;
-        try { localStorage.removeItem('leastcount_avatar'); } catch (e) { /* session only */ }
-        if (myRoomCode) socket.emit('set_avatar', { roomCode: myRoomCode, avatar: null }, () => {});
-      }
-    } catch (e) { /* not worth failing the pack load over */ }
-
-    // Anything already on screen was drawn with built-ins; redraw it.
-    try {
-      renderAvatarPicker();
-      if (latestGame) renderOvalTable(latestGame);
-      if (latestRoom) renderLobby(latestRoom);
-    } catch (e) {
-      console.warn('[avatars] redraw after pack load failed:', e && e.message);
-    }
-  }
-
-  // The list the picker offers: pack art when installed, built-ins otherwise.
-  //
-  // BOT ARTWORK IS EXCLUDED. A pack ships robot faces for the bots, and if
-  // those appear in the picker a human can choose one and become visually
-  // indistinguishable from a bot at the table -- which breaks the one thing
-  // a seat has to tell you at a glance. Bots still render theirs; they are
-  // simply not offered.
-  //
-  // Worked out from the manifest's own "bots" mapping rather than a name
-  // prefix, so it stays correct whatever a pack calls its files.
-  function selectableAvatarIds() {
-    if (!PACK.loaded) return AVATAR_IDS;
-    const botArt = new Set(Object.keys(PACK.bots).map((k) => PACK.bots[k]));
-    const human = PACK.order.filter((id) => !botArt.has(id));
-    // If a pack maps EVERY avatar to a bot, offering nothing would leave the
-    // picker empty and look broken. Fall back to the full list in that case.
-    return human.length ? human : PACK.order;
-  }
-
-  // Up to two initials from a name. Pulled out of avatarEl so the img
-  // error path can reuse it rather than duplicating the parsing.
-  //
-  // Deliberately NO unicode property escapes. /[^\p{L}\p{N} ]/gu is a regex
-  // LITERAL, evaluated when this file is PARSED, not when the line runs --
-  // on an Android WebView older than Chrome 64 that means the whole of
-  // app.js fails to parse and the app is a white screen.
-  //
-  // Array.from() splits by code point rather than UTF-16 unit, so a name
-  // starting with an emoji or a non-BMP character yields that whole
-  // character instead of half a surrogate pair. Non-Latin scripts get their
-  // own initial, which is right for Telugu names.
-  function initialsFor(name) {
-    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
-    return parts.slice(0, 2)
-      .map((w) => Array.from(w)[0] || '')
-      .join('')
-      .toUpperCase() || '?';
-  }
-
-  // Renders one avatar at a given pixel size. Returns an element, never a
-  // string -- these end up next to user-supplied names, and keeping the
-  // whole seat built from nodes means no path where a name could be treated
-  // as markup.
-  function avatarEl(avatarId, name, playerId, size) {
-    size = size || 26;
-    const wrap = document.createElement('span');
-    wrap.className = 'avatar';
-    wrap.style.width = size + 'px';
-    wrap.style.height = size + 'px';
-
-    // 1. Pack artwork, if a pack is installed and knows this id. Bots are
-    //    sent built-in ids by the server, so they come through the bot
-    //    mapping rather than a direct hit.
-    const packId = (PACK.byId[avatarId] && avatarId) || PACK.bots[avatarId] || null;
-    if (packId) {
-      const img = document.createElement('img');
-      img.className = 'avatar-img';
-      img.alt = '';                 // decorative: the name is right beside it
-      img.decoding = 'async';
-      img.loading = 'lazy';
-      img.width = size;
-      img.height = size;
-      // A file listed in the manifest but missing from the folder would
-      // otherwise leave a broken-image glyph on the seat. Fall back to the
-      // initials treatment instead, which always renders.
-      img.onerror = () => {
-        img.remove();
-        wrap.classList.add('avatar-initials');
-        const h = chatAvatarHue(playerId || name || '');
-        wrap.style.background = `hsl(${h} 45% 42%)`;
-        wrap.textContent = initialsFor(name);
-        wrap.style.fontSize = Math.round(size * 0.42) + 'px';
-      };
-      // A manifest entry can be either a local filename (avatars/vx01.svg)
-      // or a full https URL. The URL form exists so a pack can be tried
-      // without downloading anything first -- see the note in the avatars
-      // README about moving to local files once you've settled on a set.
-      // http:// is deliberately NOT accepted: the app is served over https,
-      // and a mixed-content image is blocked by the browser anyway.
-      const f = PACK.byId[packId].file;
-      img.src = /^https:\/\//i.test(f) ? f : 'avatars/' + f;
-      wrap.appendChild(img);
-      return wrap;
-    }
-
-    // hasOwnProperty, not a bare lookup. AVATARS[avatarId] also matches keys
-    // inherited from Object.prototype, so an avatarId of "constructor" returned
-    // a truthy value whose .bg/.face/.d were all undefined -- rendering the
-    // literal text "undefined" into the seat. Not an injection (the values are
-    // developer-authored constants, never attacker-controlled), but the
-    // server's avatar regex does permit "constructor", so it was reachable.
-    const a = Object.prototype.hasOwnProperty.call(AVATARS, avatarId) ? AVATARS[avatarId] : null;
-    if (a) {
-      wrap.style.background = a.bg;
-      // viewBox is fixed at 68x68 for every character, so they all sit at
-      // the same optical size no matter which one a player picked.
-      wrap.innerHTML = `<svg viewBox="0 0 68 68" aria-hidden="true"><g fill="${a.face}">${a.d}</g></svg>`;
-      return wrap;
-    }
-
-    // No avatar chosen (or an id this build doesn't know): initials on the
-    // colour we already derive for chat, so the seat still reads as a person
-    // and the whole feature degrades instead of breaking.
-    const hue = chatAvatarHue(playerId || name || '');
-    wrap.style.background = `hsl(${hue} 45% 42%)`;
-    wrap.classList.add('avatar-initials');
-    // Deliberately NO unicode property escapes here. /[^\p{L}\p{N} ]/gu is a
-    // regex LITERAL, so it's evaluated when this file is parsed, not when
-    // this line runs -- on an Android WebView older than Chrome 64 that
-    // means the whole of app.js fails to parse and the app is a white
-    // screen. Cleaning up initials is not worth that risk.
-    //
-    // Array.from() splits by code point rather than UTF-16 unit, so a name
-    // starting with an emoji or a non-BMP character yields that whole
-    // character instead of half a surrogate pair. Non-Latin scripts get
-    // their own initial, which is right for Telugu names.
-    wrap.textContent = initialsFor(name);
-    wrap.style.fontSize = Math.round(size * 0.42) + 'px';
-    return wrap;
-  }
-
-  let myAvatar = localStorage.getItem('leastcount_avatar') || null;
-
-  // Stored in localStorage rather than on the Firestore user doc, which is
-  // where I first meant to put it. Firestore would only buy something if the
-  // identity outlived the device -- and it doesn't: sign-in is anonymous, so
-  // the uid is regenerated on reinstall anyway (the same limit that resets
-  // stats and the avatar together). Until Google Sign-In comes off its flag,
-  // a server round trip per read would cost latency and quota to deliver
-  // exactly what localStorage already delivers.
-  // Renders into EVERY [data-avatar-picker] on the page, so the profile
-  // menu's copy and the one in the table dialog stay in step without either
-  // needing to know the other exists.
-  function renderAvatarPicker() {
-    const boxes = document.querySelectorAll('[data-avatar-picker]');
-    boxes.forEach((box) => {
-      box.innerHTML = '';
-      // Pack art when a pack is installed, built-ins otherwise.
-      selectableAvatarIds().forEach((id) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'avatar-choice' + (id === myAvatar ? ' selected' : '');
-        // A pack can supply a human label; the raw id is a poor screen
-        // reader announcement ("px07").
-        btn.setAttribute('aria-label', (PACK.byId[id] && PACK.byId[id].label) || id);
-        btn.setAttribute('aria-pressed', id === myAvatar ? 'true' : 'false');
-        btn.appendChild(avatarEl(id, '', '', 40));
-        btn.onclick = () => {
-          // Tapping the one you already have clears it, back to initials --
-          // otherwise the first pick is permanent, which is a strange thing
-          // to discover only after you have made it.
-          myAvatar = (myAvatar === id) ? null : id;
-          if (myAvatar) localStorage.setItem('leastcount_avatar', myAvatar);
-          else localStorage.removeItem('leastcount_avatar');
-          renderAvatarPicker();
-          // Change the face at the table there and then -- otherwise the
-          // picker appears to do nothing until the next game.
-          if (myRoomCode) {
-            socket.emit('set_avatar', { roomCode: myRoomCode, avatar: myAvatar }, () => {});
-          }
-        };
-        box.appendChild(btn);
-      });
-    });
-  }
-  renderAvatarPicker();
-
-  // Kick off the pack load. Deliberately NOT awaited and never allowed to
-  // reject: the app is fully usable on the built-in faces, so a missing or
-  // broken pack must cost nothing but a single 404. When it does land it
-  // redraws the picker and the table itself.
-  try {
-    const packLoad = loadAvatarPack();
-    if (packLoad && packLoad.catch) {
-      packLoad.catch((e) => console.warn('[avatars] pack load failed:', e && e.message));
-    }
-  } catch (e) {
-    console.warn('[avatars] pack load threw:', e && e.message);
-  }
 
   function chatAvatarHue(seed) {
     let h = 0;
