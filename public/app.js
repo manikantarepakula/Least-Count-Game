@@ -2079,6 +2079,7 @@
     // one chance.
     if (id === 'screen-landing') {
       try { maybeOfferTutorial(); } catch (e) { /* never block navigation */ }
+      try { maybeAskNameAfterFirstGame(); } catch (e) { /* never block navigation */ }
     }
     // The group chat button belongs to the group screen only. Handled here
     // rather than in each navigation path because there are several ways off
@@ -3892,7 +3893,10 @@
     const nameInput = document.getElementById('input-invite-name');
     const name = nameInput.value.trim();
     if (!name) {
-      promptForName();
+      // NOT promptForName(): this card carries its own name box, right here on
+      // screen. Opening the profile modal over it would hide the very field we
+      // are asking them to fill in.
+      setLandingError('Add your name so the others know who joined');
       try { nameInput.focus(); } catch (e) {}
       return;
     }
@@ -4712,19 +4716,87 @@
     }
   }
 
-  // A missing name is not really an error -- it is a question nobody has been
-  // asked yet. The field lives in the profile modal behind an icon, so saying
-  // "Enter your name" next to a field that is not on screen left people
-  // tapping a button that appeared to do nothing. Open the modal and put the
-  // cursor in the box instead; the toast still fires, as the explanation.
+  // ------------------------------------------------------------------
+  // Asking for a name (Oct 2026)
+  //
+  // A name is no longer the price of entry. The tutorial and solo games run
+  // without one (your seat just reads "You"), and the name is asked for at the
+  // two moments it actually matters:
+  //   - once, gently, when you come back from your first game -- by then you
+  //     have seen what the app is and a name is worth giving it;
+  //   - before any table other people can see (online, a room code, a group),
+  //     because there a name is how the others know who you are.
+  //
+  // In the second case the action you tapped is RESUMED once the name is in.
+  // Before, it was: tap Play, get told off, find the field, type, close, tap
+  // Play again -- and the second tap is exactly where people give up.
+  // ------------------------------------------------------------------
+  // `var`, not `let`, on purpose. showScreen('screen-landing') can run during
+  // startup -- a failed session restore sends you back to landing -- before
+  // this line has executed, and it calls maybeAskNameAfterFirstGame(). A `let`
+  // read there throws a temporal-dead-zone error that the surrounding
+  // try/catch swallows, so the ask would silently never happen. (Exactly how
+  // the card backdrop went missing for weeks.) A `var` is merely undefined
+  // that early, and the code below treats undefined as "nothing pending".
+  var pendingAfterName = null;
+  var lastButtonTap = null;
+  // Capture phase, so it is recorded before the button's own handler runs and
+  // calls promptForName() from inside it.
+  document.addEventListener('click', (e) => {
+    const b = e.target && e.target.closest && e.target.closest('button');
+    if (b) lastButtonTap = { el: b, at: Date.now() };
+  }, true);
+
   function promptForName(msg) {
-    setLandingError(msg || 'Enter your name');
+    const hint = document.getElementById('name-ask-hint');
+    if (hint) {
+      hint.textContent = msg || 'Pick a name first \u2014 the other players will see it.';
+      hint.classList.remove('hidden');
+    }
+    // Resume whatever was tapped -- but only if it really was a tap just now.
+    // Group chat can be sent with the Enter key, and resuming a stale button
+    // from minutes ago would fire the wrong action entirely.
+    const t = lastButtonTap;
+    pendingAfterName = (t && t.el && Date.now() - t.at < 1500 && !msg) ? t.el : null;
+    // Looked up directly rather than through openProfileMenu(): that reads a
+    // `const` declared further down this file, which is still in its dead zone
+    // if this runs during startup. Same element, no ordering trap.
+    const panel = document.getElementById('profile-menu-panel');
+    if (!panel) return false;
+    panel.classList.remove('hidden');
+    const el = document.getElementById('input-name');
+    if (el) { try { el.focus(); el.select && el.select(); } catch (e) { /* not focusable yet */ } }
+    return true;
+  }
+
+  // Called when the profile closes. Clears the prompt either way, and if the
+  // name is now set, carries on with what they were trying to do.
+  function finishNamePrompt() {
+    const hint = document.getElementById('name-ask-hint');
+    if (hint) { hint.textContent = ''; hint.classList.add('hidden'); }
+    const resume = pendingAfterName;
+    pendingAfterName = null;
+    if (resume && getPlayerName()) setTimeout(() => resume.click(), 0);
+  }
+
+  // The once-only ask after a first game. Driven from showScreen, like the
+  // tutorial offer, so it fires on whichever path brings them back here.
+  function maybeAskNameAfterFirstGame() {
     try {
-      openProfileMenu();
-      const el = document.getElementById('input-name');
-      if (el) { el.focus(); el.select && el.select(); }
-    } catch (e) { /* the toast alone still tells them */ }
-    return false;
+      if (Tutorial.isActive()) return;
+      if (localStorage.getItem('leastcount_has_played') !== '1') return;   // no game yet
+      if (localStorage.getItem('leastcount_name_asked') === '1') return;           // asked already
+      if (getPlayerName()) return;                                         // has one
+      const offer = document.getElementById('tutorial-offer');
+      if (offer && !offer.classList.contains('hidden')) return;           // one sheet at a time
+      const done = document.getElementById('tutorial-finished');
+      if (done && !done.classList.contains('hidden')) return;
+      // Marked as asked only once the sheet is actually on screen, so a
+      // failure to open it cannot use up the one chance.
+      if (promptForName('Nice game! What should we call you?')) {
+        localStorage.setItem('leastcount_name_asked', '1');
+      }
+    } catch (e) { /* storage blocked: just don't ask */ }
   }
 
   // ---------------- profile modal (sign-in + name) ----------------
@@ -4744,6 +4816,7 @@
   }
   function closeProfileMenu() {
     if (profileMenuPanel) profileMenuPanel.classList.add('hidden');
+    finishNamePrompt();
   }
   if (btnProfileMenu && profileMenuPanel) {
     btnProfileMenu.onclick = (e) => {
@@ -4777,6 +4850,11 @@
   if (inputNameEl) {
     inputNameEl.addEventListener('input', () => {
       if (inputNameEl.value.trim()) setLandingError('');
+    });
+    // The keyboard's Done key closes the sheet, which saves the name and
+    // resumes whatever they had tapped -- no hunting for the Close button.
+    inputNameEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && inputNameEl.value.trim()) { e.preventDefault(); closeProfileMenu(); }
     });
   }
 
@@ -4906,8 +4984,12 @@
   // also what the "play against bots" nudge at the end of the tutorial
   // starts, so a learner's first real game is a completely normal one.
   async function startSoloGame() {
-    const name = getPlayerName();
-    if (!name) return promptForName();
+    // No name needed: nobody else is at a bots table, so a name only labels
+    // your own seat. "You" does that job. The name is asked for once they come
+    // back from this game (maybeAskNameAfterFirstGame), or the first time they
+    // head somewhere other people will see it. Not saved -- getPlayerName()
+    // only stores what was actually typed.
+    const name = getPlayerName() || 'You';
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
     socket.emit('create_solo_room', { name, botCount, botDifficulty: botDifficulty(), firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
