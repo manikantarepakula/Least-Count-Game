@@ -48,8 +48,8 @@
   //     will be told they aren't eligible -- unavoidable until the tester
   //     list is a public Google Group, or production access is granted.
   //
-  //     After production access: change INSTALL_URL to the /store/apps/details
-  //     link below and it converts everyone. Nothing else needs to move.
+  //     Production access granted Oct 2026: INSTALL_URL now points at the
+  //     public /store/apps/details listing, so it converts everyone.
   // --------------------------------------------------------------------
   const FEATURES = {
     googleSignIn: false,
@@ -633,6 +633,9 @@
     }
 
     function finish(completed) {
+      // Completed vs abandoned is the whole question for a first-run tutorial:
+      // a high drop-off says it is too long, before anyone has to say so.
+      logAnalytics(completed ? 'tutorial_completed' : 'tutorial_abandoned');
       if (!active) return;
       active = false;
       clearTarget();
@@ -2983,6 +2986,9 @@
   };
 
   document.getElementById('btn-group-copy').onclick = async () => {
+    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
+    // stays comparable); every other route lands here, tagged by method.
+    logAnalytics('invite_shared', { method: 'copy', where: 'group' });
     if (!groupMenuCode) return;
     closeGroupMenu();
     try {
@@ -3093,7 +3099,7 @@
         showScreen('screen-waiting-host');
         return;
       }
-      logAnalytics('room_joined');
+      logAnalytics('room_joined', { via_invite: !!inviteArrival, kind: inviteArrival || 'code' });
       saveSession(res.roomCode, res.playerId, res.sessionToken);
       loadChatHistory(res.chatHistory);
       showChatFab();
@@ -3815,6 +3821,11 @@
     if (blocks) blocks.classList.remove('hidden');
   }
 
+  // Set when this visit began from an invite link, so the join that follows
+  // can be credited to the invite. `var` because joinRoomByKey reads it and
+  // nothing here may sit in a temporal dead zone at startup.
+  var inviteArrival = null;
+
   (function handleInviteLink() {
     const params = new URLSearchParams(window.location.search);
     const groupCode = (params.get('g') || '').trim().toUpperCase();
@@ -3838,6 +3849,14 @@
     }
 
     if (groupCode || roomFromLink) {
+      // THE MISSING MIDDLE OF THE FUNNEL. Sends were logged; opens were not, so
+      // there was no way to tell whether a single invite ever brought anyone
+      // in. is_new_player separates "a friend came back" from "a stranger
+      // arrived" -- the second is the one that actually grows the user base.
+      inviteArrival = groupCode ? 'group' : 'room';
+      let isNew = true;
+      try { isNew = !hasPlayedBefore(); } catch (e) { /* unknown -> count as new */ }
+      logAnalytics('invite_link_opened', { kind: inviteArrival, is_new_player: isNew });
       // Strip the param so it can't linger in the address bar or get shared
       // onward by accident (e.g. a browser "share this page").
       const url = new URL(window.location.href);
@@ -4121,6 +4140,9 @@
   };
 
   document.getElementById('btn-game-invite-copy').onclick = async () => {
+    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
+    // stays comparable); every other route lands here, tagged by method.
+    logAnalytics('invite_shared', { method: 'copy', where: 'game' });
     if (!myRoomCode) return;
     try {
       await navigator.clipboard.writeText(myRoomCode);
@@ -4133,6 +4155,9 @@
   };
 
   document.getElementById('btn-game-invite-share').onclick = async () => {
+    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
+    // stays comparable); every other route lands here, tagged by method.
+    logAnalytics('invite_shared', { method: 'share', where: 'game' });
     if (!myRoomCode) return;
     const link = roomInviteLink();
     const shareText = inviteShareText();
@@ -4153,6 +4178,9 @@
   };
 
   document.getElementById('btn-copy-roomcode').onclick = async () => {
+    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
+    // stays comparable); every other route lands here, tagged by method.
+    logAnalytics('invite_shared', { method: 'copy', where: 'lobby' });
     if (!myRoomCode) return;
     try {
       await navigator.clipboard.writeText(myRoomCode);
@@ -4162,6 +4190,9 @@
     }
   };
   document.getElementById('btn-share-room').onclick = async () => {
+    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
+    // stays comparable); every other route lands here, tagged by method.
+    logAnalytics('invite_shared', { method: 'share', where: 'lobby' });
     if (!myRoomCode) return;
     const link = roomInviteLink();
     const shareText = inviteShareText();
@@ -4236,7 +4267,7 @@
   socket.on('join_admitted', ({ roomCode, playerId, sessionToken, chatHistory }) => {
     pendingJoinRoomCode = null;
     pendingJoinPlayerId = null;
-    logAnalytics('room_joined_midgame');
+    logAnalytics('room_joined_midgame', { via_invite: !!inviteArrival, kind: inviteArrival || 'code' });
     saveSession(roomCode, playerId, sessionToken);
     // Every other join path (create_room/join_room/queue_matched) loads chat
     // history and shows the chat FAB -- this path was missing both, which is
@@ -4773,6 +4804,15 @@
   // name is now set, carries on with what they were trying to do.
   function finishNamePrompt() {
     const hint = document.getElementById('name-ask-hint');
+    // Measures the "ask after the first game" decision directly: of the people
+    // asked, how many answered? Only logged when a prompt was actually showing.
+    if (hint && !hint.classList.contains('hidden')) {
+      const firstGame = /Nice game/.test(hint.textContent || '');
+      logAnalytics('name_prompt_closed', {
+        context: firstGame ? 'after_first_game' : 'before_table',
+        gave_name: !!getPlayerName(),
+      });
+    }
     if (hint) { hint.textContent = ''; hint.classList.add('hidden'); }
     const resume = pendingAfterName;
     pendingAfterName = null;
@@ -4962,6 +5002,7 @@
       // behind an unlabelled icon. That is the worst possible place to put a
       // wall: before anyone has seen a single card.
       box.classList.add('hidden');
+      logAnalytics('tutorial_started');
       Tutorial.start();
     };
     if (no) no.onclick = dismiss;
@@ -7503,7 +7544,12 @@
   // tester list, so this link converts nobody unless that list is a Google
   // Group anyone can join. Swap to the /store/apps/details url once production
   // access is granted -- that is the only change needed here.
-  const INSTALL_URL = 'https://play.google.com/apps/testing/com.manikanta.leastcount';
+  // Production access granted Oct 2026, so this is now the public listing.
+  // DEPLOY TIMING: this URL only resolves once a production release is
+  // actually published. Before that it 404s ("requested URL was not found"),
+  // which is worse than the old testing link -- so ship this change together
+  // with, or after, the first production rollout, never before it.
+  const INSTALL_URL = 'https://play.google.com/store/apps/details?id=com.manikanta.leastcount';
   const INSTALL_CHOICE_KEY = 'leastcount_install_prompt';
   const INSTALL_SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
   const INSTALL_DONE = 'installed';
