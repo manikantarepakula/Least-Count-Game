@@ -71,7 +71,6 @@ app.use(compression());
 //   cdn.jsdelivr.net                  the RevenueCat SDK (see the note in
 //                                     revenuecat-init.js -- bundling this
 //                                     locally would let it come off this list)
-//   api.dicebear.com                  avatar art, until it is served locally
 //   media*.giphy.com                  chat GIFs (img only -- never a script)
 //   *.google*/gstatic                 Firebase, Analytics and AdMob
 //
@@ -88,14 +87,14 @@ const CSP = [
   "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://*.googleapis.com https://*.gstatic.com https://*.google.com https://www.googletagmanager.com https://pagead2.googlesyndication.com https://googleads.g.doubleclick.net",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
-  "img-src 'self' data: blob: https://api.dicebear.com https://*.giphy.com https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.google-analytics.com https://*.doubleclick.net",
+  "img-src 'self' data: blob: https://*.giphy.com https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.google-analytics.com https://*.doubleclick.net",
   // wss: is required -- Socket.IO upgrades to a WebSocket, and omitting this
   // breaks every multiplayer game rather than failing quietly.
   // Analytics beacons go to google-analytics.com / analytics.google.com, neither
   // of which matches *.google.com (different registrable domain), so both are
   // listed. Without these the script loads but every event is silently dropped
   // -- worse than the outright block above, because nothing errors.
-  "connect-src 'self' wss: https://*.firebaseapp.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://*.googleapis.com https://*.google.com https://*.gstatic.com https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://api.dicebear.com https://api.giphy.com",
+  "connect-src 'self' wss: https://*.firebaseapp.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://*.googleapis.com https://*.google.com https://*.gstatic.com https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://api.giphy.com",
   // firebaseapp.com is REQUIRED, not optional. Firebase Auth runs its session
   // handshake inside a hidden iframe at
   //   https://<project>.firebaseapp.com/__/auth/iframe
@@ -321,63 +320,6 @@ function cleanPlatform(p) {
   return (p === 'android-app' || p === 'web') ? p : 'unknown';
 }
 
-// --------------------------------------------------------------------------
-// Avatars (Sept 2026).
-//
-// The server stores and relays an avatar ID and nothing else -- the artwork
-// is inline SVG that lives in the client. That's deliberate: an ID can be
-// validated against a fixed list, whereas a URL or any markup coming from a
-// client would be something we'd have to sanitise on every path it reached.
-// An unknown ID simply becomes null and the seat falls back to initials.
-//
-// The list must stay in step with AVATARS in public/app.js. It's short and
-// changes rarely, so a shared constant isn't worth a build step for it.
-// --------------------------------------------------------------------------
-// The built-in set. Still here as the fallback for clients with no avatar
-// pack installed, and as the pool bots draw from when the client hasn't
-// told us about any others.
-const AVATAR_IDS = ['fox', 'owl', 'cat', 'panda', 'tiger', 'frog', 'bear', 'monkey', 'penguin', 'rabbit'];
-
-// --------------------------------------------------------------------------
-// Avatar ids are VALIDATED BY SHAPE, not by membership of a list.
-//
-// This used to be `AVATAR_IDS.includes(a) ? a : null`, which meant the
-// server silently discarded any id it didn't already know. Adding an avatar
-// was therefore a two-sided change -- drop the artwork in, AND edit and
-// redeploy the server -- and if you forgot the second half, players would
-// pick a new avatar, see it apply locally, and find it gone for everyone
-// else. A confusing failure with no error anywhere.
-//
-// The id is never interpreted here: it is stored, broadcast, and used by
-// the client to look up a file. So the only things the server actually
-// needs to guarantee are that it is short, and that it cannot be used to
-// escape a path or inject markup on the way back out. A conservative
-// character class does both, and lets a new avatar be a pure file drop.
-// --------------------------------------------------------------------------
-const AVATAR_ID_RE = /^[a-z0-9][a-z0-9_-]{0,23}$/;
-function cleanAvatar(a) {
-  if (typeof a !== 'string') return null;
-  const v = a.trim().toLowerCase();
-  return AVATAR_ID_RE.test(v) ? v : null;
-}
-// Bots get a stable face too, spread across the set so a solo table doesn't
-// show four of the same one. Keyed off the bot's number, not randomness, so
-// the same bot looks the same for the whole game.
-//
-// Bots stay on the built-in ids: the server has no idea which files a given
-// client has, and a bot pointing at a missing avatar would render as a gap.
-// The client maps these onto pack art when a pack is installed.
-// Creates a bot and seats it. ONE definition, because there were three
-// separate inline versions of this and they had already drifted: two gave the
-// bot an avatar via botAvatar(), the third did not -- so bots in a
-// queue-filled game rendered as faceless grey chips while bots in a solo game
-// had faces. Same bug shape as the duplicated .seat-name rule and the four
-// copies of button.primary: the moment one place is fixed, the others quietly
-// keep the old behaviour.
-//
-// Numbering walks past names already taken rather than counting seats, so
-// removing "Bot 2" and adding another gives you a fresh number instead of a
-// second "Bot 2" -- the host is free to add and remove in any order.
 // ===========================================================================
 // Bot characters (Oct 2026)
 // ===========================================================================
@@ -681,7 +623,6 @@ function addBotToRoom(room) {
     socketId: null,
     connected: true,
     isBot: true,
-    avatar: botAvatar(n),
     archetype: archetypeId,
     trait: arch.trait,
   });
@@ -689,9 +630,7 @@ function addBotToRoom(room) {
   return botId;
 }
 
-function botAvatar(i) {
-  return AVATAR_IDS[(i * 3) % AVATAR_IDS.length];
-}
+
 
 // --------------------------------------------------------------------------
 // Tester-activity report -- built for the Google Play closed-testing review,
@@ -2226,13 +2165,6 @@ function publicRoomInfo(room) {
       // The one-liner that carries the character, since the name is generic.
       // Null for humans.
       trait: room.players.get(pid).trait || null,
-      // Chosen avatar (Sept 2026). Travels with every room broadcast so
-      // other players' seats can render a face rather than a grey chip.
-      // A plain id, never a URL or markup -- the art lives in the client as
-      // inline SVG, so this can never become a way to inject anything.
-      // Bots get a deterministic one assigned at creation, so a bot table
-      // looks as populated as a human one.
-      avatar: room.players.get(pid).avatar || null,
     })),
   };
 }
@@ -3350,7 +3282,7 @@ function handleTurnTimeout(room) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('create_room', async ({ name, firebaseIdToken, platform, avatar }, ack) => {
+  socket.on('create_room', async ({ name, firebaseIdToken, platform }, ack) => {
     try {
       if (isRateLimited(socket, 'create_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       if (isIpRateLimited(socket, 'create_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
@@ -3378,7 +3310,7 @@ io.on('connection', (socket) => {
         botDifficulty: DEFAULT_BOT_DIFFICULTY,
         allHumansDisconnectedAt: null, // set once every human is gone -- see the cleanup sweep below
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
       room.order.push(playerId);
       rememberPlayerUid(room, verifiedUid, playerId);
       rooms.set(code, room);
@@ -3396,7 +3328,7 @@ io.on('connection', (socket) => {
   // countdown -> deal -> reveal sequence, exactly like a real multiplayer
   // game starting -- bots are just regular players to the game engine, the
   // only special handling is how quickly they act (see scheduleTurnTimer).
-  socket.on('create_solo_room', async ({ name, botCount, botDifficulty, firebaseIdToken, platform, avatar }, ack) => {
+  socket.on('create_solo_room', async ({ name, botCount, botDifficulty, firebaseIdToken, platform }, ack) => {
     try {
       if (isRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       if (isIpRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
@@ -3431,7 +3363,7 @@ io.on('connection', (socket) => {
           // from the default tier and silently ignore the choice.
           botDifficulty: soloDifficulty,
       };
-      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
       room.order.push(playerId);
       for (let i = 1; i <= n; i++) addBotToRoom(room);
       rooms.set(code, room);
@@ -3522,9 +3454,8 @@ io.on('connection', (socket) => {
         const s = io.sockets.sockets.get(e.socketId);
         if (s) s.join(code);
       }
-      // Was an inline copy that forgot the avatar, so queue-filled bots had no
-      // face while solo-game bots did -- the same fact written in two places,
-      // drifting. Uses the shared factory now.
+      // Was an inline copy of the bot factory that had drifted from the other
+      // two. Uses the shared factory now.
       while (room.order.length < n) addBotToRoom(room);
       rooms.set(code, room);
       clearAllRejoinRequests(room);
@@ -3544,7 +3475,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('join_room', async ({ roomCode, name, firebaseIdToken, platform, avatar }, ack) => {
+  socket.on('join_room', async ({ roomCode, name, firebaseIdToken, platform }, ack) => {
     try {
       if (isRateLimited(socket, 'join_room')) throw new Error('Too many attempts too quickly. Please wait a moment.');
       // Two kinds of key arrive here (see the groups section above): a
@@ -3632,7 +3563,7 @@ io.on('connection', (socket) => {
       // straight into the lobby, no approval needed.
       if (room.phase === 'lobby') {
         const playerId = makePlayerId();
-        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
+        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
         room.order.push(playerId);
         rememberPlayerUid(room, verifiedUid, playerId);
         // A freshly-spun-up group room has no host yet (createRoomForGroup
@@ -3660,7 +3591,7 @@ io.on('connection', (socket) => {
       // reached a stranger.
       if (room.groupCode) {
         const playerId = makePlayerId();
-        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform), avatar: cleanAvatar(avatar) });
+        room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
         room.order.push(playerId);
         rememberPlayerUid(room, verifiedUid, playerId);
         repairHost(room);
@@ -4745,26 +4676,6 @@ io.on('connection', (socket) => {
   // Change your face without leaving the table. Same shape and the same
   // ownership rule as set_name below: the seat is taken from THIS socket's
   // own index entry, so there is no playerId in the payload to forge.
-  socket.on('set_avatar', ({ roomCode, avatar }, ack) => {
-    try {
-      if (isRateLimited(socket, 'set_name')) throw new Error('Too many changes too quickly. Please wait a moment.');
-      const room = rooms.get(roomCode);
-      if (!room) throw new Error('Room not found.');
-      const entry = socketIndex.get(socket.id);
-      if (!entry) throw new Error('Not in a room.');
-      const p = room.players.get(entry.playerId);
-      if (!p) throw new Error('Not seated.');
-      // cleanAvatar turns anything unrecognised into null rather than
-      // throwing -- an old client sending a retired id should quietly fall
-      // back to initials, not fail to change its name.
-      p.avatar = cleanAvatar(avatar);
-      broadcastRoom(room);
-      ack && ack({ ok: true, avatar: p.avatar });
-    } catch (e) {
-      ack && ack({ ok: false, error: e.message });
-    }
-  });
-
   socket.on('set_name', ({ roomCode, name }, ack) => {
     try {
       if (isRateLimited(socket, 'set_name')) throw new Error('Too many changes too quickly. Please wait a moment.');
