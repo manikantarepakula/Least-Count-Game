@@ -3668,3 +3668,12 @@ body.game-active .bg-scrim { display: none; }
   opacity: 0.55; pointer-events: none;
 }
 #btn-next-round.waiting-seat { cursor: progress; }
+
+/* The line above the name field when the app is asking for one -- after the
+   first game, or before a table others can see. Friendly, not an error. */
+.name-ask-hint {
+  margin: 2px 0 8px; padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(242,193,78,0.12); border: 1px solid rgba(242,193,78,0.35);
+  color: var(--gold-bright); font-size: 13px; font-weight: 600; line-height: 1.35;
+}
