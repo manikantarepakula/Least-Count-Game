@@ -3059,7 +3059,7 @@
   async function joinRoomByKey(key) {
     const name = getPlayerName();
     const roomCode = (key || '').trim();
-    if (!name) return setLandingError('Enter your name');
+    if (!name) return promptForName();
     if (!roomCode) return setLandingError('Enter room code');
     const firebaseIdToken = await currentFirebaseIdToken();
     socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
@@ -3513,7 +3513,7 @@
 
   document.getElementById('btn-group-bell').onclick = async () => {
     if (!groupScreenCode) return;
-    if (!getPlayerName()) return setLandingError('Enter your name');
+    if (!getPlayerName()) return promptForName();
     const firebaseIdToken = await currentFirebaseIdToken();
     socket.emit('ring_bell', {
       code: groupScreenCode,
@@ -3537,7 +3537,7 @@
   document.getElementById('btn-group-play').onclick = async () => {
     if (!groupScreenCode) return;
     if (groupPlayMode !== 'start') { joinRoomByKey(groupScreenCode); return; }
-    if (!getPlayerName()) return setLandingError('Enter your name');
+    if (!getPlayerName()) return promptForName();
     // Starting is a SERVER action, not a local navigation. The old code just
     // called joinRoomByKey here, which walked the host into an empty room on
     // their own and left everyone else behind with no way in.
@@ -3713,7 +3713,7 @@
     const input = document.getElementById('input-group-chat');
     const text = (input.value || '').trim();
     if (!text || !groupScreenCode) return;
-    if (!getPlayerName()) return setLandingError('Enter your name');
+    if (!getPlayerName()) return promptForName();
     // Cleared immediately rather than in the ack: a message that sits in the
     // box until the server answers feels broken on a slow connection.
     input.value = '';
@@ -3892,7 +3892,7 @@
     const nameInput = document.getElementById('input-invite-name');
     const name = nameInput.value.trim();
     if (!name) {
-      setLandingError('Enter your name');
+      promptForName();
       try { nameInput.focus(); } catch (e) {}
       return;
     }
@@ -3909,7 +3909,7 @@
     const nameInput = document.getElementById('input-group-name');
     const groupName = nameInput.value.trim();
     if (!groupName) return setLandingError('Name your group first');
-    if (!getPlayerName()) return setLandingError('Enter your name');
+    if (!getPlayerName()) return promptForName();
     const btn = document.getElementById('btn-create-group');
     btn.disabled = true;
     const firebaseIdToken = await currentFirebaseIdToken();
@@ -3958,7 +3958,7 @@
 
   document.getElementById('btn-create').onclick = async () => {
     const name = getPlayerName();
-    if (!name) return setLandingError('Enter your name');
+    if (!name) return promptForName();
     const firebaseIdToken = await currentFirebaseIdToken();
     socket.emit('create_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
@@ -4712,6 +4712,21 @@
     }
   }
 
+  // A missing name is not really an error -- it is a question nobody has been
+  // asked yet. The field lives in the profile modal behind an icon, so saying
+  // "Enter your name" next to a field that is not on screen left people
+  // tapping a button that appeared to do nothing. Open the modal and put the
+  // cursor in the box instead; the toast still fires, as the explanation.
+  function promptForName(msg) {
+    setLandingError(msg || 'Enter your name');
+    try {
+      openProfileMenu();
+      const el = document.getElementById('input-name');
+      if (el) { el.focus(); el.select && el.select(); }
+    } catch (e) { /* the toast alone still tells them */ }
+    return false;
+  }
+
   // ---------------- profile modal (sign-in + name) ----------------
   // Guarded with existence checks (unlike a plain .onclick= on a possibly-
   // missing element) -- if index.html and app.js ever get out of sync during
@@ -4862,8 +4877,12 @@
     const yes = document.getElementById('btn-tutorial-yes');
     const no = document.getElementById('btn-tutorial-no');
     if (yes) yes.onclick = () => {
-      const name = getPlayerName();
-      if (!name) return setLandingError('Enter your name first');
+      // No name needed. The tutorial runs entirely in this tab -- no room, no
+      // socket, no server -- and already labels your seat 'You' when there is
+      // no name set. Requiring one here meant a brand-new player's VERY FIRST
+      // tap was rejected, and the field to fix it is inside the profile modal
+      // behind an unlabelled icon. That is the worst possible place to put a
+      // wall: before anyone has seen a single card.
       box.classList.add('hidden');
       Tutorial.start();
     };
@@ -4888,7 +4907,7 @@
   // starts, so a learner's first real game is a completely normal one.
   async function startSoloGame() {
     const name = getPlayerName();
-    if (!name) return setLandingError('Enter your name');
+    if (!name) return promptForName();
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
     socket.emit('create_solo_room', { name, botCount, botDifficulty: botDifficulty(), firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
@@ -4974,7 +4993,7 @@
 
   document.getElementById('btn-play-online').onclick = async () => {
     const name = getPlayerName();
-    if (!name) return setLandingError('Enter your name');
+    if (!name) return promptForName();
     const playerCount = Number(document.getElementById('input-online-playercount').value) || 3;
     const firebaseIdToken = await currentFirebaseIdToken();
     socket.emit('queue_join', { playerCount, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
