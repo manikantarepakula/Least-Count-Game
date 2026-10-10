@@ -285,8 +285,18 @@ class LeastCountGame {
   canRejoin(playerId) {
     if (this.gameOver) return false;
     if (!this.roundOver) return false;              // between rounds only
-    if (!this.eliminated.has(playerId)) return false;
-    if (this.quit.has(playerId)) return false;      // walking out is not elimination
+    if (!this.playerIds.includes(playerId)) return false;
+    // Out of the game for EITHER reason now (Oct 2026). This used to require
+    // elimination and refuse anyone who had walked out, which meant a player
+    // who was eliminated, left the room, and came back could never return --
+    // reported from a real game, where leaving looked like the obvious thing
+    // to try after the rejoin itself had failed.
+    //
+    // Walking back in is not free: it still costs the one rejoin per game, it
+    // still needs the host to approve it, and rejoinScoreFor() below makes
+    // sure leaving can never improve your position.
+    const isOut = this.eliminated.has(playerId) || this.quit.has(playerId);
+    if (!isOut) return false;
     if (this.rejoinsUsed.has(playerId)) return false;
     return true;
   }
@@ -303,8 +313,23 @@ class LeastCountGame {
    */
   rejoinScoreFor(playerId) {
     const others = this.activePlayers().filter((id) => id !== playerId);
-    if (!others.length) return 0;
-    return Math.max(0, ...others.map((id) => this.scores[id] || 0));
+    const highest = others.length
+      ? Math.max(0, ...others.map((id) => this.scores[id] || 0))
+      : 0;
+    // THE DODGE, and why this is not simply `highest`.
+    //
+    // Someone ELIMINATED is on a score above the limit, so coming back level
+    // with the leader is a straightforward second chance -- there is nothing
+    // to gain by engineering it.
+    //
+    // Someone who WALKED OUT while still playing is different. Sitting on 45
+    // with the leader on 20, "leave and rejoin" would hand them a 25-point
+    // discount for quitting. So for a player who left under their own steam,
+    // the score they come back on is never better than the one they left on.
+    // Leaving can cost you; it can never pay.
+    const walkedOut = this.quit.has(playerId) && !this.eliminated.has(playerId);
+    if (walkedOut) return Math.max(highest, this.scores[playerId] || 0);
+    return highest;
   }
 
   /**
@@ -317,12 +342,18 @@ class LeastCountGame {
     if (this.gameOver) throw new Error('Game already over');
     if (!this.roundOver) throw new Error('Cannot rejoin in the middle of a round');
     if (!this.playerIds.includes(playerId)) throw new Error('Not a player in this game.');
-    if (this.quit.has(playerId)) throw new Error('That player left the table.');
-    if (!this.eliminated.has(playerId)) throw new Error('That player is not eliminated.');
+    if (!this.eliminated.has(playerId) && !this.quit.has(playerId)) {
+      throw new Error('That player is still in the game.');
+    }
     if (this.rejoinsUsed.has(playerId)) throw new Error('Already rejoined once this game.');
 
+    // Computed BEFORE the sets are cleared -- rejoinScoreFor() reads `quit` to
+    // decide whether this is a walk-out being floored at its own score, and
+    // reads activePlayers() for the leader. Clearing first would make every
+    // returner look like a plain elimination and quietly reopen the dodge.
     const score = this.rejoinScoreFor(playerId);
     this.eliminated.delete(playerId);
+    this.quit.delete(playerId);
     this.scores[playerId] = score;
     this.rejoinsUsed.add(playerId);
     this.log.push({ type: 'rejoin', round: this.roundNumber, playerId, score });
