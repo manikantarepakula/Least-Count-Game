@@ -5114,6 +5114,55 @@
     return true;
   }
 
+  // Renders the live queue: everyone already waiting for this table size,
+  // plus a placeholder row for each seat still open. Driven entirely by
+  // queue_state from the server -- the client never guesses at the count.
+  function renderQueueState({ playerCount, waiting, you }) {
+    const list = document.getElementById('queue-waiting-players');
+    const status = document.getElementById('queue-waiting-status');
+    if (!list || !status) return;
+    list.innerHTML = '';
+    waiting.forEach((p) => {
+      const li = document.createElement('li');
+      const nameEl = document.createElement('span');
+      nameEl.textContent = p.name;
+      li.appendChild(nameEl);
+      if (p.playerId === you) {
+        const tag = document.createElement('span');
+        tag.className = 'you-tag';
+        tag.textContent = 'you';
+        li.appendChild(tag);
+      }
+      list.appendChild(li);
+    });
+    const remaining = Math.max(0, playerCount - waiting.length);
+    for (let i = 0; i < remaining; i++) {
+      const li = document.createElement('li');
+      li.className = 'queue-seat-empty';
+      li.textContent = 'Waiting for a player\u2026';
+      list.appendChild(li);
+    }
+    status.textContent = remaining === 0
+      ? 'Table full \u2014 starting\u2026'
+      : `${waiting.length} of ${playerCount} joined \u2014 waiting for ${remaining} more.`;
+  }
+
+  function clearQueueState() {
+    const list = document.getElementById('queue-waiting-players');
+    const status = document.getElementById('queue-waiting-status');
+    if (list) list.innerHTML = '';
+    if (status) status.textContent = '';
+  }
+
+  // Guarded on the screen being visible rather than on queuedPlayerCount: a
+  // queue_state can arrive in the same tick as the queue_join ack, and a
+  // stale one must not paint over some other screen after a cancel.
+  socket.on('queue_state', (data) => {
+    const screen = document.getElementById('screen-queue-waiting');
+    if (!data || !screen || !screen.classList.contains('active')) return;
+    renderQueueState(data);
+  });
+
   document.getElementById('btn-play-online').onclick = async () => {
     const name = getPlayerName();
     if (!name) return promptForName();
@@ -5123,6 +5172,8 @@
       if (!res.ok) return setLandingError(res.error);
       queuedPlayerCount = playerCount;
       document.getElementById('queue-waiting-count').textContent = String(playerCount);
+      // Start empty -- last session's seat list must not flash up here.
+      clearQueueState();
       document.getElementById('queue-waiting-choice').classList.add('hidden');
       document.getElementById('queue-waiting-hint').classList.remove('hidden');
       showScreen('screen-queue-waiting');
@@ -5149,6 +5200,7 @@
 
   document.getElementById('btn-queue-cancel').onclick = () => {
     clearQueueTimeoutTimer();
+    clearQueueState();
     socket.emit('queue_cancel', {});
     queuedPlayerCount = null;
     showScreen('screen-landing');
@@ -8944,6 +8996,17 @@
       // hands host to someone else; this re-evaluates who can now act.
       updateRoundResultHostControls();
     }
+  });
+
+  // Push a max-score pick to the server immediately. The select is rebuilt
+  // from server state every 250ms by the countdown ticker, and the countdown
+  // can start the next round without ever reading the select -- so the server
+  // has to hold the choice, not the dropdown.
+  document.getElementById('round-maxscore-select').addEventListener('change', (e) => {
+    const eliminationScore = Number(e.target.value);
+    socket.emit('set_max_score', { roomCode: myRoomCode, eliminationScore }, (res) => {
+      if (res && !res.ok) console.warn('set_max_score:', res.error);
+    });
   });
 
   let lastStartRevealMs = 5000;
