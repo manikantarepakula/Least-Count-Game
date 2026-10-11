@@ -787,6 +787,18 @@ body.game-active {
 .footer-nav-item .icon { width: 20px; height: 20px; margin: 0; }
 .footer-nav-item.active { color: var(--brand-line); }
 
+/* Matchmaking queue seat list -- mirrors .player-list so a half-filled
+   online table looks like the lobby it is about to become. */
+.queue-waiting-players { list-style: none; padding: 0; margin: 16px 0 0; text-align: left; }
+.queue-waiting-players li {
+  padding: 9px 10px; border-bottom: 1px solid var(--jade-border);
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.queue-waiting-players li:last-child { border-bottom: none; }
+.queue-waiting-players .you-tag { font-size: 11px; color: var(--text-muted); }
+.queue-waiting-players li.queue-seat-empty { color: var(--text-muted); font-style: italic; }
+#queue-waiting-status { margin-top: 10px; }
+
 .queue-waiting-choice { margin-top: 18px; }
 .queue-waiting-choice button { margin-top: 8px; }
 
