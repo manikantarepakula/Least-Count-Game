@@ -448,6 +448,13 @@
     <div class="waiting-host-spinner" aria-hidden="true"></div>
     <h2>Finding players&hellip;</h2>
     <p class="hint" id="queue-waiting-hint">Looking for <span id="queue-waiting-count">3</span> players online.</p>
+    <!-- Who has actually turned up so far, one row per seat. Filled by
+         queue_state (server.js) on every join/leave. Kept OUTSIDE
+         #queue-waiting-hint on purpose: that paragraph is hidden when the
+         40s wait/bots/cancel prompt appears, and the seat list has to stay
+         readable through it. -->
+    <ul id="queue-waiting-players" class="queue-waiting-players"></ul>
+    <p class="hint" id="queue-waiting-status"></p>
     <!-- Always visible from the moment this screen appears -- no reason to
          make someone wait out the 40s prompt below just to back out. -->
     <button id="btn-queue-cancel" class="secondary leave-btn" type="button">Cancel</button>
