@@ -1,0 +1,98 @@
+# Least Count — project notes for Claude
+
+Real-time multiplayer Least Count (Indian card game). Node + Express + Socket.io on the
+server, vanilla JS in the browser, Firebase Auth + Firestore for identity and stats,
+deployed on Render. Also shipped as a Capacitor-wrapped Android app from the *same* code.
+
+No build step. No framework. No bundler. `public/` is served as-is.
+
+## Run and test
+
+```
+npm install
+npm start          # http://localhost:3000, or PORT=3999 npm start
+node test/run.js   # 55 assertions, pure game logic, no server needed
+```
+
+`test/run.js` covers `game/gameLogic.js` only — dealing, scoring, declares, the +2 chain,
+elimination, bot decisions. Nothing in `server.js` or `public/app.js` is covered, so socket
+flows and UI have to be checked by hand or with a throwaway socket.io-client script.
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `server.js` | Everything server-side: Express routes, all socket handlers, rooms, matchmaking, bots, rate limiting, Firestore writes. Large and heavily commented. |
+| `game/gameLogic.js` | Pure rules engine (`LeastCountGame`). No I/O, no sockets — this is what the tests exercise. |
+| `public/app.js` | The entire client. One big IIFE. |
+| `public/index.html` | All screens, as sibling `<div class="screen">` blocks toggled by `showScreen()`. |
+| `public/style.css` | Design tokens at the top — read the colour-system comment before adding a colour. |
+| `public/admob-init.js`, `revenuecat-init.js`, `firebase-init.js` | Native-only integrations; safe no-ops in a plain browser. |
+
+**Stale duplicates at the repo root.** `./app.js` and `./index.html` are leftovers from an
+early upload and are *not served by anything* — `express.static` points at `public/`.
+Always edit `public/app.js` and `public/index.html`. Editing the root copies looks like it
+works and changes nothing.
+
+**Top-level meme folders** (`ali/`, `prabhas/`, `tollywood_memes/`, …) are also dead weight.
+The GIF picker was removed in Sept 2026; it expected `public/memes/*`, which never existed in
+the repo. The server still has the `gif` chat type and `/api/gif-search` route, unreachable.
+
+## The thing to know before changing anything
+
+**All game state is in process memory.** `const rooms = new Map()` in `server.js`, plus
+`matchQueues` / `queueIndex` for Play Online. Nothing is persisted. Consequences:
+
+- Any restart or deploy destroys every game in progress. Render does zero-downtime deploys,
+  but the old instance is SIGTERMed ~60s after the new one is live, and its rooms die with it.
+  Clients reconnect to an instance that has never heard of their room.
+- There is no SIGTERM handler, so players see a freeze rather than an explanation.
+- Horizontal scaling would break the app outright — one process only.
+
+Firestore holds accounts, stats and reports. It never holds live game state.
+
+## Conventions
+
+- **Comments explain *why*, at length, especially for non-obvious fixes.** Most long comment
+  blocks in this codebase record a real bug and why the obvious approach failed. Match that
+  style; when fixing something subtle, leave the reasoning behind.
+- Socket events are `snake_case` (`start_game`, `next_round`, `queue_join`, `set_max_score`).
+  Client→server handlers take an ack callback and reply `{ ok: true }` / `{ ok: false, error }`.
+  Server→client pushes (`game_state`, `queue_matched`, `queue_state`) carry no ack.
+- Server validates everything itself. The client's copy of a list (e.g. `MAX_SCORE_OPTIONS`)
+  is a mirror for the UI, never the authority.
+- `<select>` elements are wrapped by a custom themed dropdown (`initDropdown`). After changing
+  a select's options or value in code, call `syncDropdown(el)` or the visible label goes stale.
+  The wrapper dispatches a real `change` event, so `addEventListener('change')` works.
+- Android WebView quirk, already bitten once: setting `option.selected` before the option is
+  attached to the DOM silently fails there. Assign `select.value` *after* appending options.
+
+## Native Android app vs website
+
+Same codebase, wrapped with Capacitor. `window.Capacitor?.isNativePlatform()` is the test.
+AdMob banners/interstitials/rewarded ads and RevenueCat purchases exist only in the app and
+no-op on the web. Rewarded-ad flows gate real game actions (rejoining after elimination), so
+the server refuses `next_round` while an ad grant is pending — don't "simplify" that away.
+
+App Links verification is served from an explicit route in `server.js`, not as a file under
+`public/.well-known/`, because `express.static` ignores dotfiles. The fingerprint there is the
+Play *app signing* key, not the upload key.
+
+## Deploy
+
+Render web service, `npm install` / `npm start`, auto-deploy on push to `main`.
+
+- Render has no scheduled deploys. To control timing: set Auto-Deploy to Off and deploy
+  manually, use `[skip render]` in a commit message, or POST to a deploy hook from a cron.
+- Deploying mid-evening kills live games (see above). Prefer a quiet hour.
+- Secrets: the Firebase service-account JSON is read from `/etc/secrets/` on Render, or the
+  project root locally. `.gitignore` has broad patterns for it — never commit a key, and
+  never relax those patterns.
+
+## Open items
+
+- Solo-vs-bots games can't choose a max score: `create_solo_room` builds the game with
+  `DEFAULT_ELIMINATION_SCORE` (200) and skips the lobby, so the picker is never shown.
+- No graceful shutdown. A SIGTERM handler that stops new rooms, tells players the server is
+  updating, and lets in-flight rounds finish would turn a freeze into a clean message.
+- Moving room state to Redis is the real fix for deploy-time game loss. Big change.
