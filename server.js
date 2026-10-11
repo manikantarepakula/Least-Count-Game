@@ -2792,12 +2792,34 @@ function startMatchedRoom(entries) {
 // from a bucket (in case that bucket was already independently ready --
 // shouldn't normally happen since this runs on every join too, but cheap
 // and safe to double-check).
+// Tells everyone currently queued for a table size who else is waiting with
+// them. Sent on every change to the bucket -- join, cancel, disconnect -- so
+// the waiting screen shows real progress ("2 of 3 joined") instead of an
+// anonymous spinner that looks identical whether nobody has turned up or the
+// table is one player short.
+//
+// Addressed per socket rather than a room broadcast: queued players are
+// deliberately NOT in a socket.io room yet (see the note on matchQueues), and
+// each one needs to know which entry is their own.
+function broadcastQueueState(playerCount) {
+  const bucket = matchQueues.get(playerCount);
+  if (!bucket || !bucket.length) return;
+  const waiting = bucket.map((e) => ({ playerId: e.playerId, name: e.name }));
+  for (const e of bucket) {
+    io.to(e.socketId).emit('queue_state', { playerCount, waiting, you: e.playerId });
+  }
+}
+
 function tryMatchQueue(playerCount) {
   const bucket = matchQueues.get(playerCount);
-  if (!bucket || bucket.length < playerCount) return;
+  // Not enough people yet -- tell whoever IS waiting how far along they are.
+  if (!bucket || bucket.length < playerCount) { broadcastQueueState(playerCount); return; }
   const entries = bucket.splice(0, playerCount);
   for (const e of entries) queueIndex.delete(e.socketId);
   startMatchedRoom(entries);
+  // Anyone left over (only possible if the bucket somehow ran ahead of a
+  // match) is now waiting behind a smaller queue, so their count changed too.
+  broadcastQueueState(playerCount);
 }
 
 // ---------------------------------------------------------------------------
@@ -3417,6 +3439,9 @@ io.on('connection', (socket) => {
       const idx = bucket.findIndex((e) => e.socketId === socket.id);
       if (idx !== -1) bucket.splice(idx, 1);
       queueIndex.delete(socket.id);
+      // The people still waiting just lost a seat-mate; their list must not
+      // keep showing someone who has left.
+      broadcastQueueState(n);
     }
     ack && ack({ ok: true });
   });
@@ -4540,6 +4565,30 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Applies a max-score change the moment it is picked on the round-result
+  // screen. Previously the pick lived only in the client's <select> and was
+  // sent with next_round -- so when the auto-advance countdown fired first
+  // (always the case with bots, who never tap Next Round), the choice was
+  // silently dropped and the game stayed on the old value.
+  socket.on('set_max_score', ({ roomCode, eliminationScore }, ack) => {
+    try {
+      const room = rooms.get(roomCode);
+      if (!room || !room.game) throw new Error('Game not active.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry || !room.players.has(entry.playerId)) throw new Error('You are not in this room.');
+      if (!room.game.roundOver || room.game.gameOver) throw new Error('Max score can only be changed between rounds.');
+      const n = Number(eliminationScore);
+      if (!MAX_SCORE_OPTIONS.includes(n)) throw new Error('Invalid max score option.');
+      if (n !== room.game.eliminationScore) {
+        room.game.setEliminationScore(n);
+        broadcastGameState(room);
+      }
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
   socket.on('new_game', ({ roomCode }, ack) => {
     try {
       const room = rooms.get(roomCode);
@@ -4853,6 +4902,9 @@ io.on('connection', (socket) => {
       const idx = bucket.findIndex((e) => e.socketId === socket.id);
       if (idx !== -1) bucket.splice(idx, 1);
       queueIndex.delete(socket.id);
+      // Same as queue_cancel: a closed app must disappear from everyone
+      // else's waiting list, not sit there as a seat that is already taken.
+      broadcastQueueState(queuedSize);
     }
     const entry = socketIndex.get(socket.id);
     if (!entry) return;
