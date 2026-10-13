@@ -582,9 +582,11 @@
         label: 'Step 6 of 7',
         text: 'Someone played a 2 at you. Play a 2 of your own to pass the penalty on to the next player — or take the cards and end it.',
         build: () => state({ hand: ['2', 'K', '9', '4'], open: '2', chain: 1 }),
-        want: (ids, g) => ids.length === 1 && rankOf(g, ids[0]) === '2',
+        // Either choice the text offers moves on: pass it with a 2, or take it.
+        want: (ids, g) => ids.length === 0 || (ids.length === 1 && rankOf(g, ids[0]) === '2'),
         nudge: 'Tap your 2 to pass it on.',
-        target: 'btn-discard',
+        // No target: during a chain the Discard button is hidden, so pointing
+        // at it highlighted nothing. The 2 is the only card you can tap anyway.
       },
       {
         label: 'Step 7 of 7',
@@ -633,9 +635,9 @@
     }
 
     function finish(completed) {
-      // Completed vs abandoned is the whole question for a first-run tutorial:
-      // a high drop-off says it is too long, before anyone has to say so.
-      logAnalytics(completed ? 'tutorial_completed' : 'tutorial_abandoned');
+      // One event per finish, logged further down WITH the step reached
+      // (tutorial_completed / tutorial_skipped). A second, duplicate line here
+      // briefly made every quit count twice in GA4 (abandoned + skipped).
       if (!active) return;
       active = false;
       clearTarget();
@@ -5114,55 +5116,6 @@
     return true;
   }
 
-  // Renders the live queue: everyone already waiting for this table size,
-  // plus a placeholder row for each seat still open. Driven entirely by
-  // queue_state from the server -- the client never guesses at the count.
-  function renderQueueState({ playerCount, waiting, you }) {
-    const list = document.getElementById('queue-waiting-players');
-    const status = document.getElementById('queue-waiting-status');
-    if (!list || !status) return;
-    list.innerHTML = '';
-    waiting.forEach((p) => {
-      const li = document.createElement('li');
-      const nameEl = document.createElement('span');
-      nameEl.textContent = p.name;
-      li.appendChild(nameEl);
-      if (p.playerId === you) {
-        const tag = document.createElement('span');
-        tag.className = 'you-tag';
-        tag.textContent = 'you';
-        li.appendChild(tag);
-      }
-      list.appendChild(li);
-    });
-    const remaining = Math.max(0, playerCount - waiting.length);
-    for (let i = 0; i < remaining; i++) {
-      const li = document.createElement('li');
-      li.className = 'queue-seat-empty';
-      li.textContent = 'Waiting for a player\u2026';
-      list.appendChild(li);
-    }
-    status.textContent = remaining === 0
-      ? 'Table full \u2014 starting\u2026'
-      : `${waiting.length} of ${playerCount} joined \u2014 waiting for ${remaining} more.`;
-  }
-
-  function clearQueueState() {
-    const list = document.getElementById('queue-waiting-players');
-    const status = document.getElementById('queue-waiting-status');
-    if (list) list.innerHTML = '';
-    if (status) status.textContent = '';
-  }
-
-  // Guarded on the screen being visible rather than on queuedPlayerCount: a
-  // queue_state can arrive in the same tick as the queue_join ack, and a
-  // stale one must not paint over some other screen after a cancel.
-  socket.on('queue_state', (data) => {
-    const screen = document.getElementById('screen-queue-waiting');
-    if (!data || !screen || !screen.classList.contains('active')) return;
-    renderQueueState(data);
-  });
-
   document.getElementById('btn-play-online').onclick = async () => {
     const name = getPlayerName();
     if (!name) return promptForName();
@@ -5172,8 +5125,6 @@
       if (!res.ok) return setLandingError(res.error);
       queuedPlayerCount = playerCount;
       document.getElementById('queue-waiting-count').textContent = String(playerCount);
-      // Start empty -- last session's seat list must not flash up here.
-      clearQueueState();
       document.getElementById('queue-waiting-choice').classList.add('hidden');
       document.getElementById('queue-waiting-hint').classList.remove('hidden');
       showScreen('screen-queue-waiting');
@@ -5200,7 +5151,6 @@
 
   document.getElementById('btn-queue-cancel').onclick = () => {
     clearQueueTimeoutTimer();
-    clearQueueState();
     socket.emit('queue_cancel', {});
     queuedPlayerCount = null;
     showScreen('screen-landing');
@@ -6516,6 +6466,9 @@
       // hold, and without this the same round would re-trigger the phase on
       // each one.
       window.__lastRoundResultShownFor = game.roundNumber;
+      try {
+        logAnalytics('round_completed', Object.assign({ round: game.roundNumber }, analyticsGameInfo(game)));
+      } catch (e) { /* never let analytics touch the reveal */ }
       // Cards face-up at each chair first; the scorecard follows once the
       // player taps or the hold elapses (see startRevealPhase above).
       startRevealPhase(game);
@@ -6809,6 +6762,13 @@
   }
 
   function submitChainTwo(card) {
+    // The tutorial owns this tap too. During a +2 chain the Discard button is
+    // hidden and tapping a 2 plays it straight away -- so this, not the
+    // Discard handler, is the ONLY way through tutorial step 6. It used to emit
+    // to the server even inside the tutorial, where there is no room: the tap
+    // failed with an error and the lesson could never advance. Every learner
+    // who reached step 6 was stuck there (GA4, Oct 2026: 10 started, 0 finished).
+    if (Tutorial.tryDiscard([card.id])) return;
     socket.emit('play_turn', { roomCode: myRoomCode, cardIds: [card.id] }, (res) => {
       if (!res.ok) setGameError(res.error);
       else setGameError('');
@@ -6890,6 +6850,9 @@
   };
 
   document.getElementById('btn-take-penalty').onclick = () => {
+    // Step 6 offers this as one of its two choices, so the tutorial handles it
+    // rather than letting it reach a server that has no game to apply it to.
+    if (Tutorial.tryDiscard([])) return;
     socket.emit('play_turn', { roomCode: myRoomCode, cardIds: [] }, (res) => {
       if (!res.ok) setGameError(res.error);
     });
@@ -7727,8 +7690,37 @@
     });
   };
 
+  // ------------------------------------------------------------------
+  // How far people actually get (Oct 2026).
+  //
+  // game_completed only fires when someone stays to the very end and taps
+  // "See Final Result" -- so a bot game abandoned after a few rounds, or a
+  // player who leaves once eliminated, counted as nothing at all. These two
+  // events measure the part in between:
+  //   round_completed -- every round a player sees through to the result.
+  //                      The highest round each player reaches is how far they
+  //                      got, even if they then just closed the app (which no
+  //                      event can catch).
+  //   game_left       -- tapped Leave before the game was over, with how many
+  //                      rounds they had played and whether they were out.
+  // ------------------------------------------------------------------
+  function analyticsGameInfo(game) {
+    const humans = latestRoom && latestRoom.players
+      ? latestRoom.players.filter((p) => !p.isBot).length : 0;
+    return {
+      mode: humans <= 1 ? 'bots' : 'friends',
+      players: (game && game.turnOrder && game.turnOrder.length) || (latestRoom && latestRoom.players.length) || 0,
+      you_out: !!(game && game.eliminated && game.eliminated.includes(myPlayerId)),
+    };
+  }
+
   // ---------------- leave room ----------------
   function leaveRoom() {
+    try {
+      if (latestGame && !latestGame.gameOver && latestGame.roundNumber) {
+        logAnalytics('game_left', Object.assign({ rounds_played: latestGame.roundNumber }, analyticsGameInfo(latestGame)));
+      }
+    } catch (e) { /* analytics must never block leaving */ }
     socket.emit('leave_room', { roomCode: myRoomCode }, (res) => {
       if (!res.ok) {
         setGameError(res.error);
@@ -8996,17 +8988,6 @@
       // hands host to someone else; this re-evaluates who can now act.
       updateRoundResultHostControls();
     }
-  });
-
-  // Push a max-score pick to the server immediately. The select is rebuilt
-  // from server state every 250ms by the countdown ticker, and the countdown
-  // can start the next round without ever reading the select -- so the server
-  // has to hold the choice, not the dropdown.
-  document.getElementById('round-maxscore-select').addEventListener('change', (e) => {
-    const eliminationScore = Number(e.target.value);
-    socket.emit('set_max_score', { roomCode: myRoomCode, eliminationScore }, (res) => {
-      if (res && !res.ok) console.warn('set_max_score:', res.error);
-    });
   });
 
   let lastStartRevealMs = 5000;
