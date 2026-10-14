@@ -448,13 +448,6 @@
     <div class="waiting-host-spinner" aria-hidden="true"></div>
     <h2>Finding players&hellip;</h2>
     <p class="hint" id="queue-waiting-hint">Looking for <span id="queue-waiting-count">3</span> players online.</p>
-    <!-- Who has actually turned up so far, one row per seat. Filled by
-         queue_state (server.js) on every join/leave. Kept OUTSIDE
-         #queue-waiting-hint on purpose: that paragraph is hidden when the
-         40s wait/bots/cancel prompt appears, and the seat list has to stay
-         readable through it. -->
-    <ul id="queue-waiting-players" class="queue-waiting-players"></ul>
-    <p class="hint" id="queue-waiting-status"></p>
     <!-- Always visible from the moment this screen appears -- no reason to
          make someone wait out the 40s prompt below just to back out. -->
     <button id="btn-queue-cancel" class="secondary leave-btn" type="button">Cancel</button>
@@ -966,6 +959,10 @@
       <label for="round-maxscore-select">Change Max Score</label>
       <select id="round-maxscore-select"></select>
     </div>
+    <!-- Why a max-score change was refused, if it was (Oct 2026). The change
+         is now sent the moment it is picked, so a refusal needs somewhere to
+         be said -- #game-error sits on the table, hidden under this panel. -->
+    <p id="round-maxscore-status" class="hint round-maxscore-status" aria-live="polite"></p>
 
     <!-- "Start Now" rather than "Next Round" since Sept 2026: the round
          advances on its own after a countdown, so this button is the host's
