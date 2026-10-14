@@ -692,8 +692,13 @@ body.game-active {
    feed of members and messages, which is exactly the layout a FAB was
    designed for, and there are no cards underneath it to cover.
    These rules restore the floating look on top of the now-in-flow .chat-fab
-   base -- they must stay in sync if that base changes again. */
-.group-chat-fab {
+   base -- they must stay in sync if that base changes again.
+   Oct 13 2026: selectors are .chat-fab.group-chat-fab (two classes), not
+   .group-chat-fab alone. The .chat-fab base is defined ~1750 lines further
+   down with the same one-class weight, so it won and the button rendered as
+   an in-flow 34px square at the very bottom of the page, half off the left
+   edge (left:-16px), instead of floating bottom-right. */
+.chat-fab.group-chat-fab {
   position: fixed;
   bottom: calc(16px + var(--ad-safe-bottom, 0px));
   right: 16px;
@@ -705,8 +710,8 @@ body.game-active {
   box-shadow: var(--shadow-md);
   z-index: 21;
 }
-.group-chat-fab .icon { width: 24px; height: 24px; }
-.group-chat-fab::before { content: none; }   /* the 44px tap pad is redundant at 52px */
+.chat-fab.group-chat-fab .icon { width: 24px; height: 24px; }
+.chat-fab.group-chat-fab::before { content: none; }   /* the 44px tap pad is redundant at 52px */
 
 /* ---- Read-only chat preview on the group screen ----
    Shares .group-chat-list's styling so a message looks identical here and
@@ -786,18 +791,6 @@ body.game-active {
 .footer-nav-item .nav-icon { width: 20px; height: 20px; display: flex; }
 .footer-nav-item .icon { width: 20px; height: 20px; margin: 0; }
 .footer-nav-item.active { color: var(--brand-line); }
-
-/* Matchmaking queue seat list -- mirrors .player-list so a half-filled
-   online table looks like the lobby it is about to become. */
-.queue-waiting-players { list-style: none; padding: 0; margin: 16px 0 0; text-align: left; }
-.queue-waiting-players li {
-  padding: 9px 10px; border-bottom: 1px solid var(--jade-border);
-  display: flex; justify-content: space-between; align-items: center; gap: 8px;
-}
-.queue-waiting-players li:last-child { border-bottom: none; }
-.queue-waiting-players .you-tag { font-size: 11px; color: var(--text-muted); }
-.queue-waiting-players li.queue-seat-empty { color: var(--text-muted); font-style: italic; }
-#queue-waiting-status { margin-top: 10px; }
 
 .queue-waiting-choice { margin-top: 18px; }
 .queue-waiting-choice button { margin-top: 8px; }
@@ -2284,6 +2277,9 @@ button.leave-btn { background: transparent; color: var(--red-text); border: 1px 
 .round-maxscore-row { margin: 14px 0; }
 .round-maxscore-row.hidden { display: none; }
 .round-maxscore-row label { color: var(--text-muted); font-size: 12px; }
+/* A refused max-score change. Takes no space at all until there is one. */
+.round-maxscore-status { color: var(--red-text); margin: -8px 0 12px; }
+.round-maxscore-status:empty { display: none; }
 .final-round-delta { font-weight: 700; color: var(--gold-bright); background: rgba(212,160,23,0.14); padding: 1px 6px; border-radius: 6px; }
 .final-round-banner {
   background: rgba(212,160,23,0.14); border: 1.5px solid var(--gold); border-radius: var(--radius-sm);
