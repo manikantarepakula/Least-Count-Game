@@ -1340,6 +1340,9 @@ const RATE_LIMITS = {
   request_rejoin: { max: 4, windowMs: 60000 },
   get_my_stats: { max: 10, windowMs: 30000 },
   get_player_stats: { max: 20, windowMs: 30000 },
+  // Changing the max score on the round result. A player trying a few values
+  // is normal; anything faster than this is not a person.
+  set_max_score: { max: 12, windowMs: 20000 },
 };
 const rateBuckets = new Map(); // socket.id -> { [eventName]: number[] recent timestamps }
 
@@ -2792,34 +2795,12 @@ function startMatchedRoom(entries) {
 // from a bucket (in case that bucket was already independently ready --
 // shouldn't normally happen since this runs on every join too, but cheap
 // and safe to double-check).
-// Tells everyone currently queued for a table size who else is waiting with
-// them. Sent on every change to the bucket -- join, cancel, disconnect -- so
-// the waiting screen shows real progress ("2 of 3 joined") instead of an
-// anonymous spinner that looks identical whether nobody has turned up or the
-// table is one player short.
-//
-// Addressed per socket rather than a room broadcast: queued players are
-// deliberately NOT in a socket.io room yet (see the note on matchQueues), and
-// each one needs to know which entry is their own.
-function broadcastQueueState(playerCount) {
-  const bucket = matchQueues.get(playerCount);
-  if (!bucket || !bucket.length) return;
-  const waiting = bucket.map((e) => ({ playerId: e.playerId, name: e.name }));
-  for (const e of bucket) {
-    io.to(e.socketId).emit('queue_state', { playerCount, waiting, you: e.playerId });
-  }
-}
-
 function tryMatchQueue(playerCount) {
   const bucket = matchQueues.get(playerCount);
-  // Not enough people yet -- tell whoever IS waiting how far along they are.
-  if (!bucket || bucket.length < playerCount) { broadcastQueueState(playerCount); return; }
+  if (!bucket || bucket.length < playerCount) return;
   const entries = bucket.splice(0, playerCount);
   for (const e of entries) queueIndex.delete(e.socketId);
   startMatchedRoom(entries);
-  // Anyone left over (only possible if the bucket somehow ran ahead of a
-  // match) is now waiting behind a smaller queue, so their count changed too.
-  broadcastQueueState(playerCount);
 }
 
 // ---------------------------------------------------------------------------
@@ -3439,9 +3420,6 @@ io.on('connection', (socket) => {
       const idx = bucket.findIndex((e) => e.socketId === socket.id);
       if (idx !== -1) bucket.splice(idx, 1);
       queueIndex.delete(socket.id);
-      // The people still waiting just lost a seat-mate; their list must not
-      // keep showing someone who has left.
-      broadcastQueueState(n);
     }
     ack && ack({ ok: true });
   });
@@ -4565,25 +4543,30 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Applies a max-score change the moment it is picked on the round-result
-  // screen. Previously the pick lived only in the client's <select> and was
-  // sent with next_round -- so when the auto-advance countdown fired first
-  // (always the case with bots, who never tap Next Round), the choice was
-  // silently dropped and the game stayed on the old value.
-  socket.on('set_max_score', ({ roomCode, eliminationScore }, ack) => {
+  // Change the max score between rounds, applied the moment it is picked
+  // (Oct 2026). It used to travel only inside next_round -- that is, only when
+  // somebody tapped "Start Now". But the round normally starts on the
+  // countdown, and that path carries no max score at all, so in a bot game
+  // (nobody else to tap it, and no reason to) a new max score could never take
+  // effect. Applying it here means it holds however the next round begins.
+  // Same permission as next_round: anyone seated at the table.
+  socket.on('set_max_score', ({ roomCode, eliminationScore } = {}, ack) => {
     try {
+      if (isRateLimited(socket, 'set_max_score')) throw new Error('Too many changes too quickly. Please wait a moment.');
       const room = rooms.get(roomCode);
       if (!room || !room.game) throw new Error('Game not active.');
       const entry = socketIndex.get(socket.id);
       if (!entry || !room.players.has(entry.playerId)) throw new Error('You are not in this room.');
-      if (!room.game.roundOver || room.game.gameOver) throw new Error('Max score can only be changed between rounds.');
+      if (room.game.gameOver) throw new Error('Game is already over.');
+      if (!room.game.roundOver) throw new Error('The max score can only be changed between rounds.');
       const n = Number(eliminationScore);
       if (!MAX_SCORE_OPTIONS.includes(n)) throw new Error('Invalid max score option.');
       if (n !== room.game.eliminationScore) {
+        // Refuses anything not above the current highest score.
         room.game.setEliminationScore(n);
         broadcastGameState(room);
       }
-      ack && ack({ ok: true });
+      ack && ack({ ok: true, eliminationScore: room.game.eliminationScore });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
@@ -4902,9 +4885,6 @@ io.on('connection', (socket) => {
       const idx = bucket.findIndex((e) => e.socketId === socket.id);
       if (idx !== -1) bucket.splice(idx, 1);
       queueIndex.delete(socket.id);
-      // Same as queue_cancel: a closed app must disappear from everyone
-      // else's waiting list, not sit there as a seat that is already taken.
-      broadcastQueueState(queuedSize);
     }
     const entry = socketIndex.get(socket.id);
     if (!entry) return;
