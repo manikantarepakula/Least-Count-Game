@@ -7149,12 +7149,52 @@
     const maxScoreRow = document.getElementById('round-maxscore-row');
     if (!game.gameOver) {
       const maxCurrentScore = Math.max(0, ...Object.values(game.scores));
-      populateMaxScoreSelect(document.getElementById('round-maxscore-select'), game.eliminationScore, maxCurrentScore);
+      // Rebuilt only when the SERVER's numbers change -- never just because
+      // the countdown ticked. This function runs every 250ms while the
+      // countdown shows, and rebuilding the list each time put the old value
+      // straight back: pick 300, and a quarter of a second later it read 200
+      // again. That was the "can't change the max score" bug (Oct 2026). A
+      // new round, a confirmed change, or someone else changing it all alter
+      // the key, so the dropdown still follows the real value.
+      const maxSel = document.getElementById('round-maxscore-select');
+      const builtFor = game.roundNumber + ':' + game.eliminationScore + ':' + maxCurrentScore;
+      if (maxSel.dataset.builtFor !== builtFor) {
+        populateMaxScoreSelect(maxSel, game.eliminationScore, maxCurrentScore);
+        maxSel.dataset.builtFor = builtFor;
+      }
       maxScoreRow.classList.remove('hidden');
     } else {
       maxScoreRow.classList.add('hidden');
     }
+    // Kept in step here (not only when the overlay opens) so a change made
+    // on this screen shows up in "Playing to ..." at once.
+    const playingTo = document.getElementById('round-result-maxscore');
+    if (playingTo && game.eliminationScore) playingTo.textContent = `Playing to ${game.eliminationScore} pts`;
   }
+
+  // ---- max score: applied the moment it is picked ----
+  // Sent to the server as soon as it changes (set_max_score), rather than
+  // saved up for the "Start Now" tap. The countdown starts the next round far
+  // more often than the button does -- in a bot game, always -- and that path
+  // never carried the new value, so the pick was silently lost.
+  document.getElementById('round-maxscore-select').addEventListener('change', (e) => {
+    const sel = e.target;
+    const status = document.getElementById('round-maxscore-status');
+    const picked = Number(sel.value);
+    if (!picked || !myRoomCode) return;
+    if (status) status.textContent = '';
+    socket.emit('set_max_score', { roomCode: myRoomCode, eliminationScore: picked }, (res) => {
+      // Accepted: the game_state that follows carries the new value and
+      // rebuilds the list around it.
+      if (res && res.ok) return;
+      // Refused (a score already past it, the round already started...): put
+      // the real value back, so the dropdown never claims something untrue.
+      sel.dataset.builtFor = '';
+      updateRoundResultHostControls();
+      if (status) status.textContent = friendlyError((res && res.error) || 'Could not change the max score.');
+    });
+  });
+  // ---- end max score ----
 
   // Round-result ad: DISABLED. See the long note in admob-init.js -- showing
   // an ad here means swapping the single native banner slot, and every
@@ -7202,6 +7242,12 @@
     const rrRound = document.getElementById('round-result-round');
     if (rrRound) rrRound.textContent = game.roundNumber ? 'Round ' + game.roundNumber : '';
     document.getElementById('round-result-maxscore').textContent = `Playing to ${game.eliminationScore} pts`;
+    const maxStatus = document.getElementById('round-maxscore-status');
+    if (maxStatus) maxStatus.textContent = '';   // a refusal from last round is stale
+    // Fresh list for every new result screen (this runs once per round, see
+    // __lastRoundResultShownFor), so nothing from a previous game can linger.
+    const maxSelEl = document.getElementById('round-maxscore-select');
+    if (maxSelEl) maxSelEl.dataset.builtFor = '';
 
     // Declare emojis show here (not at a seat) since the game redirects to
     // this screen almost instantly after a declare -- a seat reaction
