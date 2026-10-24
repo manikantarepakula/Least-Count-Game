@@ -70,7 +70,10 @@
      request, which was:
      https://fonts.googleapis.com/css2?family=Cinzel:wght@700;800&display=swap -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@800&text=LEAST%20COUNT&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="style.css" />
+<!-- ?v= changes whenever index.html's structure changes, so a phone that
+     still has yesterday's style.css cached (10-minute cache, see server.js)
+     can never pair the new markup with the old styles. -->
+<link rel="stylesheet" href="style.css?v=fit-2026-10-24" />
 </head>
 <body>
 
@@ -366,26 +369,24 @@
         </div>
       </div>
 
-      <div class="mode-block">
-        <h3>Quick Room</h3>
-        <p class="mode-block-sub">One-off game, code expires with the session</p>
+      <!-- "Play with friends" (Oct 2026): Quick Room and Join with a code
+           were two cards. Merged into one because they answer the same
+           question -- "who am I playing with?" -- and the second card's own
+           padding, border and heading cost ~75px, which is exactly what put
+           this pane under the ad banner on a 360x720 phone.
+           Same ids as before (btn-create, input-roomcode-quick,
+           btn-join-quick), so app.js is untouched. The box still takes both
+           kinds of code and the code's own length decides where you land
+           (see submitJoinCode in app.js). The two .fit-optional lines are
+           dropped by layout.js on screens too short to show them. -->
+      <div class="mode-block friends-block">
+        <h3>Play with friends</h3>
+        <p class="mode-block-sub fit-optional">Create a room and share the code, or join with one</p>
         <div class="row">
           <button id="btn-create" class="secondary">Create Room</button>
         </div>
-      </div>
-
-      <!-- The SECOND join box. Identical wording to the one in the Groups
-           pane on purpose -- neither is the "real" one. The box takes both
-           kinds of code and the code's own length decides where you land
-           (see submitJoinCode in app.js), so which tab you happened to be
-           looking at when you typed it doesn't matter.
-           Different ids from the Groups copy -- duplicate ids would break
-           getElementById for both. -->
-      <div class="mode-block">
-        <h3>Join with a code</h3>
-        <p class="mode-block-sub">Someone sent you a code? Enter it here</p>
         <div class="mode-block-join-row">
-          <input id="input-roomcode-quick" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
+          <input id="input-roomcode-quick" type="text" maxlength="5" placeholder="Enter code" aria-label="Room or group code" style="text-transform:uppercase" />
           <!-- secondary, not primary (Sept 2026): Start / Find Match above is
                the one filled button on this pane. You only reach for Join
                because someone handed you a code, so it does not need to
@@ -393,7 +394,7 @@
                same control. -->
           <button id="btn-join-quick" class="secondary">Join</button>
         </div>
-        <p class="hint">4 letters for a one-off room, 5 for a group.</p>
+        <p class="hint fit-optional">4 letters for a one-off room, 5 for a group.</p>
       </div>
       </div><!-- /pane-quick -->
 
@@ -419,12 +420,12 @@
              ever have thought to type a permanent group code into it. This
              is the entry point for anyone who's been given anything, so it
              has to say so plainly. -->
-        <p class="mode-block-sub">Someone sent you a code? Enter it here</p>
+        <p class="mode-block-sub fit-optional">Someone sent you a code? Enter it here</p>
         <div class="mode-block-join-row">
           <input id="input-roomcode" type="text" maxlength="5" placeholder="CODE" style="text-transform:uppercase" />
           <button id="btn-join" class="secondary">Join</button>
         </div>
-        <p class="hint">4 letters for a one-off room, 5 for a group.</p>
+        <p class="hint fit-optional">4 letters for a one-off room, 5 for a group.</p>
       </div>
 
       </div><!-- /pane-groups -->
@@ -505,30 +506,35 @@
       <p id="group-error" class="error"></p>
     </div>
 
-    <div class="mode-block">
-      <!-- Invite sits ON the heading row rather than as a full-width button
-           below (Sept 2026). It's a secondary action -- you invite once, then
-           never again -- and as a full-width button it was reading as the
-           most important thing in the block, while costing a whole row. -->
-      <div class="block-heading-row">
-        <h3>Members <span id="group-member-count" class="group-count"></span></h3>
-        <button id="btn-group-invite" class="secondary tiny" type="button">Invite</button>
+    <!-- Members and Marathon: two tabs of ONE card (Oct 2026).
+         As two stacked cards plus the chat preview, this screen measured
+         ~1050px of content on a phone with ~590-710px to show it in -- it
+         scrolled on every phone, by 240-400px. Both are lists that grow
+         with the group, so no amount of spacing could fix it. One visible
+         at a time, the card takes whatever height is left and its list
+         scrolls inside it when a group is big; the live strip above and the
+         chat preview below stay on screen.
+         Same ids throughout (group-member-count, btn-group-invite,
+         group-members, group-code-text, group-board...), so app.js renders
+         exactly as before. The tab switching lives in layout.js. -->
+    <div class="mode-block group-tabs-block">
+      <div class="segmented group-tabs" id="group-tabs" role="tablist">
+        <button type="button" class="seg active" data-gtab="members" role="tab" aria-selected="true">Members <span id="group-member-count" class="group-count"></span></button>
+        <button type="button" class="seg" data-gtab="marathon" role="tab" aria-selected="false">Marathon</button>
       </div>
-      <ul id="group-members" class="group-member-list"></ul>
-      <!-- The code gets its OWN line, not a slot beside the button: every
-           button in this app is width:100%, so sitting them side by side
-           squeezed the code into an unreadable sliver at the right edge.
-           Still deliberately understated -- it only matters at the moment
-           somebody joins -- but it has to be legible when it does. -->
-      <div class="group-code-row">
-        <span class="group-code-label">Group code</span>
-        <b id="group-code-text" class="group-code-value">-----</b>
+      <div class="group-tab-panel" data-gpanel="members" role="tabpanel">
+        <!-- Code and Invite share one line now: Invite is a secondary action
+             (you invite once, then never again), and the code only matters
+             at the moment somebody joins -- neither earns a row of its own. -->
+        <div class="group-code-row">
+          <span class="group-code-label">Group code</span>
+          <b id="group-code-text" class="group-code-value">-----</b>
+          <button id="btn-group-invite" class="secondary tiny" type="button">Invite</button>
+        </div>
+        <ul id="group-members" class="group-member-list" data-fit-list="76"></ul>
       </div>
-    </div>
-
-
-    <div class="mode-block">
-      <h3 id="group-board-title">Marathon</h3>
+    <div class="group-tab-panel hidden" data-gpanel="marathon" role="tabpanel">
+      <h3 id="group-board-title" class="sr-only">Marathon</h3>
       <!-- A marathon no longer runs by itself on calendar months -- the admin
            starts one and picks how long it lasts. "Ends in 6 days" is a fact
            you can read; "resets on the 1st" was a rule you had to be told. -->
@@ -544,10 +550,11 @@
            now: start a marathon, then the standings for that marathon. The
            server still records daily scores, recent games and past champions
            -- nothing was deleted, it's just not surfaced here. -->
-      <ul id="group-board" class="standings-list"></ul>
+      <ul id="group-board" class="standings-list" data-fit-list="80"></ul>
       <p id="group-board-empty" class="hint hidden">Nothing here yet.</p>
-      <p class="hint group-scoring-note">One point for every player you finish ahead of, plus one for turning up.</p>
-    </div>
+      <p class="hint group-scoring-note fit-optional">One point for every player you finish ahead of, plus one for turning up.</p>
+    </div><!-- /marathon panel -->
+    </div><!-- /group-tabs-block -->
 
     <!-- Chat PREVIEW -- read-only, last few messages (Sept 2026).
          The full chat is the FAB + sheet further down; this is a window
@@ -647,9 +654,12 @@
 
     </div>
 
-    <div class="mode-block">
+    <!-- data-fit-list: when a big table doesn't fit, layout.js lets THIS list
+         scroll inside its own box (never below ~2 rows) so the invite above
+         and Start Game below always stay on screen. -->
+    <div class="mode-block lobby-players-block">
       <h3>Players</h3>
-      <ul id="lobby-players" class="player-list"></ul>
+      <ul id="lobby-players" class="player-list" data-fit-list="84"></ul>
       <!-- Host-only, lobby-only bot controls (Oct 2026). A two-player game is
            thin, so the host can pad the table out. Shown to the host alone --
            everyone else just sees the bots appear in the list above.
@@ -675,22 +685,33 @@
     </div>
 
 
-    <div class="mode-block">
-      <div id="lobby-maxscore-row" class="lobby-maxscore-row hidden">
-        <label for="input-maxscore">Max Score</label>
-        <select id="input-maxscore"></select>
-      </div>
-
-      <button id="btn-start" class="primary" disabled>Start Game</button>
-      <p id="lobby-hint" class="hint"></p>
+  </div>
+  <!-- Pinned action bar (Oct 2026). This used to be the third card INSIDE
+       the scrolling body, so on most phones Start Game and Leave Table sat
+       below the fold (measured: 34px under on a 393x780 phone with the ad
+       banner, 94px on 360x720) -- the exact "I have to scroll to start"
+       complaint. As a sibling of .landing-body it can never scroll away:
+       the body above shrinks instead.
+       Max Score is one inline row now (label left, picker right) and the
+       two buttons share a row, which together save ~120px. Same ids, so
+       app.js needs no change; its dropdown opens UPWARD here (style.css),
+       because there is no room below the bottom of the screen. -->
+  <div class="screen-actions" id="lobby-actions">
+    <div id="lobby-maxscore-row" class="lobby-maxscore-row hidden">
+      <label for="input-maxscore">Max Score</label>
+      <select id="input-maxscore"></select>
+    </div>
+    <div class="action-pair">
       <!-- "Leave Table" not "Leave Room": leaving the TABLE ends your session
            here, while leaving the GROUP (removing it from your list) is a
            separate action in the group menu on the landing screen. Naming
            them the same thing made it unclear which one you were about to
            do. -->
       <button id="btn-leave-lobby" class="secondary leave-btn">Leave Table</button>
-      <p id="lobby-error" class="error"></p>
+      <button id="btn-start" class="primary" disabled>Start Game</button>
     </div>
+    <p id="lobby-hint" class="hint"></p>
+    <p id="lobby-error" class="error"></p>
   </div>
 </div>
 
@@ -948,7 +969,9 @@
          for anyone who bought Remove Ads, so they get the space back. -->
     <div id="round-result-ad" class="round-result-ad hidden"></div>
 
-    <div id="round-result-hands" class="reveal-rows"></div>
+    <!-- data-fit-list: on a short screen this list scrolls inside its own
+         box (never below ~2 rows) so the buttons under it stay visible. -->
+    <div id="round-result-hands" class="reveal-rows" data-fit-list="92"></div>
 
     <!-- Opens the shared #overlay-scorecard sheet straight onto its "By
          round" tab -- a sheet rather than an inline expansion, so this
@@ -1066,7 +1089,7 @@
 <div id="overlay-gameover" class="overlay hidden">
   <div class="card-panel">
     <h1 id="gameover-title">🏆</h1>
-    <div id="gameover-body"></div>
+    <div id="gameover-body" data-fit-list="110"></div>
     <button id="btn-new-game" class="primary hidden">Play Again (same room)</button>
     <button id="btn-leave-gameover" class="secondary leave-btn">Leave Room</button>
     <p id="gameover-hint" class="hint"></p>
@@ -1153,7 +1176,7 @@
 <div id="overlay-standings" class="overlay hidden">
   <div class="card-panel">
     <h2>Leaderboard</h2>
-    <ul id="lobby-standings" class="standings-list"></ul>
+    <ul id="lobby-standings" class="standings-list" data-fit-list="120"></ul>
     <p id="lobby-standings-empty" class="hint hidden">No games yet — the first result lands here.</p>
     <button id="btn-close-standings" class="secondary">Close</button>
   </div>
@@ -1278,5 +1301,10 @@
 <script src="admob-init.js" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
 <script src="app.js" defer></script>
+<!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
+     only reads/sets layout: it picks how tight each screen's spacing needs
+     to be so the whole screen fits the phone it is on. See the top of the
+     file for how it works. -->
+<script src="layout.js?v=fit-2026-10-24" defer></script>
 </body>
 </html>
