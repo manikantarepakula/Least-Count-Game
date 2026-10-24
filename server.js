@@ -1245,7 +1245,21 @@ const MAX_BOTS = 7;
 // (and therefore "the start of the game") only begins partway into that
 // reveal, not the instant hands are dealt.
 // ---------------------------------------------------------------------------
-const COUNTDOWN_MS = 3000; // 3-2-1
+// ---------------------------------------------------------------------------
+// Round start (Oct 2026). The sequence above took ~13-16 seconds EVERY
+// round -- a 3-2-1 countdown (3s), the deck-count + shuffle intro (3.4s), the
+// deal, then a full-screen joker/open-card panel (2.5s) -- and the round
+// number, the one new fact, was never announced at all.
+//
+// Now the client shows "Round N" on the table instead of counting down, and
+// the joker and open card turn over in their own places on the table. The
+// deck-count/shuffle intro plays before the first round of a game only.
+//
+// The DEAL itself is unchanged, by request: one card at a time, seat to seat,
+// 13 times round the table. (A faster all-at-once deal was tried in Oct 2026
+// and players preferred this one.)
+// ---------------------------------------------------------------------------
+const COUNTDOWN_MS = 1600; // the "Round N" banner (was a 3-2-1 countdown)
 // The deal animation does one visual "flight" per card per player -- 13
 // passes each, matching the real hand size, not a shortened stand-in.
 // Total deal time scales with player count (a bigger table really does
@@ -1253,13 +1267,16 @@ const COUNTDOWN_MS = 3000; // 3-2-1
 // and thinner as more players join.
 const DEAL_PASSES = 13;
 const DEAL_FLIGHT_MS = 90; // time per individual card flight (travel + brief pause)
-// New intro phase, before the existing per-card deal animation: shows the
-// actual number of decks in play (so players can reason about card-count
-// probability), then a riffle-merge shuffle. Fixed duration regardless of
-// table size -- only the deck COUNT shown changes, not how long this takes.
+// The actual number of decks in play (so players can reason about
+// card-count probability), then a riffle-merge shuffle. First round only.
 const DECK_INTRO_MS = 3400;
-const REVEAL_MS = 2500; // joker/open-card reveal, held on screen
-const REVEAL_TO_TIMER_MS = 1200; // turn timer quietly starts this far into the reveal
+const REVEAL_MS = 1600; // joker, then open card, turning over on the table
+const REVEAL_TO_TIMER_MS = 1600; // first turn timer starts once both have turned
+
+// The intro is only worth its 3.4s the first time a table sees it.
+function introMsForRound(roundNumber) {
+  return roundNumber <= 1 ? DECK_INTRO_MS : 0;
+}
 
 // ---------------------------------------------------------------------------
 // Automatic round advance (Sept 2026).
@@ -3138,6 +3155,8 @@ function beginStartSequence(room, roomCode) {
     ? room.game.turnOrder
     : room.order;
   const dealMs = DEAL_PASSES * dealOrder.length * DEAL_FLIGHT_MS;
+  const roundNumber = room.game ? room.game.roundNumber : 1;
+  const introMs = introMsForRound(roundNumber);
   const deckCount = deckCountForPlayers(dealOrder.length);
   // Every 4th round the client plays an interstitial over this whole
   // sequence. Decided here, once, on the server, so all players get it at
@@ -3151,15 +3170,19 @@ function beginStartSequence(room, roomCode) {
 
   const adRound = isAdRoundNumber(room.game ? room.game.roundNumber : 0);
   room.currentDealMs = dealMs; // remembered so a mid-sequence rejoin replays with the same timing
+  room.currentIntroMs = introMs;
   broadcastRoom(room);
   io.to(roomCode).emit('game_starting', {
     countdownMs: COUNTDOWN_MS,
-    introMs: DECK_INTRO_MS,
+    introMs,
     deckCount,
     dealMs,
     dealPasses: DEAL_PASSES,
     revealMs: REVEAL_MS,
     adRound,
+    // For the "Round N · playing to 200" banner that replaces the countdown.
+    roundNumber,
+    eliminationScore: room.game ? room.game.eliminationScore : null,
     players: dealOrder.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
   });
 
@@ -3184,7 +3207,7 @@ function beginStartSequence(room, roomCode) {
       // few extra seconds means they aren't auto-played out of their own
       // first move by an ad we chose to show them.
     }, REVEAL_TO_TIMER_MS + (adRound ? AD_ROUND_TIMER_GRACE_MS : 0));
-  }, COUNTDOWN_MS + DECK_INTRO_MS + dealMs);
+  }, COUNTDOWN_MS + introMs + dealMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -4275,11 +4298,13 @@ io.on('connection', (socket) => {
         const dealOrder = (room.game.turnOrder && room.game.turnOrder.length) ? room.game.turnOrder : room.order;
         io.to(socket.id).emit('game_starting', {
           countdownMs: COUNTDOWN_MS,
-          introMs: DECK_INTRO_MS,
+          introMs: typeof room.currentIntroMs === 'number' ? room.currentIntroMs : introMsForRound(room.game.roundNumber),
           deckCount: deckCountForPlayers(dealOrder.length),
           dealMs: room.currentDealMs || DEAL_PASSES * dealOrder.length * DEAL_FLIGHT_MS,
           dealPasses: DEAL_PASSES,
           revealMs: REVEAL_MS,
+          roundNumber: room.game.roundNumber,
+          eliminationScore: room.game.eliminationScore,
           players: dealOrder.map((pid) => ({ playerId: pid, name: room.players.get(pid).name })),
         });
       } else if (room.game) {
