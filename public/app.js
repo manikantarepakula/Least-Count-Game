@@ -2076,6 +2076,20 @@
 
   // ---------------- screen management ----------------
   function showScreen(id) {
+    const prevActive = document.querySelector('.screen.active');
+    const prevId = prevActive ? prevActive.id : null;
+    // Lobby chat (Oct 2026) uses the same sheet as the table chat. When the
+    // game starts under it, close it: the countdown and the deal need the
+    // table, and anything said after this shows up on the chat button's
+    // unread badge at the table. Only on the actual lobby -> game switch --
+    // showScreen('screen-game') also runs on every game_state, and must not
+    // shut a sheet someone opened mid-game.
+    // Also on the way back to the home screen: a table chat has no business
+    // floating over it.
+    if ((prevId === 'screen-lobby' && id === 'screen-game') || (id === 'screen-landing' && prevId !== id)) {
+      const tablePanel = document.getElementById('chat-panel');
+      if (tablePanel && !tablePanel.classList.contains('hidden')) closeTableChat();
+    }
     document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     // Offer the tutorial whenever the landing screen comes up, not only on
@@ -2098,6 +2112,9 @@
       const backdrop = document.getElementById('group-chat-backdrop');
       if (!fab || !panel || !backdrop) return;
       if (!onGroup) {
+        // Release the held screen and the scroll lock if the sheet was open
+        // when we navigated away (see chatSheetOpened).
+        if (!panel.classList.contains('hidden')) chatSheetClosed();
         panel.classList.add('hidden');
         backdrop.classList.add('hidden');
         groupChatExpanded = false;
@@ -2287,6 +2304,67 @@
   // list instead of sliding the whole sheet around under your thumb.
   let chatSheetTopPx = null;
 
+  // ------------------------------------------------------------------
+  // Typing mode (Oct 2026). Reported: "once we click chat and the keyboard
+  // opens, it shows just one or two messages, and it affects the
+  // background".
+  //
+  // One or two messages: the top edge above stayed pinned at 40% of the
+  // screen while the keyboard pushed the bottom edge up, so on a 780px phone
+  // with a ~300px keyboard the sheet was left ~210px tall -- header and
+  // composer took ~110 of that and the conversation got the rest. While the
+  // keyboard is up the sheet now takes the whole visible area above it
+  // instead (on the game screen it stops short of the top bar, so the round
+  // and the turn timer stay in view). With the keyboard down it is the same
+  // 60% sheet as before, so the table is still watchable.
+  //
+  // The background: on the app the keyboard can shrink the whole WebView,
+  // which reflowed whatever screen was behind the sheet, and the WebView
+  // could scroll the page to "reveal" the input, leaving it shifted after
+  // the keyboard closed. While a chat sheet is open the screen behind it is
+  // now held at the height it had when the sheet opened, and the page is
+  // kept at scroll 0. Both are released the moment the sheet closes.
+  // ------------------------------------------------------------------
+  const CHAT_TYPING_GAP_GAME = 56;   // keeps .game-top (round + timer) visible
+  const CHAT_TYPING_GAP = 8;
+  // Visible height when the sheet was opened -- the keyboard is
+  // definitionally down then (the input is never auto-focused), so this is
+  // the yardstick for "the keyboard has taken a real bite out of the screen".
+  let chatSheetOpenVisibleH = null;
+  let chatFrozenScreen = null;
+
+  function chatInputFocused() {
+    const a = document.activeElement;
+    return !!a && (a.id === 'chat-input' || a.id === 'input-group-chat');
+  }
+  function keepPageAtTop() {
+    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+  }
+  // Called by every path that opens a chat sheet (table chat on the lobby or
+  // the table, group chat on the group screen).
+  function chatSheetOpened() {
+    chatSheetTopPx = null;
+    chatSheetOpenVisibleH = null;
+    const scr = document.querySelector('.screen.active');
+    // The game screen already pins its own height (applyKeyboardSafeLayout).
+    if (scr && scr.id !== 'screen-game' && !chatFrozenScreen) {
+      scr.style.height = Math.round(scr.getBoundingClientRect().height) + 'px';
+      chatFrozenScreen = scr;
+    }
+    window.addEventListener('scroll', keepPageAtTop, { passive: true });
+  }
+  // ...and every path that closes one. Safe to call twice.
+  function chatSheetClosed() {
+    chatSheetTopPx = null;
+    chatSheetOpenVisibleH = null;
+    if (chatFrozenScreen) {
+      chatFrozenScreen.style.height = '';
+      chatFrozenScreen = null;
+    }
+    window.removeEventListener('scroll', keepPageAtTop);
+    keepPageAtTop();
+  }
+
   function chatAdSafeBottom() {
     return parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue('--ad-safe-bottom')
@@ -2321,8 +2399,18 @@
 
     if (chatSheetTopPx === null) {
       chatSheetTopPx = Math.round(visibleTop + visibleH * (1 - CHAT_SHEET_FRACTION));
+      chatSheetOpenVisibleH = visibleH;
     }
-    let top = chatSheetTopPx;
+    // Typing mode (see chatSheetOpened above): the input has focus AND the
+    // keyboard has visibly taken space -- either the visible area shrank
+    // (the WebView was resized) or the bottom had to be lifted (the keyboard
+    // overlays the page). A hardware keyboard on a desktop does neither, so
+    // there the sheet stays at 60% and the table stays in view.
+    const keyboardUp = chatInputFocused() &&
+      ((chatSheetOpenVisibleH !== null && chatSheetOpenVisibleH - visibleH > 120) || lift > 80);
+    let top = keyboardUp
+      ? visibleTop + (document.body.classList.contains('game-active') ? CHAT_TYPING_GAP_GAME : CHAT_TYPING_GAP)
+      : chatSheetTopPx;
     // Keyboard ate the room: raise the top edge rather than clip the sheet.
     top = Math.min(top, bottomEdge - CHAT_SHEET_MIN_HEIGHT);
     // ...but never above the visible area (this is the clamp the old code
@@ -2370,9 +2458,19 @@
   window.addEventListener('orientationchange', () => {
     maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
     chatSheetTopPx = null;
+    // A screen held at the old orientation's height while a chat sheet is
+    // open would be the wrong shape now -- let it go, and re-hold it below
+    // once the rotation has settled.
+    const heldScreen = chatFrozenScreen;
+    if (heldScreen) { heldScreen.style.height = ''; chatFrozenScreen = null; }
     setTimeout(() => {
       maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
       chatSheetTopPx = null;
+      chatSheetOpenVisibleH = null;
+      if (heldScreen && heldScreen.classList.contains('active') && !chatFrozenScreen) {
+        heldScreen.style.height = Math.round(heldScreen.getBoundingClientRect().height) + 'px';
+        chatFrozenScreen = heldScreen;
+      }
       applyKeyboardSafeLayout();
       positionChatSheet();
     }, 300);
@@ -3679,8 +3777,9 @@
       fab.classList.add('hidden');
       groupChatSeenAt = Date.now();
       // Re-derive the top anchor from scratch on every open -- the one
-      // moment the keyboard is definitionally closed.
-      chatSheetTopPx = null;
+      // moment the keyboard is definitionally closed -- and hold the group
+      // screen still behind the sheet (see chatSheetOpened).
+      chatSheetOpened();
       positionChatSheet();
       scrollChatToLatest();
     } else {
@@ -3695,7 +3794,7 @@
       // out to the landing screen closes the sheet too, and a chat button
       // floating over the landing screen would be nonsense.
       fab.classList.toggle('hidden', !groupScreenCode);
-      chatSheetTopPx = null;
+      chatSheetClosed();
     }
     updateGroupChatUnread();
   }
@@ -3713,7 +3812,17 @@
     if (backdrop) backdrop.onclick = () => setGroupChatExpanded(false);
     const input = document.getElementById('input-group-chat');
     if (input) {
-      input.addEventListener('focus', () => setTimeout(positionChatSheet, 120));
+      // Same settle sequence as the table chat's input: the keyboard's
+      // resize events on Android WebView arrive late and in steps, so the
+      // sheet is re-placed a few times as it opens (each pass also keeps the
+      // newest message in view while the list changes height).
+      input.addEventListener('focus', () => {
+        const settle = () => { positionChatSheet(); scrollChatToLatest(); };
+        settle();
+        setTimeout(settle, 120);
+        setTimeout(settle, 350);
+        setTimeout(settle, 600);
+      });
       input.addEventListener('blur', () => setTimeout(positionChatSheet, 120));
     }
   })();
@@ -7954,23 +8063,31 @@
     document.getElementById('chat-fab').classList.add('hidden');
     document.getElementById('chat-panel').classList.add('hidden');
     document.getElementById('chat-backdrop').classList.add('hidden');
+    chatSheetClosed();
     chatUnread = 0;
+    updateChatBadge();
   }
 
   function updateChatBadge() {
-    const badge = document.getElementById('chat-badge');
-    // The toggle is a quiet outlined button on the hand-header row now, not a
-    // red floating circle, so unread needs to register on the button itself
-    // -- at that size the little badge alone is easy to miss mid-turn.
-    const fab = document.getElementById('chat-fab');
-    if (chatUnread > 0) {
-      badge.textContent = chatUnread > 9 ? '9+' : chatUnread;
-      badge.classList.remove('hidden');
-      if (fab) fab.classList.add('has-unread');
-    } else {
-      badge.classList.add('hidden');
-      if (fab) fab.classList.remove('has-unread');
-    }
+    // Two buttons open the same table chat: #chat-fab on the game screen's
+    // hand row, and #btn-lobby-chat in the lobby's top bar (Oct 2026). Both
+    // show the same unread count.
+    // The toggle is a quiet outlined button, not a red floating circle, so
+    // unread needs to register on the button itself -- at that size the
+    // little badge alone is easy to miss mid-turn.
+    [['chat-badge', 'chat-fab'], ['lobby-chat-badge', 'btn-lobby-chat']].forEach(([badgeId, btnId]) => {
+      const badge = document.getElementById(badgeId);
+      const btn = document.getElementById(btnId);
+      if (!badge) return;
+      if (chatUnread > 0) {
+        badge.textContent = chatUnread > 9 ? '9+' : chatUnread;
+        badge.classList.remove('hidden');
+        if (btn) btn.classList.add('has-unread');
+      } else {
+        badge.classList.add('hidden');
+        if (btn) btn.classList.remove('has-unread');
+      }
+    });
   }
 
   // Stable per-player avatar colour: same name/id always gets the same hue,
@@ -8123,6 +8240,12 @@
     // without reading every line.
     const isMine = msg.playerId === myPlayerId;
     const ts = msg.ts || Date.now();
+    // Only follow the conversation down if the reader is already at (or
+    // near) the bottom, or it's their own message. Someone scrolled up
+    // reading what was said earlier shouldn't be yanked away from it by
+    // every new line.
+    const followLatest = isMine || opts.silent ||
+      (container.scrollHeight - container.scrollTop - container.clientHeight) < 60;
 
     // Read the previous row off the DOM rather than keeping "last sender"
     // in a variable. A variable would have to be reset every time the chat
@@ -8195,7 +8318,7 @@
     // popover section below), so nothing gets attached per-message anymore.
 
     container.appendChild(div);
-    container.scrollTop = container.scrollHeight;
+    if (followLatest) container.scrollTop = container.scrollHeight;
 
     const panelOpen = !document.getElementById('chat-panel').classList.contains('hidden');
     if (!panelOpen && msg.playerId !== myPlayerId && !opts.silent) {
@@ -8386,11 +8509,7 @@
   function minimizeChatPanel() {
     const panel = document.getElementById('chat-panel');
     if (panel.classList.contains('hidden')) return;
-    document.getElementById('chat-input').blur();
-    panel.classList.add('hidden');
-    document.getElementById('chat-backdrop').classList.add('hidden');
-    document.getElementById('chat-fab').classList.remove('hidden');
-    chatSheetTopPx = null;
+    closeTableChat();
   }
 
   // Timestamp of the last time the player actually touched the chat panel
@@ -8427,7 +8546,13 @@
     setTimeout(positionChatSheet, 120);
   });
 
-  document.getElementById('chat-fab').onclick = () => {
+  // One open/close pair for the table chat, used by the button on the game
+  // screen's hand row (#chat-fab) AND, since Oct 2026, the chat button in
+  // the lobby's top bar. The lobby never had one: the toggle moved into the
+  // game screen's hand row in Sept 2026, which lives inside #screen-game, so
+  // from the lobby there was simply no way in -- even though the server has
+  // always accepted chat in the lobby and the history carries into the game.
+  function openTableChat() {
     // Point the shared positioner at THIS sheet -- the group chat may have
     // been the last one open, and a stale id here would leave this panel
     // unpositioned while silently resizing one that isn't on screen.
@@ -8440,9 +8565,10 @@
     updateChatBadge();
     // Re-derive the sheet's top anchor from scratch on every open. This is
     // the one moment a clean reading is guaranteed: the sheet is being
-    // opened by a tap on the FAB, so the keyboard is definitionally closed
-    // (we deliberately don't autofocus the input -- see below).
-    chatSheetTopPx = null;
+    // opened by a tap, so the keyboard is definitionally closed (we
+    // deliberately don't autofocus the input -- see below). chatSheetOpened()
+    // also holds the screen behind the sheet still while it's open.
+    chatSheetOpened();
     positionChatSheet();
     // Same fix as loadChatHistory() above -- land on the newest message
     // every time the sheet opens, not wherever it happened to be scrolled
@@ -8458,8 +8584,8 @@
     // WhatsApp/Instagram don't force the keyboard open when you open a
     // chat thread either -- tapping the input to type is a deliberate,
     // separate action.
-  };
-  document.getElementById('btn-chat-close').onclick = () => {
+  }
+  function closeTableChat() {
     // Drop focus FIRST so the on-screen keyboard closes with the sheet.
     // Without this the keyboard lingers over the table after the sheet is
     // gone, and the next visualViewport resize arrives with no sheet to
@@ -8468,9 +8594,15 @@
     document.getElementById('chat-input').blur();
     document.getElementById('chat-panel').classList.add('hidden');
     document.getElementById('chat-backdrop').classList.add('hidden');
+    // The hand-row button lives on the game screen, so re-showing it is
+    // harmless (invisible) while the lobby is up.
     document.getElementById('chat-fab').classList.remove('hidden');
-    chatSheetTopPx = null;
-  };
+    chatSheetClosed();
+  }
+  document.getElementById('chat-fab').onclick = openTableChat;
+  const lobbyChatBtn = document.getElementById('btn-lobby-chat');
+  if (lobbyChatBtn) lobbyChatBtn.onclick = openTableChat;
+  document.getElementById('btn-chat-close').onclick = closeTableChat;
   // Tapping the table behind the sheet closes it too -- standard
   // bottom-sheet behavior (same as tapping outside an Instagram/WhatsApp
   // comment or chat sheet). The layer is invisible now (see .chat-backdrop
@@ -8492,6 +8624,16 @@
   }
   wireMentionBar('chat-input', 'chat-mention-bar', tableChatPeople);
   document.getElementById('btn-chat-send').onclick = sendChat;
+  // Tapping Send must not take focus away from the text box (Oct 2026).
+  // A button takes focus on press, the box loses it, and the keyboard drops
+  // after every message -- so a quick back-and-forth meant reopening the
+  // keyboard each time, and the sheet jumping between its typing and normal
+  // sizes with it. Cancelling the press's default keeps focus in the box;
+  // the click itself still fires and sends.
+  ['btn-chat-send', 'btn-group-chat-send'].forEach((id) => {
+    const b = document.getElementById(id);
+    if (b) b.addEventListener('mousedown', (e) => e.preventDefault());
+  });
   document.getElementById('chat-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendChat();
   });
