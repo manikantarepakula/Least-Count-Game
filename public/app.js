@@ -938,9 +938,9 @@
     // wall-clock sweep, the awake-page backstop -- restores the open card and
     // joker, instead of one of them leaving the table blank.
     const scr = document.getElementById('screen-game');
-    if (scr) scr.classList.remove('deal-phase');
+    if (scr) scr.classList.remove('deal-phase', 'round-reveal');
     [
-      'deal-phase-badge', 'start-seq-countdown', 'deal-phase-label',
+      'deal-phase-badge', 'start-seq-countdown', 'deal-phase-label', 'round-intro',
       'deal-flyer', 'overlay-start-sequence', 'start-seq-reveal',
     ].forEach((id) => {
       const el = document.getElementById(id);
@@ -974,6 +974,10 @@
       startRevealDeadline = 0;
       const overlay = document.getElementById('overlay-start-sequence');
       if (overlay) overlay.classList.add('hidden');
+      // The reveal is now an in-place turn-over on the table (Oct 2026);
+      // its class is what has to come off.
+      const scrEl = document.getElementById('screen-game');
+      if (scrEl) scrEl.classList.remove('round-reveal');
       cleared = cleared ? 'sequence+reveal' : 'reveal';
     }
 
@@ -2504,25 +2508,46 @@
     // against a deadline that has already passed.
     hideRejoinOffer();
     rejoinAsked = false;
+    // A "LEAST COUNT" call still on screen belongs to the round that just
+    // ended -- and its timer must not start that round's reveal on top of
+    // this one.
+    clearDeclareCallout();
 
-    // The solid full-screen overlay is reserved for the joker/open-card
-    // reveal step only -- during countdown + dealing, the real oval table
-    // stays fully visible (cards fly to the actual chair positions), with
-    // just a small floating badge for the "3-2-1" / "Dealing..." text.
+    // No full-screen overlay at any point now (Oct 2026): the round banner,
+    // the deal and the joker/open-card turn-over all happen ON the table.
     document.getElementById('overlay-start-sequence').classList.add('hidden');
     document.getElementById('start-seq-reveal').classList.add('hidden');
 
     const badge = document.getElementById('deal-phase-badge');
     const countdownEl = document.getElementById('start-seq-countdown');
     const dealingLabel = document.getElementById('deal-phase-label');
+    const roundIntro = document.getElementById('round-intro');
     startSeqActive = true;
-    // Frees the centre of the table for the countdown -- see
+    // Frees the centre of the table for the banner -- see
     // #screen-game.deal-phase in style.css. Paired with the removal in
     // hideStartSeqUi(), which every exit route already goes through.
-    document.getElementById('screen-game').classList.add('deal-phase');
+    const scrGame = document.getElementById('screen-game');
+    scrGame.classList.remove('round-reveal');
+    scrGame.classList.add('deal-phase');
     badge.classList.remove('hidden');
-    countdownEl.classList.remove('hidden');
+    countdownEl.classList.add('hidden');
     dealingLabel.classList.add('hidden');
+
+    // "Round N" in place of the old 3-2-1 (Oct 2026). Same moment, but it
+    // carries the round number -- which nothing announced before -- what
+    // the table is playing to, and who goes first (players[0] is the first
+    // to play: the server deals in turn order, starting with them).
+    if (roundIntro) {
+      document.getElementById('round-intro-num').textContent = data.roundNumber ? String(data.roundNumber) : '';
+      const first = (data.players || [])[0];
+      const subParts = [];
+      if (data.eliminationScore) subParts.push('Playing to ' + data.eliminationScore);
+      if (first) subParts.push(first.playerId === myPlayerId ? 'You start' : displayName(first.name) + ' starts');
+      document.getElementById('round-intro-sub').textContent = subParts.join(' · ');
+      roundIntro.classList.add('hidden');
+      void roundIntro.offsetWidth;   // restart the entrance animation every round
+      roundIntro.classList.remove('hidden');
+    }
 
     // Build the real seats now, in the actual turn order the server just
     // dealt this round with (see beginStartSequence in server.js), each
@@ -2551,12 +2576,12 @@
     document.getElementById('btn-discard').disabled = true;
     document.getElementById('btn-declare').disabled = true;
 
-    const countdownMs = data.countdownMs || 3000;
-    const introMs = data.introMs || 3400;
+    // typeof checks, not `||`: introMs is legitimately 0 now (the deck
+    // intro only plays before round 1), and `0 || 3400` would bring it back.
+    const countdownMs = typeof data.countdownMs === 'number' ? data.countdownMs : 3000;
+    const introMs = typeof data.introMs === 'number' ? data.introMs : 3400;
     const deckCount = data.deckCount || 2;
     const dealMs = data.dealMs || 1500;
-    const steps = 3; // "3", "2", "1"
-    const stepMs = countdownMs / steps;
 
     // The instant past which none of this chrome may still be on screen,
     // whatever the timers did or did not do. Generous on purpose: the whole
@@ -2565,59 +2590,75 @@
     // moment the reveal runs normally (see showStartReveal).
     startSeqDeadline = Date.now() + countdownMs + introMs + dealMs + 9000;
 
-    function showCountdownStep(n) {
-      if (n <= 0) {
-        countdownEl.classList.add('hidden');
-        dealingLabel.classList.remove('hidden');
+    // The banner holds for countdownMs, then the deal -- with the deck-count
+    // and shuffle intro in front of it only when the server sent one (the
+    // first round of a game). The deal itself, and its "Dealing cards..."
+    // line, are exactly as before: players preferred it to a faster
+    // all-at-once deal that was tried here.
+    function afterBanner() {
+      if (roundIntro) roundIntro.classList.add('hidden');
+      dealingLabel.classList.remove('hidden');
+      if (introMs > 0) {
+        // Sets its own "Setting up N decks..." / "Shuffling..." text, and
+        // hands back "Dealing cards..." as the deal starts.
         runDeckIntro(deckCount, introMs, () => {
           animateDealing(data.players || [], dealMs, data.dealPasses || 13);
         });
-        startSeqTimer = setTimeout(() => {
-          // Countdown + intro + deal animation are all done.
-          //
-          // THE RACE THIS FIXES: setting the flag and waiting for the next
-          // game_state assumes the server's post-deal state has not arrived
-          // yet. Often it has -- the server deals instantly while this
-          // client is still animating, and a backgrounded or slow phone
-          // widens the gap. That state passes through the handler with the
-          // flag still false, the flag goes true a moment later, and then
-          // NOTHING consumes it until somebody takes a turn. The dealing
-          // badge sits on top of a live table until then, which is the
-          // stuck counter players reported.
-          //
-          // So: if the state we were waiting for is already in hand, use it
-          // now instead of waiting for another one that may be seconds away.
-          pendingStartReveal = true;
-          if (latestGame) {
-            pendingStartReveal = false;
-            showStartReveal(latestGame, lastStartRevealMs);
-          }
-        }, introMs + dealMs);
-
-        // Last resort for the case where this page is AWAKE but the reveal
-        // never arrives -- no game_state, an exception inside
-        // showStartReveal, a server that goes quiet. Cheap to keep, and on a
-        // foreground page it reacts faster than waiting for the next state
-        // push.
-        //
-        // It is explicitly NOT the fix for the stuck-badge bug, and must not
-        // be mistaken for it again: this is a setTimeout, so a backgrounded
-        // WebView freezes it along with everything else. The real guarantee
-        // is startSeqDeadline + sweepStaleStartUi(), which run off the wall
-        // clock. See the note by those declarations.
-        setTimeout(() => {
-          if (!startSeqActive) return;
-          startSeqActive = false;
-          startSeqDeadline = 0;
-          console.warn('[start] reveal never arrived; clearing the dealing badge');
-          hideStartSeqUi();
-        }, introMs + dealMs + 8000);
-        return;
+      } else {
+        dealingLabel.textContent = 'Dealing cards...';
+        // A fraction quicker than the server's deal time (~4ms a card), so
+        // the last card lands just before the real hands arrive -- the same
+        // margin round 1 has always had, because its shuffle ends ~220ms
+        // early.
+        animateDealing(data.players || [], Math.max(0, dealMs - 220), data.dealPasses || 13);
       }
-      countdownEl.textContent = String(n);
-      startSeqTimer = setTimeout(() => showCountdownStep(n - 1), stepMs);
+      startSeqTimer = setTimeout(() => {
+        // Countdown + intro + deal animation are all done.
+        //
+        // THE RACE THIS FIXES: setting the flag and waiting for the next
+        // game_state assumes the server's post-deal state has not arrived
+        // yet. Often it has -- the server deals instantly while this
+        // client is still animating, and a backgrounded or slow phone
+        // widens the gap. That state passes through the handler with the
+        // flag still false, the flag goes true a moment later, and then
+        // NOTHING consumes it until somebody takes a turn. The dealing
+        // badge sits on top of a live table until then, which is the
+        // stuck counter players reported.
+        //
+        // So: if the state we were waiting for is already in hand, use it
+        // now instead of waiting for another one that may be seconds away.
+        //
+        // ...but only if it IS the new round's state. From round 2 on,
+        // latestGame still holds the round that just ended until the new one
+        // arrives (roundOver: true), and revealing that would turn over last
+        // round's joker and open card. In that case wait for the real one.
+        pendingStartReveal = true;
+        if (latestGame && !latestGame.roundOver) {
+          pendingStartReveal = false;
+          showStartReveal(latestGame, lastStartRevealMs);
+        }
+      }, introMs + dealMs);
+
+      // Last resort for the case where this page is AWAKE but the reveal
+      // never arrives -- no game_state, an exception inside
+      // showStartReveal, a server that goes quiet. Cheap to keep, and on a
+      // foreground page it reacts faster than waiting for the next state
+      // push.
+      //
+      // It is explicitly NOT the fix for the stuck-badge bug, and must not
+      // be mistaken for it again: this is a setTimeout, so a backgrounded
+      // WebView freezes it along with everything else. The real guarantee
+      // is startSeqDeadline + sweepStaleStartUi(), which run off the wall
+      // clock. See the note by those declarations.
+      setTimeout(() => {
+        if (!startSeqActive) return;
+        startSeqActive = false;
+        startSeqDeadline = 0;
+        console.warn('[start] reveal never arrived; clearing the dealing badge');
+        hideStartSeqUi();
+      }, introMs + dealMs + 8000);
     }
-    showCountdownStep(steps);
+    startSeqTimer = setTimeout(afterBanner, countdownMs);
   }
 
   // Pre-deal intro: places the real number of decks in play for this table
@@ -2767,6 +2808,12 @@
     let flight = 0;
     let cancelled = false;
     dealAnimationCancel = () => { cancelled = true; flyer.classList.add('hidden'); };
+    // The chairs drawn for the deal (runStartSequence, all at "0 cards").
+    // Counts are only ever written onto these: if the real game state lands
+    // while a card or two is still in the air (timer drift on a busy phone),
+    // the real chairs it draws already carry the real counts, and a late
+    // card must not add to them.
+    const dealSeats = new Set(oval.querySelectorAll('.seat'));
 
     // Snap the flyer to the table's center once, up front -- this is the
     // ONLY time it starts from center. Every flight after this continues
@@ -2813,7 +2860,7 @@
       flyer.style.top = to.y + 'px';
       setTimeout(() => {
         if (cancelled) return;
-        const metaEl = seatEl.querySelector('.seat-meta');
+        const metaEl = dealSeats.has(seatEl) ? seatEl.querySelector('.seat-meta') : null;
         if (metaEl) {
           const cur = parseInt(metaEl.textContent, 10) || 0;
           metaEl.textContent = (cur + 1) + ' cards';
@@ -2833,8 +2880,18 @@
   }
 
   // Called once the first post-deal game_state arrives (pendingStartReveal
-  // was set true by runStartSequence above). Shows the joker rank + open
-  // card big or held on screen, then reveals the live board underneath.
+  // was set true by runStartSequence above).
+  //
+  // ON THE TABLE now (Oct 2026). This used to open a solid full-screen
+  // panel with a big Joker and Open Card, hold it, then remove it -- so the
+  // two cards never visibly went anywhere: the panel vanished and they were
+  // simply already sitting in the middle of the table. Now the table itself
+  // is the stage. renderGame() has already put both cards in their real
+  // places; the .round-reveal class turns them over there -- the Joker
+  // first, with "Every Q = 0" under it, then the Open Card -- and comes off
+  // again once they have settled. Nothing is covered, and the place the
+  // eye is taught to look is the place the cards stay all round.
+  var roundRevealAt = 0;
   function showStartReveal(game, revealMs) {
     startSeqActive = false;
     // The countdown/deal phase is over, so its deadline no longer applies --
@@ -2844,36 +2901,34 @@
     // The reveal takes over the centre of the table next, so the deal class
     // comes off here too -- this path hides the badge directly rather than
     // going through hideStartSeqUi().
-    document.getElementById('screen-game').classList.remove('deal-phase');
+    const scr = document.getElementById('screen-game');
+    scr.classList.remove('deal-phase');
     document.getElementById('deal-phase-badge').classList.add('hidden');
+    // The deal is over once the cards are being revealed -- stop any card
+    // still in the air rather than let it cross the revealed table.
+    if (dealAnimationCancel) { try { dealAnimationCancel(); } catch (e) {} dealAnimationCancel = null; }
     document.getElementById('deal-flyer').classList.add('hidden');
-    const overlay = document.getElementById('overlay-start-sequence');
-    const revealEl = document.getElementById('start-seq-reveal');
-    overlay.classList.remove('hidden');
-    revealEl.classList.remove('hidden');
-
-    const jokerSlot = document.getElementById('start-seq-joker-card');
-    const openSlot = document.getElementById('start-seq-open-card');
-    jokerSlot.innerHTML = '';
-    openSlot.innerHTML = '';
-    jokerSlot.appendChild(game.roundJokerRank
-      ? cardEl({ rank: game.roundJokerRank, suit: null }, { wild: true })
-      : cardEl({ rank: 'JOKER', suit: null }));
-    if (game.openCard) openSlot.appendChild(cardEl(game.openCard));
+    document.getElementById('overlay-start-sequence').classList.add('hidden');
+    document.getElementById('start-seq-reveal').classList.add('hidden');
 
     if (startSeqTimer) { clearTimeout(startSeqTimer); startSeqTimer = null; }
-    const holdMs = revealMs || 5000;
-    // Wall-clock backstop for this overlay specifically. It previously had
-    // NO escape route other than the timer below -- renderGame's catch-all
-    // only ever knew about the dealing badge -- which is why the joker and
-    // open card stuck on screen in exactly the same way as the countdown,
-    // and why fixing only the badge would have left half the bug in place.
+    const holdMs = revealMs || 1600;
+    // Restart the turn-over animation even if the class is somehow still on
+    // from a previous round.
+    scr.classList.remove('round-reveal');
+    void scr.offsetWidth;
+    scr.classList.add('round-reveal');
+    // renderGame reads this to keep the animation continuous when a state
+    // push rebuilds the two cards part-way through it.
+    roundRevealAt = Date.now();
+    // Wall-clock backstop: if timers freeze (a backgrounded WebView), the
+    // sweep takes the class off at the next opportunity.
     startRevealDeadline = Date.now() + holdMs + 4000;
     startSeqTimer = setTimeout(() => {
-      overlay.classList.add('hidden');
+      scr.classList.remove('round-reveal');
       startSeqTimer = null;
       startRevealDeadline = 0;
-    }, holdMs);
+    }, holdMs + 400);
   }
 
   // sessionToken is the credential that proves this device owns the seat, and
@@ -5994,6 +6049,8 @@
       if (game && game.eliminated && game.eliminated.includes(p.playerId)) seatEl.classList.add('eliminated');
       if (game && game.quit && game.quit.includes(p.playerId)) seatEl.classList.add('quit');
       if (p.playerId === myPlayerId && myTurnPulseActive) seatEl.classList.add('my-turn-pulse');
+      // The caller's chair, while their LEAST COUNT call is on screen.
+      if (declareSpotlightId && declareSpotlightId === p.playerId) seatEl.classList.add('declaring');
       // Keep the seat fully on screen. The ring puts side seats at 7% and
       // 93% of the table and, at 96px wide centred on that point, they hung
       // 5px off each edge on a 375px phone -- measured on the live build,
@@ -6339,11 +6396,44 @@
     }
   });
 
+  // ---------------- turn strip (Oct 2026) ----------------
+  // "Your turn -- pick a card" / "Mani's turn", with the seconds beside it.
+  // Before this the only signal was a gold glow on one chair and a bare
+  // "15s" in the top bar that never said whose fifteen seconds they were.
+  // The words are set here on every render; the seconds by the timer tick.
+  // Bots get no countdown: their "turn time" is a think-delay the server
+  // picks, and a clock running down on a bot reads as something wrong.
+  let turnStripShowsSeconds = false;
+  function renderTurnStrip(game) {
+    const strip = document.getElementById('turn-strip');
+    if (!strip) return;
+    const show = !!(game && !game.roundOver && game.currentPlayer && !revealPhaseActive);
+    strip.classList.toggle('hidden', !show);
+    if (!show) { turnStripShowsSeconds = false; return; }
+    const mine = game.currentPlayer === myPlayerId;
+    const chain = game.chainCount > 0;
+    const who = mine ? 'Your turn' : playerName(game.currentPlayer) + '\u2019s turn';
+    const hint = mine ? (chain ? ' \u2014 play a 2 or take the penalty' : ' \u2014 pick a card') : '';
+    document.getElementById('turn-strip-text').textContent = who + hint;
+    strip.classList.toggle('mine', mine);
+    const cur = latestRoom && (latestRoom.players || []).find((p) => p && p.playerId === game.currentPlayer);
+    turnStripShowsSeconds = !(cur && cur.isBot);
+    if (!game.turnDeadline || !turnStripShowsSeconds) {
+      document.getElementById('turn-strip-time').textContent = '';
+      strip.classList.remove('low');
+    }
+  }
+
   // ---------------- turn timer ----------------
   function updateTurnTimerDisplay(deadline) {
     const el = document.getElementById('turn-timer');
     if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
-    if (!deadline) { el.classList.add('hidden'); return; }
+    if (!deadline) {
+      el.classList.add('hidden');
+      const stripTime = document.getElementById('turn-strip-time');
+      if (stripTime) stripTime.textContent = '';
+      return;
+    }
 
     // How long this turn was given, measured rather than hardcoded: the server
     // uses TURN_SECONDS for people and a shorter, per-character delay for bots,
@@ -6364,6 +6454,12 @@
       document.getElementById('timer-seconds').textContent = remaining;
       el.classList.remove('hidden');
       el.classList.toggle('low', remaining <= 10);
+      // The same seconds in the turn strip, next to whose turn it is.
+      const strip = document.getElementById('turn-strip');
+      const stripTime = document.getElementById('turn-strip-time');
+      const mineNow = !!(latestGame && !latestGame.roundOver && latestGame.currentPlayer === myPlayerId);
+      if (stripTime) stripTime.textContent = turnStripShowsSeconds ? remaining + 's' : '';
+      if (strip) strip.classList.toggle('low', turnStripShowsSeconds && mineNow && remaining <= 5);
       // The second of the two things that vibrate. Guarded to YOUR turn --
       // buzzing while a bot's clock runs down would mean nothing, and this
       // tick runs for every player's timer, not just yours.
@@ -6412,6 +6508,20 @@
         badge.className = 'card-count-badge';
         badge.textContent = '×' + g.cards.length;
         el.appendChild(badge);
+      }
+      // A card you just drew is marked NEW for a moment (see showDrawReveal).
+      // The negative delay keeps the fade continuous across re-renders --
+      // every state push rebuilds these tiles, and without it the mark would
+      // restart from full strength each time.
+      const drawnAgo = Date.now() - recentDrawAt;
+      if (recentDrawIds && recentDrawIds.size && drawnAgo < DRAW_NEW_MS && g.cards.some((c) => recentDrawIds.has(c.id))) {
+        el.classList.add('just-drawn');
+        el.style.animationDelay = -drawnAgo + 'ms';
+        const tag = document.createElement('span');
+        tag.className = 'new-tag';
+        tag.textContent = 'NEW';
+        tag.style.animationDelay = -drawnAgo + 'ms';
+        el.appendChild(tag);
       }
       if (selectable) {
         el.onclick = duringChain ? () => submitChainTwo(rep) : () => toggleSelectGroup(g);
@@ -6479,23 +6589,45 @@
     const roundEl = document.getElementById('game-round');
     if (roundEl) roundEl.textContent = game.roundNumber ? 'Round ' + game.roundNumber : '';
 
+    // The turn strip first, so the timer tick below can write its seconds
+    // into a strip that already says whose turn it is.
+    renderTurnStrip(game);
     updateTurnTimerDisplay(game.roundOver ? null : game.turnDeadline);
     renderOvalTable(game);
 
     document.getElementById('stock-count').textContent = game.stockCount;
     const openSlot = document.getElementById('open-card-slot');
     openSlot.innerHTML = '';
-    if (game.openCard) openSlot.appendChild(cardEl(game.openCard));
+    // Every state push rebuilds these two cards. While the round-start
+    // turn-over is playing (showStartReveal), give each new element a delay
+    // that picks the animation up where the last one was -- otherwise a
+    // state arriving mid-reveal (the first turn timer starting, say) flips
+    // the cards over a second time.
+    const revealAgo = roundRevealAt ? Date.now() - roundRevealAt : Infinity;
+    const midReveal = revealAgo < 2500;
+    if (game.openCard) {
+      const openEl = cardEl(game.openCard);
+      if (midReveal) openEl.style.animationDelay = (550 - revealAgo) + 'ms';
+      openSlot.appendChild(openEl);
+    }
 
     // Show the round's wild rank as an actual mini card, same treatment as
     // the Open Card, instead of bare text -- no suit, gold border to mark
     // it as "worth 0 this round" (matches the wild-card highlight in hand).
     const jokerSlot = document.getElementById('joker-indicator');
     jokerSlot.innerHTML = '';
-    if (game.roundJokerRank) {
-      jokerSlot.appendChild(cardEl({ rank: game.roundJokerRank, suit: null }, { wild: true }));
-    } else {
-      jokerSlot.appendChild(cardEl({ rank: 'JOKER', suit: null }));
+    const jokerEl = game.roundJokerRank
+      ? cardEl({ rank: game.roundJokerRank, suit: null }, { wild: true })
+      : cardEl({ rank: 'JOKER', suit: null });
+    // Two animations on the joker (turn-over, then glow) -- two delays.
+    if (midReveal) jokerEl.style.animationDelay = (0 - revealAgo) + 'ms, ' + (450 - revealAgo) + 'ms';
+    jokerSlot.appendChild(jokerEl);
+    // What the joker MEANS, under it (Oct 2026). A bare "Q" with a gold
+    // border left new players to work out that every Queen in their hand
+    // was now worth nothing.
+    const jokerCaption = document.getElementById('joker-caption');
+    if (jokerCaption) {
+      jokerCaption.textContent = game.roundJokerRank ? 'Every ' + game.roundJokerRank + ' = 0' : 'Jokers = 0';
     }
 
     // The +2 chain status is now visible to EVERYONE at the table (not just
@@ -6589,9 +6721,11 @@
       try {
         logAnalytics('round_completed', Object.assign({ round: game.roundNumber }, analyticsGameInfo(game)));
       } catch (e) { /* never let analytics touch the reveal */ }
-      // Cards face-up at each chair first; the scorecard follows once the
-      // player taps or the hold elapses (see startRevealPhase above).
-      startRevealPhase(game);
+      // The call first -- who said LEAST COUNT, then whether it was right
+      // (see announceDeclare) -- then cards face-up at each chair; the
+      // scorecard follows once the player taps or the hold elapses (see
+      // startRevealPhase above).
+      announceDeclare(game, () => startRevealPhase(game));
     }
   }
 
@@ -6855,6 +6989,82 @@
       renderGame(game);
       showRoundResult(game);
     }
+  }
+
+  // --------------------------------------------------------------------
+  // The LEAST COUNT call (Oct 2026).
+  //
+  // The biggest moment in the game -- someone stakes the round on having
+  // the lowest hand -- used to arrive as one plain line of text in the
+  // middle of the table, at the same instant as the cards going face-up.
+  // Players asked how everyone else is even told it happened.
+  //
+  // Now every player sees it in two beats before the cards turn over:
+  //   1. THE CALL  -- "Mani calls" over LEAST COUNT in the wordmark's gold
+  //                   capitals, stamped onto the table; their chair lights up.
+  //   2. THE VERDICT -- "Correct" (with a short burst of confetti) or
+  //                   "Wrong call · +75" (with a shake), and its sound.
+  // Then the existing reveal takes over: hands face-up at each chair, and
+  // the scorecard after it. About 2.3 seconds in all.
+  //
+  // `var` for the same dead-zone reason as the draw marks above:
+  // renderOvalTable reads declareSpotlightId and sits far above this block.
+  // --------------------------------------------------------------------
+  var declareSpotlightId = null;
+  var declareCalloutTimers = [];
+  var DECLARE_CALL_MS = 1100;
+  var DECLARE_VERDICT_MS = 1300;
+
+  function clearDeclareCallout() {
+    (declareCalloutTimers || []).forEach(clearTimeout);
+    declareCalloutTimers = [];
+    declareSpotlightId = null;
+    const el = document.getElementById('declare-callout');
+    if (el) el.classList.add('hidden');
+    releaseTransient('declare-callout');
+  }
+
+  function announceDeclare(game, done) {
+    const r = game && game.lastRoundResult;
+    const el = document.getElementById('declare-callout');
+    if (!r || !r.declaredBy || !el) { done(); return; }
+    clearDeclareCallout();
+    const mine = r.declaredBy === myPlayerId;
+    document.getElementById('declare-callout-who').textContent =
+      mine ? 'You call' : playerName(r.declaredBy) + ' calls';
+    const verdict = document.getElementById('declare-callout-verdict');
+    verdict.className = 'declare-callout-verdict hidden';
+    verdict.textContent = '';
+    el.classList.remove('correct', 'wrong', 'hidden');
+    // Restart the stamp animation even if the last call is still fading.
+    el.classList.remove('calling');
+    void el.offsetWidth;
+    el.classList.add('calling');
+    declareSpotlightId = r.declaredBy;
+    renderOvalTable(game);   // light up the caller's chair
+    // The declarer already heard their own tap; everyone else hears the call.
+    if (!mine) { try { Sound.declareTap(); } catch (e) { /* sound never blocks */ } }
+    holdTransient('declare-callout', DECLARE_CALL_MS + DECLARE_VERDICT_MS);
+
+    declareCalloutTimers.push(setTimeout(() => {
+      const penalty = (r.roundScores || {})[r.declaredBy];
+      verdict.textContent = r.correct
+        ? '\u2713 Correct'
+        : '\u2717 Wrong call' + (penalty !== undefined ? ' \u00b7 +' + penalty : '');
+      verdict.className = 'declare-callout-verdict ' + (r.correct ? 'ok' : 'bad');
+      el.classList.add(r.correct ? 'correct' : 'wrong');
+      try { if (r.correct) Sound.declareCorrect(); else Sound.declareWrong(); } catch (e) { /* never block */ }
+      if (r.correct) { try { launchConfetti({ pieces: 70, durationMs: 1900 }); } catch (e) { /* decoration */ } }
+    }, DECLARE_CALL_MS));
+
+    declareCalloutTimers.push(setTimeout(() => {
+      el.classList.add('hidden');
+      el.classList.remove('calling', 'correct', 'wrong');
+      releaseTransient('declare-callout');
+      declareSpotlightId = null;
+      declareCalloutTimers = [];
+      done();
+    }, DECLARE_CALL_MS + DECLARE_VERDICT_MS));
   }
 
   // Selecting a grouped tile selects/deselects every card in that rank-group
@@ -7628,7 +7838,10 @@
   // a burst of colored rectangles falling with gravity and a little spin,
   // fading out near the end. Fires once when the game-over screen appears.
   let confettiRunning = false;
-  function launchConfetti() {
+  // opts (Oct 2026): { pieces, durationMs } -- a correct LEAST COUNT call
+  // gets a shorter, lighter burst than winning the whole game.
+  function launchConfetti(opts) {
+    opts = opts || {};
     if (confettiRunning) return;
     const canvas = document.getElementById('confetti-canvas');
     const ctx = canvas.getContext('2d');
@@ -7642,7 +7855,7 @@
     // this used to still be the pre-redesign gold/green/purple palette,
     // clashing with the theme for the ~3 seconds it's on screen.
     const colors = ['#d4a017', '#f2c14e', '#e5252c', '#a8151a', '#ffffff'];
-    const pieces = Array.from({ length: 140 }, () => ({
+    const pieces = Array.from({ length: opts.pieces || 140 }, () => ({
       x: Math.random() * canvas.width,
       y: -20 - Math.random() * canvas.height * 0.5,
       w: 6 + Math.random() * 6,
@@ -7654,7 +7867,7 @@
       color: colors[Math.floor(Math.random() * colors.length)],
     }));
 
-    const durationMs = 3200;
+    const durationMs = opts.durationMs || 3200;
     const startedAt = Date.now();
 
     function frame() {
@@ -7910,6 +8123,9 @@
       document.getElementById('screen-game').classList.remove('reveal-phase');
       closePlayerActionPopover();
       playerStatsCache.clear();
+      // A LEAST COUNT call still on screen would otherwise finish after we
+      // have left and open that round's scorecard over the home screen.
+      clearDeclareCallout();
       hideChatUI();
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
@@ -8991,7 +9207,10 @@
     } catch (e) {
       console.warn('[fx] table flourish failed (state still applied):', e && e.message);
     }
-    if (!prev.roundOver && game.roundOver && game.lastRoundResult) {
+    // The declare verdict sound now plays inside announceDeclare (Oct 2026),
+    // on the beat where the verdict appears, rather than here at the same
+    // instant as the call.
+    if (!prev.roundOver && game.roundOver && game.lastRoundResult && !game.lastRoundResult.declaredBy) {
       if (game.lastRoundResult.correct) Sound.declareCorrect();
       else Sound.declareWrong();
     }
@@ -9006,26 +9225,45 @@
   }
 
   // ---------------- drawn-card reveal ----------------
-  // Shows exactly which card(s) a player just drew as a penalty, face-up, for
-  // a couple of seconds -- so they get that little moment of joy/disappointment
-  // before it just quietly joins their hand.
+  // Shows exactly which card(s) a player just drew as a penalty -- so they
+  // get that little moment of joy/disappointment before it just quietly
+  // joins their hand.
+  //
+  // IN THE HAND, not over the table (Oct 2026). This used to be a
+  // full-screen panel that darkened the whole table for 2.5 seconds on
+  // almost every turn (any discard that doesn't match the open card draws
+  // one), see-through, so whatever sat under it -- usually your own chair --
+  // showed through the card. Meanwhile the next players' moves happened
+  // behind it. Now the card flies from the middle of the table into your
+  // hand, lands marked NEW (renderHandTiles), and a one-line note above your
+  // cards says what it was. Nothing is covered and nothing is blocked.
+  //
+  // `var`, not let/const: renderHandTiles reads these, and it lives far
+  // above this block -- the same dead-zone rule as the other ad flags.
+  var recentDrawIds = new Set();
+  var recentDrawAt = 0;
+  var DRAW_NEW_MS = 2400;
+  var DRAW_TOAST_MS = 2000;
   let drawRevealTimeout = null;
+  let drawNewRefresh = null;
+
+  function cardShortLabel(c) {
+    if (!c) return 'a card';
+    if (c.rank === 'JOKER') return 'a Joker';
+    return c.rank + (SUIT_SYMBOL[c.suit] || '');
+  }
+
   function showDrawReveal(cards) {
     if (!cards || cards.length === 0) return;
 
     // ------------------------------------------------------------------
-    // Wait for any card still in flight before covering the table.
+    // Wait for any card still in flight before this one starts.
     //
-    // This overlay and the discard flight were firing simultaneously. A
-    // discard that MATCHES the open card (or gets the joker free pass) draws
-    // no penalty, so no 'cards_drawn' arrives and the flight plays cleanly --
-    // but any other discard draws one, and this full-screen overlay landed
-    // on top of a card that was still mid-air, 180ms into a 2500ms cover.
-    // That is why the animation only looked right on matching discards.
-    //
-    // Sequencing them also puts the events in their true causal order: your
-    // card leaves your hand, THEN the penalty arrives. Simultaneous, it read
-    // as one confused moment.
+    // The penalty and the discard flight used to fire simultaneously, so
+    // the penalty landed on top of a card that was still mid-air. Sequencing
+    // them also puts the events in their true causal order: your card
+    // leaves your hand, THEN the penalty arrives. Simultaneous, it read as
+    // one confused moment.
     // ------------------------------------------------------------------
     const wait = Math.max(0, flightBusyUntil - Date.now());
     if (wait > 0) {
@@ -9040,27 +9278,57 @@
     // ('cards_drawn') is the only signal that actually tells a client it
     // drew cards. See the note in playSoundsForTransition().
     try { buzz(cards.length > 1 ? [40, 70, 40] : 40); } catch (e) { /* no haptics, no matter */ }
-    const overlay = document.getElementById('draw-reveal');
-    const container = document.getElementById('draw-reveal-cards');
-    const label = document.getElementById('draw-reveal-label');
-    label.textContent = cards.length > 1
-      ? `You drew ${cards.length} cards`
-      : 'You drew';
-    container.innerHTML = '';
-    cards.forEach((c) => container.appendChild(cardEl(c)));
-    overlay.classList.remove('hidden');
-    if (drawRevealTimeout) clearTimeout(drawRevealTimeout);
-    // This panel had exactly one reference in the whole file and no escape
-    // route but the timer below, while firing on every single penalty draw --
-    // the most frequently-exposed instance of the frozen-timer bug in the
-    // app. The timer is still the normal path; the deadline is what survives
-    // the page being backgrounded mid-draw.
-    const DRAW_REVEAL_MS = 2500;
-    holdTransient('draw-reveal', DRAW_REVEAL_MS);
-    drawRevealTimeout = setTimeout(() => {
-      overlay.classList.add('hidden');
-      releaseTransient('draw-reveal');
-    }, DRAW_REVEAL_MS);
+
+    // Mark them NEW in the hand. The state carrying the new card may already
+    // be here (then re-render now so the mark shows) or arrive a moment
+    // later (then its own render picks the mark up).
+    recentDrawIds = new Set(cards.map((c) => c.id));
+    recentDrawAt = Date.now();
+    const canRender = () => latestGame && !latestGame.roundOver && !revealPhaseActive;
+    if (canRender() && (latestGame.yourHand || []).some((c) => recentDrawIds.has(c.id))) renderGame(latestGame);
+    // ...and once more when the mark is due to come off, so it does.
+    if (drawNewRefresh) clearTimeout(drawNewRefresh);
+    drawNewRefresh = setTimeout(() => { drawNewRefresh = null; if (canRender()) renderGame(latestGame); }, DRAW_NEW_MS + 60);
+
+    // Fly them in, face up, from the middle of the table to where they land
+    // in the hand (the end of the tray if the new tile isn't drawn yet).
+    try {
+      const centre = document.querySelector('#oval-table .table-center');
+      const hand = document.getElementById('hand');
+      if (centre && hand) {
+        const c = centre.getBoundingClientRect();
+        const w = 44, h = 62;
+        const from = { left: c.left + c.width / 2 - w / 2, top: c.top + c.height / 2 - h / 2, w, h };
+        cards.slice(0, 3).forEach((card, i) => {
+          setTimeout(() => {
+            const tile = hand.querySelector('.card.just-drawn');
+            const hr = hand.getBoundingClientRect();
+            const to = tile ? flyRect(tile)
+              : { left: hr.right - w - 10, top: hr.top + 4, w, h };
+            flyCard(from, to, card, {});
+          }, i * 120);
+        });
+      }
+    } catch (e) { /* decoration only -- never let it stop the turn */ }
+
+    // One line just above your cards saying what it was.
+    const toast = document.getElementById('draw-toast');
+    if (toast) {
+      toast.textContent = cards.length > 1
+        ? `You drew ${cards.length} cards`
+        : 'You drew ' + cardShortLabel(cards[0]);
+      toast.classList.add('hidden');
+      void toast.offsetWidth;   // restart the pop-in if one is already up
+      toast.classList.remove('hidden');
+      if (drawRevealTimeout) clearTimeout(drawRevealTimeout);
+      // Same wall-clock guard as every other timer-dismissed element here,
+      // so a backgrounded phone can't leave it stuck on screen.
+      holdTransient('draw-toast', DRAW_TOAST_MS);
+      drawRevealTimeout = setTimeout(() => {
+        toast.classList.add('hidden');
+        releaseTransient('draw-toast');
+      }, DRAW_TOAST_MS);
+    }
   }
   socket.on('cards_drawn', ({ cards }) => showDrawReveal(cards));
 
