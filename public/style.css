@@ -3685,3 +3685,265 @@ body.game-active .bg-scrim { display: none; }
   background: rgba(242,193,78,0.12); border: 1px solid rgba(242,193,78,0.35);
   color: var(--gold-bright); font-size: 13px; font-weight: 600; line-height: 1.35;
 }
+
+
+/* ==========================================================================
+   FIT-TO-SCREEN LAYER (Oct 2026)
+   ==========================================================================
+   Goal: every screen fits the phone it is on, without scrolling, from a
+   360x640 phone with the ad banner up to a laptop -- and without guessing
+   breakpoints. Three parts:
+
+   1. Structure. The lobby's Start Game / Leave Table moved into a pinned
+      bar (.screen-actions) that can never scroll away; Home's Quick Room and
+      Join cards merged into one "Play with friends" card; the group screen's
+      Members and Marathon became two tabs of one card.
+
+   2. Fit levels. layout.js measures each screen (and each popup panel) and
+      sets data-fit to '', 'snug', 'snug compact' or 'snug compact tight' --
+      the roomiest that fits. The rules below are what each level changes.
+      Level '' is the existing design, untouched, so a phone with room to
+      spare looks exactly as before.
+
+   3. Long lists. Lists marked data-fit-list (players, members, standings,
+      round results) get an inline max-height from layout.js when they are
+      what doesn't fit, and scroll inside their own box.
+
+   The screens' own scroll stays as the last-resort safety net -- for a tiny
+   screen with a very large system font -- it is just quiet now (thin bar).
+
+   :is(#screen-landing, #screen-lobby, #screen-group) is used so these rules
+   carry an ID's weight and beat the per-screen rules earlier in this file
+   (e.g. "#screen-landing .mode-block"), which an attribute selector alone
+   would lose to. A WebView too old for :is() drops these rules and simply
+   keeps the old look and scroll.
+   ========================================================================== */
+
+/* ---- 1a. A quiet scrollbar where scrolling is still possible ------------ */
+#screen-landing > .landing-body,
+#screen-lobby > .landing-body,
+#screen-group > .landing-body,
+.overlay > .card-panel,
+[data-fit-list],
+.group-list,
+.rules-body {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.22) transparent;
+}
+#screen-landing > .landing-body::-webkit-scrollbar,
+#screen-lobby > .landing-body::-webkit-scrollbar,
+#screen-group > .landing-body::-webkit-scrollbar,
+.overlay > .card-panel::-webkit-scrollbar,
+[data-fit-list]::-webkit-scrollbar,
+.group-list::-webkit-scrollbar,
+.rules-body::-webkit-scrollbar { width: 4px; height: 4px; }
+#screen-landing > .landing-body::-webkit-scrollbar-thumb,
+#screen-lobby > .landing-body::-webkit-scrollbar-thumb,
+#screen-group > .landing-body::-webkit-scrollbar-thumb,
+.overlay > .card-panel::-webkit-scrollbar-thumb,
+[data-fit-list]::-webkit-scrollbar-thumb,
+.group-list::-webkit-scrollbar-thumb,
+.rules-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); border-radius: 4px; }
+#screen-landing > .landing-body::-webkit-scrollbar-track,
+#screen-lobby > .landing-body::-webkit-scrollbar-track,
+#screen-group > .landing-body::-webkit-scrollbar-track,
+.overlay > .card-panel::-webkit-scrollbar-track,
+[data-fit-list]::-webkit-scrollbar-track,
+.group-list::-webkit-scrollbar-track,
+.rules-body::-webkit-scrollbar-track { background: transparent; }
+[data-fit-list] { overscroll-behavior: contain; }
+
+/* ---- 1b. Popups never taller than the screen ------------------------------
+   .overlay centres its panel with flexbox. A panel taller than the overlay
+   was centred anyway, so its top and bottom were cut off with no way to
+   scroll to them -- measured on the round result at 360x720 with the banner:
+   18px lost at each end. max-height:100% keeps every panel inside the
+   overlay; the panel scrolls itself if it has to, and layout.js makes sure
+   it rarely does. margin:auto still centres it (and is 0 when it's full). */
+.overlay > .card-panel {
+  max-height: 100%;
+  overflow-y: auto;
+  margin: auto;
+}
+/* The round result's own cap was 96dvh -- taller than the overlay whenever
+   the banner is showing, which is the clipping above. Its list is managed by
+   layout.js now (data-fit-list), so the old 40vh cap on it goes too. */
+#overlay-round-result > .podium-panel { max-height: 100%; }
+#round-result-hands { max-height: none; }
+
+/* Rules: the text is long by nature, so it scrolls -- but inside a panel that
+   uses the whole height, with Close always visible, instead of a fixed 60vh
+   box that left half a tall screen empty and a short one cramped. */
+#overlay-rules > .rules-panel { display: flex; flex-direction: column; }
+#overlay-rules > .rules-panel > h2,
+#overlay-rules > .rules-panel > #btn-close-rules { flex: 0 0 auto; }
+#overlay-rules .rules-body { flex: 1 1 auto; min-height: 0; max-height: none; }
+
+/* ---- 1c. Home: "Play with friends" (merged card) ---------------------------- */
+.friends-block .row { margin-top: 8px; }
+.friends-block .mode-block-join-row { margin-top: 8px; }
+#screen-landing .mode-block .hint { margin: 6px 0 0; }
+
+/* ---- 1d. Lobby: pinned action bar ------------------------------------------- */
+#screen-lobby.screen.active > .screen-actions { flex: 0 0 auto; }
+#screen-lobby .screen-actions {
+  position: relative; z-index: 1;
+  width: 100%; max-width: 480px; margin: 0 auto;
+  padding: 10px 16px 12px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  display: flex; flex-direction: column; gap: 8px;
+}
+/* Max Score: one line, label left, picker right. */
+#screen-lobby .screen-actions .lobby-maxscore-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0;
+}
+#screen-lobby .screen-actions .lobby-maxscore-row.hidden { display: none; }
+#screen-lobby .screen-actions .lobby-maxscore-row label {
+  margin: 0; font-size: 13px; color: var(--good-text);
+}
+#screen-lobby .screen-actions .lobby-maxscore-row .dd,
+#screen-lobby .screen-actions .lobby-maxscore-row select { flex: 0 0 150px; width: 150px; }
+#screen-lobby .screen-actions .dd-toggle {
+  background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.14); color: #fff;
+}
+/* Nothing below the bottom of the screen to open into -- open upwards. */
+#screen-lobby .screen-actions .dd-list { top: auto; bottom: calc(100% + 4px); }
+/* Leave and Start share a row; Start gets the larger share. */
+.action-pair { display: flex; gap: 10px; }
+.action-pair > button { margin: 0; width: auto; min-width: 0; }
+.action-pair > .leave-btn { flex: 1 1 0; }
+.action-pair > #btn-start { flex: 1.6 1 0; }
+#screen-lobby .screen-actions .hint { margin: 0; font-size: 12px; color: #9a9aa2; }
+#screen-lobby .screen-actions .error { margin: 0; min-height: 0; text-align: center; }
+#lobby-hint:empty, #lobby-error:empty { display: none; }
+#screen-lobby .room-code-display,
+#screen-lobby .room-code-row { transition: none; }
+#roomcode-action-feedback:empty { min-height: 0; margin: 0; }
+
+/* ---- 1e. Group screen: Members | Marathon tabs ------------------------------ */
+#screen-group .group-tabs { margin-bottom: 10px; }
+#screen-group .group-tabs .seg { display: flex; align-items: center; justify-content: center; gap: 6px; }
+#screen-group .group-tabs .seg .group-count { font-size: 12px; }
+#screen-group .group-code-row { margin: 0 0 6px; }
+#screen-group .group-code-row #btn-group-invite { margin-left: auto; width: auto; padding: 0 16px; }
+.group-tab-panel.hidden { display: none; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+/* Chat preview: the most recent lines, newest at the bottom. Older lines
+   are cut off at the TOP (justify-content:flex-end on a clipped column), so
+   whatever room there is always shows the latest. Tapping still opens the
+   full chat. */
+#group-chat-preview {
+  display: flex; flex-direction: column; justify-content: flex-end;
+  max-height: 132px; overflow: hidden;
+}
+#group-chat-preview.hidden { display: none; }
+#screen-group .group-chat-preview-block .block-heading-row { margin-bottom: 4px; }
+#screen-group .group-live-names:empty { min-height: 0; margin: 0; }
+
+/* ---- 1f. Widths ------------------------------------------------------------------ */
+/* Very narrow phones (320-340px): a little less side padding. */
+@media (max-width: 340px) {
+  #screen-landing > .landing-body,
+  #screen-lobby > .landing-body,
+  #screen-group > .landing-body { padding-left: 12px; padding-right: 12px; }
+  #screen-lobby .screen-actions { padding-left: 12px; padding-right: 12px; }
+}
+/* Tablets and up: the pinned bar lines up with the body column above it. */
+@media (min-width: 768px) {
+  #screen-lobby .screen-actions { max-width: 560px; padding-left: 24px; padding-right: 24px; }
+}
+@media (min-width: 1024px) {
+  #screen-lobby .screen-actions { max-width: 480px; padding-left: 16px; padding-right: 16px; }
+}
+
+
+/* ==========================================================================
+   2. FIT LEVELS (set by layout.js)
+   ========================================================================== */
+
+/* ---- snug: less padding and gap ------------------------------------------- */
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] > .landing-topbar { padding-top: 8px; padding-bottom: 8px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] > .landing-body { padding: 10px 14px 8px; gap: 10px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] .mode-block { padding: 10px 14px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] .mode-blocks,
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] .landing-pane { gap: 8px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] .mode-block h3 { font-size: 14px; margin-bottom: 2px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] .mode-block label { margin-top: 6px; margin-bottom: 3px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] .mode-block .row,
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] .mode-block-join-row { margin-top: 6px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="snug"] .segmented { margin-bottom: 8px; }
+#screen-lobby[data-fit~="snug"] .screen-actions { padding: 8px 14px 10px; gap: 6px; }
+#screen-lobby[data-fit~="snug"] .room-code-display { font-size: 34px; padding: 2px 0; }
+#screen-lobby[data-fit~="snug"] .room-code-row { margin: 4px 0; }
+#screen-lobby[data-fit~="snug"] .player-list li { padding: 8px 10px; }
+#screen-group[data-fit~="snug"] .group-live-text { font-size: 15px; }
+#screen-group[data-fit~="snug"] .group-marathon-strip { padding: 8px 10px; margin-bottom: 8px; }
+
+/* ---- compact: + drop the nice-to-have lines, trim control padding --------- */
+[data-fit~="compact"] .fit-optional { display: none !important; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="compact"] .mode-block button:not(.tiny):not(.icon-btn):not(.seg):not(.dd-toggle),
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="compact"] .screen-actions button:not(.dd-toggle) {
+  padding-top: 11px; padding-bottom: 11px; min-height: 44px;
+}
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="compact"] .dd-toggle { padding-top: 10px; padding-bottom: 10px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="compact"] input[type=text] { padding-top: 10px; padding-bottom: 10px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="compact"] .segmented .seg { padding-top: 6px; padding-bottom: 6px; }
+#screen-landing[data-fit~="compact"] > .landing-footer-nav { padding-top: 4px; padding-bottom: 4px; }
+#screen-lobby[data-fit~="compact"] .room-code-label { display: none; }
+#screen-lobby[data-fit~="compact"] .room-code-display { font-size: 30px; letter-spacing: 6px; }
+#screen-group[data-fit~="compact"] #group-chat-preview { max-height: 88px; }
+#screen-group[data-fit~="compact"] .group-live > button { margin-top: 0; }
+
+/* ---- tight: + smallest spacing. Buttons keep their 44px floor. ------------ */
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] > .landing-topbar { padding-top: 4px; padding-bottom: 4px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] > .landing-body { padding: 6px 10px 6px; gap: 6px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .mode-block { padding: 8px 12px; border-radius: 12px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .mode-blocks,
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .landing-pane { gap: 6px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .mode-block button:not(.tiny):not(.icon-btn):not(.seg):not(.dd-toggle),
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .screen-actions button:not(.dd-toggle) {
+  padding-top: 8px; padding-bottom: 8px;
+}
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .dd-toggle,
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] input[type=text] { padding-top: 8px; padding-bottom: 8px; }
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .segmented { margin-bottom: 6px; }
+#screen-landing[data-fit~="tight"] > .landing-footer-nav { padding-top: 0; padding-bottom: 0; }
+#screen-landing[data-fit~="tight"] .footer-nav-item { padding-top: 2px; padding-bottom: 2px; gap: 0; }
+#screen-lobby[data-fit~="tight"] .screen-actions { padding: 6px 12px 8px; gap: 6px; }
+#screen-lobby[data-fit~="tight"] .room-code-display { font-size: 26px; letter-spacing: 5px; padding: 0; }
+#screen-lobby[data-fit~="tight"] .player-list li { padding: 6px 8px; }
+#screen-lobby[data-fit~="tight"] .player-trait { display: none; }
+#screen-lobby[data-fit~="tight"] .lobby-bots-row { margin-top: 4px; padding-top: 4px; }
+#screen-group[data-fit~="tight"] #group-chat-preview { max-height: 46px; }
+#screen-group[data-fit~="tight"] .group-member { padding: 5px 2px; }
+#screen-group[data-fit~="tight"] .standings-row { padding: 7px 10px; }
+#screen-group[data-fit~="tight"] .group-marathon-strip { padding: 6px 10px; margin-bottom: 6px; }
+
+/* ---- popup panels ----------------------------------------------------------- */
+.overlay > .card-panel[data-fit~="snug"] { padding: 16px; }
+.overlay > .card-panel[data-fit~="compact"] h2 { font-size: 18px; margin-bottom: 8px; }
+.overlay > .card-panel[data-fit~="compact"] button:not(.tiny):not(.icon-btn):not(.link-btn):not(.seg):not(.dd-toggle) {
+  padding-top: 11px; padding-bottom: 11px; min-height: 44px;
+}
+.overlay > .card-panel[data-fit~="tight"] { padding: 12px; }
+.overlay > .card-panel[data-fit~="tight"] button:not(.tiny):not(.icon-btn):not(.link-btn):not(.seg):not(.dd-toggle) {
+  padding-top: 8px; padding-bottom: 8px;
+}
+/* Round result: the big emoji and spacing give way first, the scores never. */
+#overlay-round-result > .podium-panel[data-fit~="snug"] { padding: 10px 14px; }
+#overlay-round-result > .podium-panel[data-fit~="snug"] .round-result-emoji { font-size: 36px; }
+#overlay-round-result > .podium-panel[data-fit~="compact"] .round-result-emoji { font-size: 28px; margin-bottom: 0; }
+#overlay-round-result > .podium-panel[data-fit~="compact"] .round-result-maxscore { margin-bottom: 6px; }
+#overlay-round-result > .podium-panel[data-fit~="compact"] .round-maxscore-row { margin: 8px 0; }
+#overlay-round-result > .podium-panel[data-fit~="tight"] { padding: 8px 12px; }
+#overlay-round-result > .podium-panel[data-fit~="tight"] .round-result-emoji { display: none; }
+#overlay-round-result > .podium-panel[data-fit~="tight"] .link-btn { padding: 2px 0; }
+#overlay-round-result > .podium-panel[data-fit~="tight"] .podium-slot { padding: 3px 5px; }
+#overlay-round-result > .podium-panel[data-fit~="tight"] .leave-btn { margin-top: 6px; }
+#overlay-gameover > .card-panel[data-fit~="compact"] #gameover-title { font-size: 22px; }
+#overlay-gameover > .card-panel[data-fit~="compact"] .final-round-banner { padding: 8px 12px; margin-bottom: 8px; }
+#overlay-gameover > .card-panel[data-fit~="compact"] .install-card { margin-top: 10px; padding: 10px; }
