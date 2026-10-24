@@ -3947,3 +3947,17 @@ body.game-active .bg-scrim { display: none; }
 #overlay-gameover > .card-panel[data-fit~="compact"] #gameover-title { font-size: 22px; }
 #overlay-gameover > .card-panel[data-fit~="compact"] .final-round-banner { padding: 8px 12px; margin-bottom: 8px; }
 #overlay-gameover > .card-panel[data-fit~="compact"] .install-card { margin-top: 10px; padding: 10px; }
+
+
+/* ==========================================================================
+   Lobby chat button (Oct 2026)
+   ==========================================================================
+   Sits in the lobby top bar's left slot, mirroring the rules button on the
+   right so the wordmark stays centred. Opens the same table chat as the
+   button on the game screen's hand row, and carries the same unread badge
+   (.badge is absolutely positioned, so the button anchors it). */
+.lobby-chat-btn { position: relative; }
+.lobby-chat-btn .icon { width: 20px; height: 20px; margin: 0; }
+/* Unread is the one state worth shouting about -- same gold accent as the
+   hand-row button's .has-unread. */
+.lobby-chat-btn.has-unread { box-shadow: inset 0 0 0 1.5px var(--gold); color: var(--gold-bright); }
