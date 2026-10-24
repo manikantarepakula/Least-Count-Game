@@ -2159,7 +2159,14 @@
       const screenGameEl = document.getElementById('screen-game');
       if (screenGameEl) screenGameEl.style.height = '';
       const chatPanelEl = document.getElementById('chat-panel');
-      if (chatPanelEl) {
+      // Only when actually LEAVING the game screen (Oct 2026). This branch
+      // runs on every showScreen() call for another screen -- and the lobby
+      // calls showScreen('screen-lobby') on every room_update (someone
+      // joins, a bot is added...). With chat now open in the lobby, that was
+      // wiping the sheet's position and its keyboard yardstick each time, so
+      // a player joining while you typed knocked the sheet out of typing
+      // mode.
+      if (chatPanelEl && prevId === 'screen-game') {
         // Hand every edge back to CSS. `top` matters as much as `bottom`
         // now that both are set inline on the game screen -- leaving a
         // stale pixel top behind would strand the lobby's sheet at a
@@ -2168,8 +2175,12 @@
         chatPanelEl.style.bottom = '';
         chatPanelEl.style.height = '';
         chatPanelEl.style.maxHeight = '';
+        chatSheetTopPx = null;
+        chatSheetOpenVisibleH = null;
+        // Still open (the game ended back into the lobby with the chat up):
+        // place it again for this screen rather than leave it on CSS defaults.
+        if (!chatPanelEl.classList.contains('hidden')) positionChatSheet();
       }
-      chatSheetTopPx = null;
       // No round can be counting down once we're off the game screen (left
       // the room, game reset to lobby) -- don't leave the ticker running.
       setAutoNextRoundDeadline(null);
