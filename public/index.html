@@ -71,9 +71,11 @@
      https://fonts.googleapis.com/css2?family=Cinzel:wght@700;800&display=swap -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@800&text=LEAST%20COUNT&display=swap" rel="stylesheet" />
 <!-- ?v= changes whenever index.html's structure changes, so a phone that
-     still has yesterday's style.css cached (10-minute cache, see server.js)
-     can never pair the new markup with the old styles. -->
-<link rel="stylesheet" href="style.css?v=fit-2026-10-24" />
+     still has yesterday's style.css or app.js cached (10-minute cache, see
+     server.js) can never pair the new markup with the old styles or code.
+     The same ?v= is on app.js at the bottom of this file. -->
+
+<link rel="stylesheet" href="style.css?v=chat-2026-10-24" />
 </head>
 <body>
 
@@ -583,11 +585,20 @@
 </div>
 
 <div id="screen-lobby" class="screen">
-  <!-- Three columns so the wordmark stays truly centred: an empty spacer on
-       the left balances the rules button on the right. Without the spacer the
-       wordmark would sit off-centre by half the button's width. -->
+  <!-- Three columns so the wordmark stays truly centred: the chat button on
+       the left balances the rules button on the right (both 44px).
+       Chat in the lobby (Oct 2026): this left slot used to be an empty
+       spacer, and the only chat button lived in the game screen's hand row,
+       so there was no way to chat while waiting for people -- the time a room
+       most needs it ("2 mins, finishing dinner"). It opens the same table
+       chat as in the game; the history carries over when the game starts. -->
   <div class="landing-topbar">
-    <div class="landing-topbar-left"></div>
+    <div class="landing-topbar-left">
+      <button id="btn-lobby-chat" class="icon-btn lobby-chat-btn" type="button" aria-label="Open chat" title="Chat">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg>
+        <span id="lobby-chat-badge" class="badge hidden">0</span>
+      </button>
+    </div>
     <h1 class="landing-wordmark">LEAST COUNT</h1>
     <div class="landing-topbar-right">
       <!-- Moved here from a full-width button in the panel below (Oct 2026).
@@ -1300,7 +1311,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js" defer></script>
+<script src="app.js?v=chat-2026-10-24" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
