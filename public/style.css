@@ -3961,3 +3961,220 @@ body.game-active .bg-scrim { display: none; }
 /* Unread is the one state worth shouting about -- same gold accent as the
    hand-row button's .has-unread. */
 .lobby-chat-btn.has-unread { box-shadow: inset 0 0 0 1.5px var(--gold); color: var(--gold-bright); }
+
+
+/* ==========================================================================
+   GAME SCREEN, STEP 1 (Oct 2026)
+   ==========================================================================
+   The round start, the turn strip, the drawn card and the LEAST COUNT call.
+   Same palette and type as the rest of the table: Georgia, the jade panels,
+   the gold of the primary button, the wordmark's Cinzel for the call.
+   ========================================================================== */
+
+/* ---- Round number in the top bar: gold, not grey ---- */
+.game-round {
+  font-size: 14px; font-weight: 700; color: var(--gold-bright);
+  letter-spacing: 0.02em;
+}
+/* The seconds moved into the turn strip below, next to whose turn it is. */
+.game-top .turn-timer { display: none !important; }
+
+/* ---- Turn strip: "Your turn -- pick a card" / "Mani's turn" + seconds ---- */
+.turn-strip {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 2px 4px 4px; padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: var(--jade-panel-alt); border: 1px solid var(--jade-border);
+  font-size: 13px; font-weight: 700; color: var(--text-light);
+}
+.turn-strip.hidden { display: none; }
+.turn-strip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-strip-time { flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.turn-strip-time:empty { display: none; }
+/* Your turn wears the primary button's gold -- the one loud thing on screen. */
+.turn-strip.mine {
+  background: linear-gradient(160deg, var(--brand) 0%, var(--brand-2) 55%, var(--brand-3) 100%);
+  border-color: transparent; color: var(--brand-on);
+}
+.turn-strip.mine .turn-strip-time { color: var(--brand-on); }
+/* ...and turns red for your last five seconds. */
+.turn-strip.mine.low { background: var(--red-fill); color: #fff; }
+.turn-strip.mine.low .turn-strip-time { color: #fff; }
+
+/* ---- Round banner: replaces the 3-2-1 countdown ---- */
+.round-intro { text-align: center; animation: lcRoundIn 0.45s cubic-bezier(.2,.8,.2,1) both; }
+.round-intro.hidden { display: none; }
+.round-intro-label {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.32em; text-transform: uppercase;
+  color: var(--text-muted); text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+}
+.round-intro-num {
+  font-size: 64px; font-weight: 700; line-height: 1;
+  color: var(--gold-bright); text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+}
+.round-intro-num:empty { display: none; }
+.round-intro-sub {
+  display: inline-block; margin-top: 8px; padding: 5px 14px; border-radius: 20px;
+  background: rgba(9,38,22,0.6); color: var(--text-light);
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.round-intro-sub:empty { display: none; }
+@keyframes lcRoundIn {
+  0%   { opacity: 0; transform: scale(0.82); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* ---- Joker caption: "Every Q = 0" ----
+   Hangs under the joker card WITHOUT taking up layout space. As an ordinary
+   line it made the joker's column taller than the open card's, and the
+   table centre (align-items: center) then sat the two piles at different
+   heights -- labels and cards out of line with each other. Out of the flow,
+   both piles sit exactly where they always have, level with each other and
+   with the side chairs, and the caption is centred under the joker card
+   however long it is ("Every 10 = 0"). The wide box (-40px each side) is
+   only so text-align can centre text wider than the card; it never takes a
+   tap. */
+.table-center .pile-group { position: relative; }
+.pile-caption {
+  position: absolute; top: 100%; left: -40px; right: -40px;
+  margin-top: 6px; font-size: 11px; font-weight: 700; line-height: 1.2;
+  color: var(--gold-bright); text-align: center; white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.6); pointer-events: none;
+}
+.pile-caption:empty { display: none; }
+
+/* ---- Joker, then open card, turning over in their own places ---- */
+#screen-game.round-reveal #joker-indicator .card {
+  animation: lcTurnOver 0.6s cubic-bezier(.2,.8,.2,1) both, lcJokerGlow 1.3s ease-out 0.45s;
+}
+#screen-game.round-reveal #open-card-slot .card {
+  animation: lcTurnOver 0.6s cubic-bezier(.2,.8,.2,1) 0.55s both;
+}
+#screen-game.round-reveal #joker-caption { animation: lcFadeDown 0.35s ease-out 0.5s both; }
+@keyframes lcTurnOver {
+  0%   { transform: perspective(500px) rotateY(90deg) scale(1.2); opacity: 0.3; }
+  55%  { transform: perspective(500px) rotateY(-10deg) scale(1.14); opacity: 1; }
+  100% { transform: none; opacity: 1; }
+}
+/* Only the middle keyframe is given: start and end fall back to the card's
+   own shadow, so nothing is left behind when it finishes. */
+@keyframes lcJokerGlow {
+  35% { box-shadow: 0 0 0 5px rgba(242,193,78,0.45), 0 0 22px rgba(242,193,78,0.55); }
+}
+@keyframes lcFadeDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ---- A card you just drew: lands in your hand marked NEW ---- */
+/* "You drew 5♥" rides on the "Your cards (Value: N)" line, just after the
+   value -- above your cards without covering anything. (It first floated
+   above that line, which is exactly where your own chair sits at the bottom
+   of the table, so it landed on top of it.) Out of the flow, so the line
+   never changes height when it appears. */
+.hand-title { position: relative; }
+.draw-toast {
+  position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%);
+  z-index: 8; pointer-events: none; white-space: nowrap;
+  background: var(--jade-panel); border: 1px solid var(--gold); color: var(--text-light);
+  border-radius: 20px; padding: 3px 12px; font-size: 12px; font-weight: 700; line-height: 1.3;
+  box-shadow: var(--shadow-md);
+  animation: lcToastIn 0.25s ease-out both, lcToastOut 0.3s ease-in 1.7s forwards;
+}
+.draw-toast.hidden { display: none; }
+@keyframes lcToastIn {
+  from { opacity: 0; transform: translate(-6px, -50%); }
+  to   { opacity: 1; transform: translate(0, -50%); }
+}
+@keyframes lcToastOut { to { opacity: 0; } }
+.card.just-drawn { animation: lcJustDrawn 2.4s ease-out; }
+@keyframes lcJustDrawn {
+  0%, 60% { box-shadow: 0 0 0 3px var(--gold-bright), 0 0 16px rgba(242,193,78,0.6); }
+}
+.card .new-tag {
+  position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+  z-index: 3; pointer-events: none;
+  background: var(--gold-bright); color: #241a05;
+  font-size: 9px; font-weight: 800; letter-spacing: 0.06em; line-height: 1.2;
+  border-radius: 6px; padding: 1px 5px;
+  animation: lcNewTag 2.4s ease-out both;
+}
+@keyframes lcNewTag { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ---- The LEAST COUNT call ---- */
+/* Only as wide as what it says, in the middle of the table: on one line,
+   LEAST COUNT ran right across the side chairs, and they showed through the
+   letters. Stacked, it sits between the chairs -- the caller's chair, lit
+   up, stays in plain view. */
+.declare-callout {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: max-content; max-width: 92%; z-index: 9; pointer-events: none; text-align: center;
+  isolation: isolate;
+}
+.declare-callout.hidden { display: none; }
+/* A soft dark pool behind the words, so they read over the cards. */
+.declare-callout::before {
+  content: ''; position: absolute; inset: -30px -40px; z-index: -1;
+  background: radial-gradient(ellipse at center, rgba(8,31,25,0.9) 0%, rgba(8,31,25,0.65) 55%, rgba(8,31,25,0) 76%);
+}
+.declare-callout-who {
+  font-size: 15px; font-weight: 700; color: var(--text-light);
+  text-shadow: 0 2px 8px rgba(0,0,0,0.7); margin-bottom: 2px;
+}
+/* The wordmark's own face and gold: this is the game's name being called.
+   (Cinzel is loaded for the letters of LEAST COUNT only -- see index.html --
+   which is exactly what this line says.) */
+/* Sized from the table, like the open card and joker it covers
+   (--centre-card-w, set by renderOvalTable): 35px on a full-size table, and
+   it shrinks with the table so it always fits between the side chairs. */
+.declare-callout-call {
+  font-family: 'Cinzel', Georgia, 'Times New Roman', serif; font-weight: 800;
+  font-size: calc(var(--centre-card-w, 58px) * 0.6); letter-spacing: 0.06em; line-height: 1.02;
+  color: var(--brand-line); text-shadow: 0 3px 14px rgba(0,0,0,0.75);
+}
+.declare-callout-call span { display: block; }
+.declare-callout.calling .declare-callout-call { animation: lcStamp 0.5s cubic-bezier(.2,1.4,.3,1) both; }
+.declare-callout.calling .declare-callout-who { animation: lcFadeDown 0.3s ease-out both; }
+.declare-callout.wrong .declare-callout-call { color: var(--red-text); animation: lcShake 0.45s ease-in-out; }
+@keyframes lcStamp {
+  0%   { transform: scale(2.2); opacity: 0; }
+  60%  { transform: scale(0.94); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes lcShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(5px); }
+}
+.declare-callout-verdict {
+  display: inline-block; margin-top: 8px; padding: 6px 16px; border-radius: 20px;
+  font-size: 16px; font-weight: 800;
+  animation: lcVerdictIn 0.35s cubic-bezier(.2,1.3,.3,1) both;
+}
+.declare-callout-verdict.hidden { display: none; }
+.declare-callout-verdict.ok  { background: rgba(74,222,128,0.16); border: 1.5px solid var(--good); color: var(--good); }
+.declare-callout-verdict.bad { background: rgba(var(--red-rgb),0.18); border: 1.5px solid var(--red-text); color: var(--red-text); }
+@keyframes lcVerdictIn {
+  0%   { transform: scale(0.6); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+/* The caller's chair, while the call is on screen. */
+.seat.declaring .seat-chip {
+  border-color: var(--gold-bright);
+  animation: lcSeatCall 0.9s ease-in-out infinite;
+}
+@keyframes lcSeatCall {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(242,193,78,0.45), 0 0 18px rgba(242,193,78,0.5); }
+  50%      { box-shadow: 0 0 0 6px rgba(242,193,78,0.22), 0 0 26px rgba(242,193,78,0.35); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .round-intro, .draw-toast, .card.just-drawn, .card .new-tag,
+  .declare-callout.calling .declare-callout-call, .declare-callout.calling .declare-callout-who,
+  .declare-callout.wrong .declare-callout-call, .declare-callout-verdict, .seat.declaring .seat-chip,
+  #screen-game.round-reveal #joker-indicator .card, #screen-game.round-reveal #open-card-slot .card,
+  #screen-game.round-reveal #joker-caption { animation: none !important; }
+}
