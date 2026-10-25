@@ -552,7 +552,7 @@
       },
       {
         label: 'Step 2 of 7',
-        text: 'The open card is a 7 and you hold one. Tap your 7, then Discard Selected. Matching the open card costs you nothing.',
+        text: 'The open card is a 7 and you hold one. Tap your 7, then Discard. Matching the open card costs you nothing.',
         build: () => state({ hand: ['7', 'K', '9', '4', 'A'], open: '7' }),
         want: (ids, g) => ids.length === 1 && rankOf(g, ids[0]) === '7',
         nudge: 'Tap the 7 — it matches the open card.',
@@ -871,9 +871,9 @@
   function triggerChatBubble(playerId, msg) {
     const isGif = msg.type === 'gif';
     const lengthFactor = isGif ? 30 : (msg.text || '').length;
-    const durationMs = Math.max(5000, Math.min(10000, 5000 + lengthFactor * 80));
+    const durationMs = msg.durationMs || Math.max(5000, Math.min(10000, 5000 + lengthFactor * 80));
     const startedAt = Date.now();
-    chatBubbles[playerId] = { type: msg.type, text: msg.text, gifUrl: msg.gifUrl, startedAt, durationMs };
+    chatBubbles[playerId] = { type: msg.type, text: msg.text, gifUrl: msg.gifUrl, startedAt, durationMs, variant: msg.variant || '' };
     renderOvalTable(latestGame);
     setTimeout(() => {
       if (chatBubbles[playerId] && chatBubbles[playerId].startedAt === startedAt) {
@@ -2572,6 +2572,12 @@
     document.getElementById('hand-jokers').innerHTML = '';
     document.getElementById('hand-divider').classList.add('hidden');
     document.getElementById('hand-value').textContent = '0';
+    const statsReset = document.getElementById('hand-stats');
+    if (statsReset) statsReset.textContent = '';
+    const pillReset = document.getElementById('hand-value-pill');
+    if (pillReset) pillReset.classList.remove('can-call');
+    document.getElementById('btn-discard').textContent = 'Discard';
+    handToastQueue = [];
     selectedIds = new Set();
     document.getElementById('btn-discard').disabled = true;
     document.getElementById('btn-declare').disabled = true;
@@ -2863,7 +2869,7 @@
         const metaEl = dealSeats.has(seatEl) ? seatEl.querySelector('.seat-meta') : null;
         if (metaEl) {
           const cur = parseInt(metaEl.textContent, 10) || 0;
-          metaEl.textContent = (cur + 1) + ' cards';
+          metaEl.textContent = cardsLabel(cur + 1);
         }
         seatEl.classList.add('dealt-flash');
         setTimeout(() => seatEl.classList.remove('dealt-flash'), Math.max(80, flightMs * 0.3 - 10));
@@ -2928,6 +2934,8 @@
       scr.classList.remove('round-reveal');
       startSeqTimer = null;
       startRevealDeadline = 0;
+      // Dealt a 2? Say so once the cards have settled.
+      maybeShowDealtTrump(game);
     }, holdMs + 400);
   }
 
@@ -5712,7 +5720,16 @@
     if (opts.selected) el.classList.add('selected');
     if (opts.wild) el.classList.add('wild-zero');
     if (opts.hinted) el.classList.add('hint-suggested');
+    // The +2 card (Oct 2026). A 2 makes the next player play a 2 or pick up
+    // cards, so it gets its own red edge wherever it appears -- hand, table,
+    // chairs, scorecard. The "+2" tag itself goes only where there's room
+    // for it (renderHandTiles, the open card).
+    if (card.rank === '2') el.classList.add('trump');
     return el;
+  }
+
+  function cardsLabel(n) {
+    return n === 1 ? '1 card' : n + ' cards';
   }
 
   function sortHand(hand) {
@@ -5975,7 +5992,19 @@
     // 0.92 leaves a hair of breathing room so neighbours never touch.
     // The 54px floor is readability: below that the name is unreadable and a
     // slightly cramped table beats an illegible one.
-    const wantW = Math.min(SEAT_WIDTH_PX, tableW * 0.26);
+    // 30% of the table (was 26%) since Oct 2026: the name needs the room --
+    // at 26% a 393px phone gave an 82px chair and three or four letters of
+    // the name. The side chairs still clear the open card and joker at every
+    // width measured (320-430px): the centre pair is sized from the table too.
+    const centreCardW = Math.round(Math.max(34, Math.min(58, tableW * 0.155)));
+    // 14px at least: on a small table the "Open Card" label runs a little past
+    // its card, and this is the room it runs into before it meets "Joker".
+    const centreGap = Math.round(Math.max(14, Math.min(18, tableW * 0.05)));
+    // ...but never so wide that a chair at the side reaches the open card or
+    // the joker: on a small table (a short phone, or the +2 banner taking
+    // height) the side chairs sit right beside them.
+    const sideRoom = tableW / 2 - (2 * centreCardW + centreGap) / 2 - 6;
+    const wantW = Math.min(SEAT_WIDTH_PX, tableW * 0.30, Math.max(0, sideRoom));
     // The floor drops a little on a very crowded table. At ten players on a
     // 320px phone the seat hits the readability floor and cannot shrink
     // further, leaving neighbours a pixel into each other -- invisible, but it
@@ -6016,7 +6045,10 @@
     // discards moved off their own line and into the hand row -- leaving it at
     // 76 would have put normal tables into compact mode for height they no
     // longer use.
-    const CHIP_FULL_H = 58 * seatScale;
+    // Name (~14px), "12 cards · 40" (~12px), "threw 7" (~14px) and 10px of
+    // padding -- the fan of card backs and the mini card that used to make
+    // this 58 are gone (Oct 2026).
+    const CHIP_FULL_H = 52 * seatScale;
     const compact = isFinite(minVGap) && minVGap < CHIP_FULL_H;
     oval.classList.toggle('compact-seats', compact);
     // Six or more chairs and the reveal panel has to go on a diet -- see
@@ -6027,8 +6059,6 @@
     // Nine and ten need one more notch -- the compact tier alone still left
     // them 16px into each other. See .tight-reveal in style.css.
     oval.classList.toggle('tight-reveal', n >= 9);
-    const centreCardW = Math.round(Math.max(34, Math.min(58, tableW * 0.155)));
-    const centreGap = Math.round(Math.max(8, Math.min(18, tableW * 0.04)));
     oval.style.setProperty('--table-w', px(tableW));
     oval.style.setProperty('--seat-w', px(seatW));
     oval.style.setProperty('--centre-card-w', px(centreCardW));
@@ -6102,156 +6132,87 @@
 
       const count = game && game.handCounts ? game.handCounts[p.playerId] : (dealing ? 0 : undefined);
       const score = game && game.scores ? (game.scores[p.playerId] ?? 0) : 0;
+      const isMe = p.playerId === myPlayerId;
+      if (isMe) seatEl.classList.add('own-seat');
 
-      // Every seat (opponent or you) renders the exact same single chip:
-      // name on top, "N cards · M pts" below. No extra icon on top of it,
-      // so every seat looks identical regardless of position on the table.
-      // While dealing, only the running card count is shown (no score yet).
+      // ------------------------------------------------------------------
+      // The chair (Oct 2026, step 2 of the game-screen redesign).
+      //
+      //   line 1:  Name            the whole line, so the name is readable
+      //   line 2:  12 cards · 40   the count and their score
+      //   line 3:  threw 7♦        the last card they threw, SAID as such
+      //
+      // Line 1 used to share its width with a 15px colour disc carrying the
+      // player's initial, a dash and the score, so the name got three or four
+      // letters ("Sre...") and players could not tell who was who. The disc
+      // existed only to tell chairs apart while names were cut off, so it's
+      // gone; the score moved down to sit with the card count; and the chair
+      // is a little wider (see wantW above). The fan of three card backs,
+      // which needed its own count underneath it, is gone too: "12 cards"
+      // says the same thing in one line.
+      //
+      // YOUR chair stays, so the table still has you sitting at it, but it
+      // carries your name only: your score and card count are on the line
+      // above your cards, where you look for them. While dealing it still
+      // counts up like everyone else's.
+      // ------------------------------------------------------------------
       const chipEl = document.createElement('div');
       chipEl.className = 'seat-chip';
 
-      // ---- avatar + name on one row (Sept 2026) ----
-      // A seat used to be two lines of text, which is why the table read as
-      // a status display rather than a place people were sitting. The face
-      // is the first thing you should be able to tell apart at a glance,
-      // before you can read anything.
       const idRow = document.createElement('div');
       idRow.className = 'seat-id';
-      // The avatar is deliberately NOT drawn here any more (Oct 2026).
-      //
-      // It cost ~24px of chip height, and height is the axis that overflows:
-      // with the avatar, the "Last:" discard strip had to be dropped from
-      // seven players upward to stop chairs colliding. Without it, "Last:"
-      // survives at every player count on every device measured.
-      //
-      // That is a straight win -- "Last:" is strategic information (what each
-      // player just threw), the avatar was decoration that nobody mentioned.
-      // The name also gets the full chip width now that nothing sits beside it,
-      // which is what was truncating longer names.
-      //
-      // It also removes the per-render DiceBear request from the busiest part
-      // of the UI. The avatar picker still loads them, so the third-party
-      // dependency is reduced rather than gone -- serving them locally is still
-      // on the pre-launch list.
-      // A 15px disc carrying the player's initial, in a colour that is theirs
-      // for the whole game. This is what the avatar used to do -- tell eight
-      // near-identical chips apart at a glance -- at a fifth of the width and
-      // with no network request at all, which is what forced the avatar out in
-      // the first place.
-      const dotEl = document.createElement('span');
-      dotEl.className = 'seat-dot';
-      dotEl.style.background = seatColour(p.playerId);
-      dotEl.textContent = seatInitial(p.name);
-      idRow.appendChild(dotEl);
       const nameEl = document.createElement('div');
       nameEl.className = 'seat-name';
       nameEl.textContent = displayName(p.name);
-      if (p.playerId === myPlayerId) seatEl.classList.add('own-seat');
       idRow.appendChild(nameEl);
-      // Score moves up here, out of the "10 cards . 0 pts" run-on, into its own
-      // pill. It and the card count are the two things you scan every turn, and
-      // as grey text at the end of a sentence it was the easiest thing to miss.
-      const scoreEl = document.createElement('span');
-      scoreEl.className = 'seat-score';
-      scoreEl.textContent = (dealing || revealPhaseActive) ? '' : String(score);
-      // The dash is drawn by CSS (.seat-score::before) rather than put in the
-      // text, so :empty still hides the whole thing during the deal and the
-      // reveal instead of leaving a stranded separator behind.
-      idRow.appendChild(scoreEl);
       chipEl.appendChild(idRow);
 
-      // ---- fan of card backs ----
-      // "13 cards" is a number you read; three overlapping backs is a hand
-      // you see. Deliberately a FIXED three rather than one back per card:
-      // seats are 71-96px wide depending on device (see the fluid furniture
-      // maths above) and thirteen backs would either not fit or shrink to
-      // slivers. The exact count stays on the badge, so nothing is lost --
-      // the fan carries "this is a hand", the badge carries "how big".
-      // Skipped for your own seat: your real cards are in the tray below,
-      // and a fake fan of your own hand would be actively confusing.
-      // Card backs are hidden during the reveal: the merged panel below is
-      // about to show the ACTUAL cards, and a fan of backs with a count
-      // badge next to it was the same fact stated a second time in a seat
-      // with no room to spare.
-      // Cards and points now share ONE row (.seat-stats) instead of stacking
-      // as two. Two near-empty lines in a 96px box was most of why the seat
-      // read as too tall for what it said -- and your own seat already put
-      // them together as "8 cards . 0 pts", so the bots and you were showing
-      // the same facts in two different shapes.
       const statsRow = document.createElement('div');
       statsRow.className = 'seat-stats';
-
-      if (count !== undefined && count > 0 && p.playerId !== myPlayerId && !revealPhaseActive) {
-        const fan = document.createElement('div');
-        fan.className = 'seat-fan';
-        const backs = Math.min(3, count);
-        for (let b = 0; b < backs; b++) {
-          const back = document.createElement('span');
-          back.className = 'seat-back';
-          back.style.setProperty('--i', String(b));
-          fan.appendChild(back);
-        }
-        // The count sits BELOW the backs now rather than beside them, so the
-        // fan reads as "a hand, this big" at a glance.
-        const handCol = document.createElement('div');
-        handCol.className = 'seat-hand';
-        handCol.appendChild(fan);
-        const badge = document.createElement('span');
-        badge.className = 'seat-fan-count';
-        badge.textContent = String(count);
-        handCol.appendChild(badge);
-        statsRow.appendChild(handCol);
-      }
-
-      const metaEl = document.createElement('div');
+      // Line 2. The count: on every chair while dealing (animateDealing ticks
+      // it up), on everyone's but yours in play, on nobody's during the
+      // reveal (the reveal panel shows the actual cards). The score: in play
+      // only, never on yours (it's on the line above your cards).
+      const line2 = document.createElement('div');
+      line2.className = 'seat-line2';
+      const metaEl = document.createElement('span');
       metaEl.className = 'seat-meta';
-      // The fan's badge now carries the card count for opponents, so this
-      // line drops it there and shows the score alone -- printing "13" on
-      // the badge and "13 cards" underneath it is just the same fact twice
-      // in a seat that has no room to spare. Your own seat has no fan, so
-      // it keeps the full text.
-      const fanShowsCount = count !== undefined && count > 0 && p.playerId !== myPlayerId && !revealPhaseActive;
-      if (revealPhaseActive) {
-        // During the reveal the panel below carries cards, round score and
-        // running total. The chip is reduced to identity alone -- avatar and
-        // name -- which is exactly what the old floating panel was missing.
-        metaEl.textContent = '';
-      } else if (count === undefined) {
-        metaEl.textContent = '';
-      } else if (fanShowsCount) {
-        // The fan carries the count and the pill carries the score, so there is
-        // nothing left for this line to say.
-        metaEl.textContent = '';
-      } else {
-        // Your own seat has no fan (your real cards are in the tray below), so
-        // the count still lives here. The score does not -- it is in the pill.
-        metaEl.textContent = count + ' cards';
-      }
-      statsRow.appendChild(metaEl);
-      // :empty on the row keeps it from reserving height during the deal and
-      // the reveal, when both children are deliberately blank.
-      chipEl.appendChild(statsRow);
+      metaEl.textContent = (revealPhaseActive || count === undefined || (isMe && !dealing))
+        ? '' : cardsLabel(count);
+      line2.appendChild(metaEl);
+      const scoreEl = document.createElement('span');
+      scoreEl.className = 'seat-score';
+      scoreEl.textContent = (dealing || revealPhaseActive || isMe) ? '' : String(score);
+      line2.appendChild(scoreEl);
+      statsRow.appendChild(line2);
 
-      // Recent discards for THIS player, this round -- lets you track what
-      // opponents have been throwing away, same as you naturally would
-      // watching a real discard pile. Sits inside the chip itself (not a
-      // separate floating box), so it never needs edge-aware positioning --
-      // it just makes the pill a little taller, never wider than the seat.
-      const history = (!dealing && game && game.discardHistory) ? game.discardHistory[p.playerId] : null;
+      // The last card they THREW -- in words. It used to be a bare mini card,
+      // and a card on its own at a chair reads just as easily as one they
+      // picked up; a player asked exactly that. "threw" settles it, and the
+      // card itself is a small white face in its own colours, so it still
+      // looks like a card. Only the latest: two side by side in a chair this
+      // size were hard to read, and the latest is the one that says
+      // something about their hand. (A crowded table drops the word -- see
+      // .compact-seats in style.css.)
+      const history = (!dealing && !isMe && game && game.discardHistory) ? game.discardHistory[p.playerId] : null;
       if (history && history.length > 0 && !revealPhaseActive) {
-        const histEl = document.createElement('div');
-        histEl.className = 'seat-discard-history';
-        history.forEach((c) => {
-          const cEl = cardEl(c);
-          cEl.classList.add('mini');
-          histEl.appendChild(cEl);
-        });
-        // Appended to the stats ROW, not the chip, so it sits to the right of
-        // the hand instead of starting a third line. The "Last:" label goes
-        // with it -- at 8px it cost ~20px of an 82px chip to say what the
-        // position already says.
-        statsRow.appendChild(histEl);
+        const last = history[history.length - 1];   // oldest first, so the last is the latest
+        const threwEl = document.createElement('div');
+        threwEl.className = 'seat-threw';
+        const label = document.createElement('span');
+        label.className = 'seat-threw-label';
+        label.textContent = 'threw';
+        const face = document.createElement('span');
+        face.className = 'seat-threw-card ' + (last.rank === 'JOKER' || RED_SUITS.has(last.suit) ? 'red' : 'black')
+          + (last.rank === '2' ? ' trump' : '');
+        face.textContent = last.rank === 'JOKER' ? 'Joker' : last.rank + (SUIT_SYMBOL[last.suit] || '');
+        threwEl.appendChild(label);
+        threwEl.appendChild(face);
+        statsRow.appendChild(threwEl);
       }
+      // Your chair in play has nothing on this line -- leave it out rather
+      // than reserve an empty row.
+      if (metaEl.textContent || scoreEl.textContent || statsRow.children.length > 1) chipEl.appendChild(statsRow);
 
       seatEl.innerHTML = '';
       seatEl.appendChild(chipEl);
@@ -6320,6 +6281,7 @@
           // themselves instead of above, so it never gets clipped by the
           // screen's overflow:hidden near the top edge on mobile.
           bubbleEl.className = 'seat-chat-bubble ' + (top < 50 ? 'below' : 'above');
+          if (chatBubble.variant) bubbleEl.classList.add(chatBubble.variant);
           if (chatBubble.type === 'gif' && chatBubble.gifUrl) {
             // GIFs render as a small thumbnail instead of a full-size image --
             // at full chat-bubble width a GIF was tall enough to cover the
@@ -6384,6 +6346,36 @@
 
     reopenPlayerActionPopoverIfNeeded(oval);
   }
+
+  // ------------------------------------------------------------------
+  // Re-seat when the table changes size (Oct 2026). The chairs and the centre
+  // cards are sized from the table's measured size at the moment they're
+  // drawn, but the table can change size between state pushes: the +2 chain
+  // banner, the chain flash and the leave line all take height from it as
+  // they come and go. Without this, chairs sized for a bigger table sat on top
+  // of the open card until the next move redrew them.
+  // ------------------------------------------------------------------
+  (function watchTableSize() {
+    const oval = document.getElementById('oval-table');
+    if (!oval || typeof ResizeObserver === 'undefined') return;
+    let lastW = 0, lastH = 0, queued = false;
+    new ResizeObserver((entries) => {
+      const r = entries[0] && entries[0].contentRect;
+      if (!r) return;
+      if (Math.abs(r.width - lastW) < 2 && Math.abs(r.height - lastH) < 2) return;
+      lastW = r.width; lastH = r.height;
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        // Not mid-deal: those chairs belong to the deal animation.
+        if (startSeqActive || !latestGame) return;
+        const scr = document.getElementById('screen-game');
+        if (!scr || !scr.classList.contains('active')) return;
+        try { renderOvalTable(latestGame); } catch (e) { /* the next state push redraws anyway */ }
+      });
+    }).observe(oval);
+  })();
 
   socket.on('seat_reaction', ({ type, affectedPlayerId }) => {
     const rule = SEAT_REACTION_RULES[type];
@@ -6503,11 +6495,28 @@
         el.classList.add('is-joker');
         el.title = 'Worth 0 — jokers can’t be discarded';
       }
+      // Several of one rank: a small pile with a quiet "2x" (Oct 2026). The
+      // red "x2" badge it replaces read as a warning -- and red now belongs
+      // to the +2 card.
       if (g.cards.length > 1) {
+        el.classList.add('stacked', g.cards.length > 2 ? 'stacked-3' : 'stacked-2');
         const badge = document.createElement('span');
         badge.className = 'card-count-badge';
-        badge.textContent = '×' + g.cards.length;
+        badge.textContent = g.cards.length + '\u00d7';
         el.appendChild(badge);
+      }
+      // The +2 card's tag -- and while a +2 chain is aimed at you, a glow on
+      // your way out of it, with everything you can't play stepping back.
+      // (2s are never grouped -- see groupHand -- so a tag never meets a pile.)
+      const chainOnMe = duringChain && isMyTurn && !game.roundOver;
+      if (rep.rank === '2') {
+        const tag = document.createElement('span');
+        tag.className = 'trump-tag';
+        tag.textContent = '+2';
+        el.appendChild(tag);
+        if (chainOnMe) el.classList.add('trump-ready');
+      } else if (chainOnMe) {
+        el.classList.add('chain-dim');
       }
       // A card you just drew is marked NEW for a moment (see showDrawReveal).
       // The negative delay keeps the fade continuous across re-renders --
@@ -6528,6 +6537,45 @@
       }
       container.appendChild(el);
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Bigger cards when there's room (Oct 2026). The tray is a fixed height --
+  // on purpose, so the table never grows and shrinks turn to turn (see .hand
+  // in style.css) -- and with a short hand most of it sat empty while the
+  // cards stayed 44px. Each render now takes the largest card, up to 60px,
+  // at which every tile still fits on ONE row with room above for a picked
+  // card to lift. A hand that needs two rows keeps exactly the size it had.
+  // ------------------------------------------------------------------
+  const HAND_CARD_MAX_W = 60;
+  function fitHandCards() {
+    const hand = document.getElementById('hand');
+    if (!hand) return;
+    hand.style.removeProperty('--hand-card-w');
+    const tiles = hand.querySelectorAll('.card');
+    if (!tiles.length) return;
+    const cs = getComputedStyle(hand);
+    const innerW = hand.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const innerH = hand.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const gap = parseFloat(cs.columnGap) || 5;
+    const baseW = tiles[0].getBoundingClientRect().width;
+    if (!(innerW > 0 && innerH > 0 && baseW > 0)) return;
+    const divider = document.getElementById('hand-divider');
+    // The divider is 1px plus a 1px margin each side, and costs one more gap.
+    const dividerW = divider && !divider.classList.contains('hidden') ? 3 + gap : 0;
+    // The tray's top padding already holds a picked card's 8px lift and the
+    // tags above each card; the NEW tag hangs 7px below the card, and a pile's
+    // edges and its count reach 8px past its right side. All of it has to
+    // stay inside the tray.
+    const ROOM_BELOW = 8;
+    const ROOM_RIGHT = 8;
+    for (let w = HAND_CARD_MAX_W; w > baseW; w -= 1) {
+      const rowW = tiles.length * w + (tiles.length - 1) * gap + dividerW + ROOM_RIGHT;
+      if (rowW <= innerW && w * 1.409 + ROOM_BELOW <= innerH) {
+        hand.style.setProperty('--hand-card-w', w + 'px');
+        return;
+      }
+    }
   }
 
   // ---------------- main game rendering ----------------
@@ -6593,6 +6641,23 @@
     // into a strip that already says whose turn it is.
     renderTurnStrip(game);
     updateTurnTimerDisplay(game.roundOver ? null : game.turnDeadline);
+    // (Shown BEFORE the table is drawn: the banner takes height from the
+    // table, and the chairs are sized from the table's measured size.)
+    // The +2 chain status is now visible to EVERYONE at the table (not just
+    // whoever must respond), so the whole table can follow the drama. Only
+    // the player actually facing the chain gets the "Take Penalty" button.
+    const duringChain = game.chainCount > 0;
+    const chainBanner = document.getElementById('chain-banner');
+    const showChain = duringChain && !game.roundOver;
+    chainBanner.classList.toggle('hidden', !showChain);
+    if (showChain) {
+      const respondingName = isMyTurn ? 'You' : currentName;
+      document.getElementById('chain-banner-text').textContent =
+        `🔥 +2 Chain! ${respondingName} must play a 2 or draw ${game.chainCount * 2} cards`;
+      document.getElementById('penalty-count').textContent = game.chainCount * 2;
+      document.getElementById('btn-take-penalty').classList.toggle('hidden', !isMyTurn);
+    }
+
     renderOvalTable(game);
 
     document.getElementById('stock-count').textContent = game.stockCount;
@@ -6608,6 +6673,13 @@
     if (game.openCard) {
       const openEl = cardEl(game.openCard);
       if (midReveal) openEl.style.animationDelay = (550 - revealAgo) + 'ms';
+      // A 2 on the table carries the same "+2" tag as one in your hand.
+      if (game.openCard.rank === '2') {
+        const tag = document.createElement('span');
+        tag.className = 'trump-tag';
+        tag.textContent = '+2';
+        openEl.appendChild(tag);
+      }
       openSlot.appendChild(openEl);
     }
 
@@ -6630,23 +6702,19 @@
       jokerCaption.textContent = game.roundJokerRank ? 'Every ' + game.roundJokerRank + ' = 0' : 'Jokers = 0';
     }
 
-    // The +2 chain status is now visible to EVERYONE at the table (not just
-    // whoever must respond), so the whole table can follow the drama. Only
-    // the player actually facing the chain gets the "Take Penalty" button.
-    const duringChain = game.chainCount > 0;
-    const chainBanner = document.getElementById('chain-banner');
-    const showChain = duringChain && !game.roundOver;
-    chainBanner.classList.toggle('hidden', !showChain);
-    if (showChain) {
-      const respondingName = isMyTurn ? 'You' : currentName;
-      document.getElementById('chain-banner-text').textContent =
-        `🔥 +2 Chain! ${respondingName} must play a 2 or draw ${game.chainCount * 2} cards`;
-      document.getElementById('penalty-count').textContent = game.chainCount * 2;
-      document.getElementById('btn-take-penalty').classList.toggle('hidden', !isMyTurn);
-    }
-
     const handValue = game.yourHandValue ?? 0;
     document.getElementById('hand-value').textContent = handValue;
+    // The line above your cards (Oct 2026): the value box turns gold at 5 or
+    // less -- when you're allowed to call -- then your card count and score,
+    // which used to sit on your chair.
+    const myCardCount = (game.yourHand || []).length;
+    const valuePill = document.getElementById('hand-value-pill');
+    if (valuePill) valuePill.classList.toggle('can-call', myCardCount > 0 && handValue <= 5 && !game.roundOver);
+    const handStats = document.getElementById('hand-stats');
+    if (handStats) {
+      const myTotal = game.scores ? (game.scores[myPlayerId] ?? 0) : 0;
+      handStats.textContent = (myCardCount > 0 ? cardsLabel(myCardCount) + ' \u00b7 ' : '') + 'Score ' + myTotal;
+    }
     const hand = sortHand(game.yourHand || []);
     const groups = groupHand(hand);
 
@@ -6664,6 +6732,7 @@
     document.getElementById('hand-divider').classList.toggle('hidden', jokerGroups.length === 0);
     renderHandTiles(document.getElementById('hand-jokers'), jokerGroups, isMyTurn, game, duringChain);
     renderHandTiles(document.getElementById('hand-normal'), normalGroups, isMyTurn, game, duringChain);
+    try { fitHandCards(); } catch (e) { /* sizing only -- the default size is fine */ }
 
     const discardBtn = document.getElementById('btn-discard');
     const declareBtn = document.getElementById('btn-declare');
@@ -6672,6 +6741,11 @@
     // The chain-banner already explains that case, so no separate hint needed.
     discardBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && selectedIds.size > 0);
     declareBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && handValue <= 5);
+    // "Discard 2": how many cards are picked (Oct 2026). And while the value
+    // is over 5, Least Count! says when it can be used.
+    discardBtn.textContent = selectedIds.size > 0 ? 'Discard ' + selectedIds.size : 'Discard';
+    const declareSub = document.getElementById('declare-sub');
+    if (declareSub) declareSub.classList.toggle('off', handValue <= 5);
     // Hidden during the reveal too, not merely disabled. They were sitting
     // there fully coloured while the round result was on screen -- two large
     // buttons that do nothing, in the spot the eye goes to act, directly
@@ -8180,8 +8254,19 @@
   // Now the state lives on the button itself (a class, so it survives every
   // state push) and tapping again offers to cancel.
   // ------------------------------------------------------------------
-  function setLeavePending(on) {
+  function setLeavePending(on, notify) {
+    const was = leaveAfterRound;
     leaveAfterRound = !!on;
+    // Said in words under the turn strip (Oct 2026), with Stay to call it
+    // off. It used to be a pulsing dot on the Leave button.
+    const line = document.getElementById('leave-line');
+    if (line) line.classList.toggle('hidden', !on);
+    // ...and the rest of the table is told, so a chair doesn't just empty at
+    // the next deal. Only for a change the player made -- not the automatic
+    // clear when the round ends and the leave actually happens.
+    if (notify && was !== !!on && myRoomCode) {
+      try { socket.emit('announce_leave', { roomCode: myRoomCode, leaving: !!on }, () => {}); } catch (e) { /* a heads-up, never a blocker */ }
+    }
     const btn = document.getElementById('btn-leave-game');
     if (!btn) return;
     btn.classList.toggle('leave-pending', !!on);
@@ -8252,9 +8337,17 @@
     // to actually clear the queue -- otherwise they'd be dropped anyway and
     // rightly think the game ignored them.
     if (leaveAfterRound) {
-      setLeavePending(false);
+      setLeavePending(false, true);
       setGameError('You’re staying in the game.');
     }
+  };
+
+  // Stay, on the line under the turn strip -- the same as "Stay in the
+  // game" in the dialog, one tap closer.
+  document.getElementById('btn-leave-stay').onclick = () => {
+    if (!leaveAfterRound) return;
+    setLeavePending(false, true);
+    setGameError('You’re staying in the game.');
   };
 
   document.getElementById('btn-leave-game-confirm').onclick = () => {
@@ -8273,9 +8366,8 @@
     if (amSoloVsBots()) { setLeavePending(false); leaveRoom(); return; }
     if (leaveAfterRound) return;   // "Keep leaving" -- nothing to change
     if (latestGame && !latestGame.roundOver && !latestGame.gameOver) {
-      setLeavePending(true);
-      setGameError('You’ll leave as soon as this round finishes.');
-      return;
+      setLeavePending(true, true);
+      return;   // the line under the turn strip says it now, and stays
     }
     leaveRoom();
   };
@@ -9244,7 +9336,6 @@
   var recentDrawAt = 0;
   var DRAW_NEW_MS = 2400;
   var DRAW_TOAST_MS = 2000;
-  let drawRevealTimeout = null;
   let drawNewRefresh = null;
 
   function cardShortLabel(c) {
@@ -9311,26 +9402,101 @@
       }
     } catch (e) { /* decoration only -- never let it stop the turn */ }
 
-    // One line just above your cards saying what it was.
-    const toast = document.getElementById('draw-toast');
-    if (toast) {
-      toast.textContent = cards.length > 1
+    // A note on the line above your cards saying what it was -- and when
+    // it was a 2, that it's a +2 trump card.
+    const twos = cards.filter((c) => c.rank === '2').length;
+    if (cards.length === 1 && twos === 1) {
+      showHandToast(TRUMP_ONE_TEXT, { trump: true, ms: TRUMP_TOAST_MS });
+    } else {
+      showHandToast(cards.length > 1
         ? `You drew ${cards.length} cards`
-        : 'You drew ' + cardShortLabel(cards[0]);
-      toast.classList.add('hidden');
-      void toast.offsetWidth;   // restart the pop-in if one is already up
-      toast.classList.remove('hidden');
-      if (drawRevealTimeout) clearTimeout(drawRevealTimeout);
-      // Same wall-clock guard as every other timer-dismissed element here,
-      // so a backgrounded phone can't leave it stuck on screen.
-      holdTransient('draw-toast', DRAW_TOAST_MS);
-      drawRevealTimeout = setTimeout(() => {
-        toast.classList.add('hidden');
-        releaseTransient('draw-toast');
-      }, DRAW_TOAST_MS);
+        : 'You drew ' + cardShortLabel(cards[0]), { ms: DRAW_TOAST_MS });
+      if (twos > 0) showHandToast(twos > 1 ? TRUMP_MANY_TEXT : TRUMP_ONE_TEXT, { trump: true, ms: TRUMP_TOAST_MS });
     }
   }
+
+  // ------------------------------------------------------------------
+  // The note on the hand line (Oct 2026): "You drew 5(h)", and the +2 trump
+  // card message. One at a time -- a second note waits for the first instead
+  // of replacing it, so "You drew 4 cards" and the trump note after it are
+  // both read. Shown over your card count and score (CSS hides those while a
+  // note is up), never over the value box.
+  //
+  // `var` for the queue: runStartSequence clears it and sits far above.
+  // ------------------------------------------------------------------
+  var handToastQueue = [];
+  var handToastBusyUntil = 0;
+  var handToastTimer = null;
+  var TRUMP_TOAST_MS = 3000;
+  var TRUMP_ONE_TEXT = '\uD83D\uDD25 +2 trump card \u2014 use it wisely!';
+  var TRUMP_MANY_TEXT = '\uD83D\uDD25 +2 trump cards \u2014 use them wisely!';
+  function showHandToast(text, opts) {
+    opts = opts || {};
+    const toast = document.getElementById('draw-toast');
+    if (!toast) return;
+    if (Date.now() < handToastBusyUntil && !toast.classList.contains('hidden')) {
+      if (handToastQueue.length < 3) handToastQueue.push([text, opts]);
+      return;
+    }
+    const ms = opts.ms || DRAW_TOAST_MS;
+    toast.textContent = text;
+    toast.classList.toggle('trump', !!opts.trump);
+    // The fade-out runs off this (see .draw-toast), so a longer note fades
+    // at its own end rather than at 1.7s.
+    toast.style.setProperty('--toast-ms', ms + 'ms');
+    toast.classList.add('hidden');
+    void toast.offsetWidth;   // restart the pop-in if one is already up
+    toast.classList.remove('hidden');
+    handToastBusyUntil = Date.now() + ms;
+    if (handToastTimer) clearTimeout(handToastTimer);
+    // Same wall-clock guard as every other timer-dismissed element here, so
+    // a backgrounded phone can't leave it stuck on screen.
+    holdTransient('draw-toast', ms);
+    handToastTimer = setTimeout(() => {
+      handToastTimer = null;
+      toast.classList.add('hidden');
+      releaseTransient('draw-toast');
+      handToastBusyUntil = 0;
+      const next = handToastQueue.shift();
+      if (next) showHandToast(next[0], next[1]);
+    }, ms);
+  }
+
+  // Dealt a 2 this round? Tell them once, after the reveal (see
+  // showStartReveal). Never in the tutorial, which stages its own hands.
+  var trumpNoteRound = null;
+  function maybeShowDealtTrump(game) {
+    try {
+      if (!game || game.roundOver) return;
+      if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
+      if (trumpNoteRound === game.roundNumber) return;
+      const g = (latestGame && latestGame.roundNumber === game.roundNumber) ? latestGame : game;
+      const twos = (g.yourHand || []).filter((c) => c.rank === '2').length;
+      if (!twos) return;
+      trumpNoteRound = game.roundNumber;
+      showHandToast(twos > 1 ? TRUMP_MANY_TEXT : TRUMP_ONE_TEXT, { trump: true, ms: TRUMP_TOAST_MS });
+    } catch (e) { /* a note, never a reason to stop */ }
+  }
+
   socket.on('cards_drawn', ({ cards }) => showDrawReveal(cards));
+
+  // Someone else has asked to leave when this round ends (Oct 2026): five
+  // seconds of "Leaving after this round" on their chair, so the table knows
+  // before their seat empties at the next deal.
+  const LEAVING_NOTICE_MS = 5000;
+  socket.on('player_leaving', (data) => {
+    const { playerId, leaving } = data || {};
+    if (!playerId || playerId === myPlayerId || !latestGame) return;
+    if (leaving) {
+      triggerChatBubble(playerId, {
+        type: 'text', text: '\uD83D\uDC4B Leaving after this round',
+        variant: 'leaving', durationMs: LEAVING_NOTICE_MS,
+      });
+    } else if (chatBubbles[playerId] && chatBubbles[playerId].variant === 'leaving') {
+      delete chatBubbles[playerId];   // they changed their mind
+      renderOvalTable(latestGame);
+    }
+  });
 
   // ---------------- socket listeners ----------------
   function syncWithServer() {
