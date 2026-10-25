@@ -4465,3 +4465,25 @@ body.game-active .bg-scrim { display: none; }
 .game-top .btn-pair > button.tiny { border: none !important; border-radius: 0 !important; margin: 0; }
 .game-top .btn-pair > button.tiny + button.tiny { border-left: 1px solid rgba(255,255,255,0.22) !important; }
 #btn-commentary[aria-pressed="false"] { color: var(--text-muted); }
+
+/* A question to the table ("Will anyone stop them with a +2?") -- gold-edged,
+   between the plain line and the red-to-gold of a +2 moment. */
+.cm-line.ask {
+  background: rgba(30,26,6,0.78); border-color: rgba(242,193,78,0.75);
+}
+
+/* ---- A wider table (Oct 2026) ----
+   The table took its width from its height (1 : 1.05, a shade taller than
+   wide) and was held 20px in from each side, so on most phones it stopped
+   well short of the screen's edges -- empty margin either side, and a narrow
+   middle for the commentary between the side chairs. Now the box is a shade
+   WIDER than tall and may run to the screen's padding, so the chairs move out
+   into that margin and the middle of the table gets the room. The felt keeps
+   its oval (it is inset more at the sides than at the top and bottom), and
+   the same shape on every phone, because the box's proportions are fixed. */
+.oval-table { aspect-ratio: 1.05 / 1; max-width: 100%; }
+
+/* A crowded table: one line, so it fits above the lower chairs at full
+   width (see layoutCommentaryLane). */
+.commentary.one-line .cm-line { white-space: nowrap; }
+.commentary.one-line .cm-text { overflow: hidden; text-overflow: ellipsis; }
