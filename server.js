@@ -1360,6 +1360,9 @@ const RATE_LIMITS = {
   // Changing the max score on the round result. A player trying a few values
   // is normal; anything faster than this is not a person.
   set_max_score: { max: 12, windowMs: 20000 },
+  // "I'll leave when this round ends" and "Stay" -- a person toggles it once
+  // or twice a round at most.
+  announce_leave: { max: 6, windowMs: 30000 },
 };
 const rateBuckets = new Map(); // socket.id -> { [eventName]: number[] recent timestamps }
 
@@ -4733,6 +4736,36 @@ io.on('connection', (socket) => {
   // Change your face without leaving the table. Same shape and the same
   // ownership rule as set_name below: the seat is taken from THIS socket's
   // own index entry, so there is no playerId in the payload to forge.
+  // ---------------------------------------------------------------------------
+  // "I'll leave when this round ends" (Oct 2026).
+  //
+  // The leave itself still happens client-side the moment the round is over --
+  // the server won't take a mid-round exit from anyone still in the hand (see
+  // leave_room). This only lets the rest of the table know it's coming, so a
+  // chair doesn't simply empty at the next deal. `leaving: false` means they
+  // tapped Stay. Nothing is stored: it's a heads-up, not state.
+  // ---------------------------------------------------------------------------
+  socket.on('announce_leave', ({ roomCode, leaving } = {}, ack) => {
+    try {
+      if (isRateLimited(socket, 'announce_leave')) throw new Error('Too many changes too quickly. Please wait a moment.');
+      const entry = socketIndex.get(socket.id);
+      // The socket's OWN seat, never the code it sent -- nobody can announce
+      // on behalf of somebody else, or into a room they aren't in.
+      if (!entry || entry.roomCode !== roomCode) throw new Error('Not in a room.');
+      const room = rooms.get(roomCode);
+      if (!room) throw new Error('Room not found.');
+      const p = room.players.get(entry.playerId);
+      if (!p) throw new Error('Not seated.');
+      if (!room.game || room.phase !== 'playing' || room.game.roundOver) throw new Error('No round in progress.');
+      // The whole room, the way every broadcast here goes; the sender's own
+      // client ignores its own id.
+      io.to(roomCode).emit('player_leaving', { playerId: entry.playerId, name: p.name, leaving: !!leaving });
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
   socket.on('set_name', ({ roomCode, name }, ack) => {
     try {
       if (isRateLimited(socket, 'set_name')) throw new Error('Too many changes too quickly. Please wait a moment.');
