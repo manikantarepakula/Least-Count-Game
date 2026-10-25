@@ -4404,3 +4404,64 @@ body.game-active .bg-scrim { display: none; }
   letter-spacing: 0.02em; text-shadow: 0 1px 4px rgba(0,0,0,0.7);
   animation: lcFadeDown 0.4s ease-out 0.8s both;
 }
+
+/* ==========================================================================
+   LIVE COMMENTARY (Oct 2026)
+   One line at a time under the open card and the joker. app.js places it
+   (top / max-width / max-height) in the space the chairs leave, so it never
+   sits on a card or a chair. Names are in gold; a tense moment (+2 chain,
+   last cards, near the limit) gets the chain banner's red-to-gold.
+   ========================================================================== */
+.commentary {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  z-index: 4; pointer-events: none;
+  display: flex; justify-content: center;
+  width: max-content; max-width: 70%;
+  overflow: hidden;
+}
+.commentary.hidden { display: none; }
+.cm-line {
+  display: inline-flex; align-items: flex-start; gap: 6px;
+  max-width: 100%;
+  padding: 5px 11px 5px 9px; border-radius: 12px;
+  background: rgba(4,20,15,0.66); border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  color: var(--text-light); font-size: 12px; font-weight: 600; line-height: 1.3;
+  text-align: center;
+  animation: cmIn 0.28s cubic-bezier(.2,.8,.2,1) both;
+}
+.cm-line.out { animation: cmOut 0.25s ease-in forwards; }
+.cm-text { min-width: 0; }
+.cm-line b { color: var(--gold-bright); font-weight: 800; }
+.cm-line.hot {
+  background: linear-gradient(90deg, rgba(150,38,30,0.85), rgba(150,108,14,0.85));
+  border-color: rgba(242,193,78,0.6);
+}
+.cm-line.hot b { color: #fff; }
+.cm-mic { flex: 0 0 auto; width: 13px; height: 13px; margin-top: 1px; color: var(--gold-bright); }
+.cm-line.hot .cm-mic { color: #fff; }
+@keyframes cmIn  { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@keyframes cmOut { to { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .cm-line, .cm-line.out { animation: none !important; }
+}
+
+/* The joker card says what it's worth: "Q" with "= 0" under it. It used to
+   be a line below the card, in the space the commentary now uses. */
+.table-center .joker-zero {
+  display: block; margin-top: calc(var(--centre-card-w, 58px) * 0.03);
+  font-size: calc(var(--centre-card-w, 58px) * 0.2); font-weight: 800; line-height: 1;
+  color: #a8790c;
+}
+#joker-caption { display: none; }
+
+/* Sound and commentary: one box, two buttons, so the top bar stays two and
+   two. The box draws the border; the buttons inside drop theirs. */
+.btn-pair {
+  display: inline-flex; align-items: stretch;
+  border: 1.5px solid rgba(255,255,255,0.35); border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.game-top .btn-pair > button.tiny { border: none !important; border-radius: 0 !important; margin: 0; }
+.game-top .btn-pair > button.tiny + button.tiny { border-left: 1px solid rgba(255,255,255,0.22) !important; }
+#btn-commentary[aria-pressed="false"] { color: var(--text-muted); }
