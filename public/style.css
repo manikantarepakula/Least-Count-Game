@@ -4704,7 +4704,8 @@ body:has(#screen-landing.active) .bg-scrim { display: none; }
   .home-sheet, .home-sheet-backdrop { animation: none; }
 }
 .sheet-grab { width: 40px; height: 4px; margin: 0 auto 12px; border-radius: 2px; background: rgba(255,255,255,0.2); }
-.sheet-head { display: flex; align-items: center; gap: 12px; }
+/* Scoped to Home's sheets: the scorecard sheet has a .sheet-head of its own. */
+.home-sheet .sheet-head { display: flex; align-items: center; gap: 12px; }
 .sheet-icon { flex: 0 0 44px; width: 44px; height: 44px; }
 .sheet-head-text { flex: 1 1 auto; min-width: 0; }
 .sheet-head-text h2 { margin: 0; font-size: 20px; font-weight: 700; line-height: 1.2; color: #fff; }
@@ -4865,3 +4866,266 @@ body:has(#screen-landing.active) .bg-scrim { display: none; }
 #screen-landing[data-fit~="tight"] .home-modes { gap: 10px; }
 #screen-landing[data-fit~="tight"] .home-mode { min-height: 60px; padding-top: 7px; padding-bottom: 7px; }
 #screen-landing[data-fit~="tight"] .home-mode-icon { width: 40px; height: 40px; flex-basis: 40px; }
+
+/* ==========================================================================
+   APP STYLE v2 (Oct 2026) -- the Home look, on every screen
+   ==========================================================================
+   Home v2 (above) set the look: one font (Poppins), a calm dark-jade page,
+   lighter panels that stand out by their soft shadow rather than an outline,
+   and chunky buttons with a darker bottom edge that sink when pressed. This
+   section carries that look to every other screen, sheet and popup.
+
+   Only type, colour and surfaces change here. Sizes and spacing -- what
+   fits where, which layout.js and the fit rules above were tuned for -- are
+   left as they were.
+
+   Kept exactly as they were, on purpose:
+     - the playing cards: a card face is printed, not app text;
+     - the felt table: it is the table;
+     - the gold LEAST COUNT wordmark and the LEAST COUNT call (Cinzel).
+   ========================================================================== */
+
+/* ---- 1. One font, everywhere --------------------------------------------- */
+body { font-family: var(--font-ui); }
+/* Form controls don't inherit a font unless told to. */
+button, input, select, textarea { font-family: inherit; }
+/* A card's face keeps its classic printed serif -- ranks, suits, the
+   little "10" on a chair's last discard. */
+.card, .seat-threw-card { font-family: Georgia, 'Times New Roman', serif; }
+/* The group screen's title is a name someone typed: app font, not the logo. */
+.topbar-title { font-family: inherit; font-weight: 700; }
+h1, h2, h3 { font-weight: 700; letter-spacing: -0.1px; }
+
+/* ---- 2. A calm page --------------------------------------------------------- */
+html { background: var(--home-bg); }
+/* A soft pool of light where the table sits; the same deep jade elsewhere. */
+body { background: radial-gradient(circle at 50% 32%, #15332a 0%, var(--home-bg) 62%); }
+#screen-lobby.screen.active,
+#screen-group.screen.active,
+#screen-waiting-host.screen.active,
+#screen-queue-waiting.screen.active { background: var(--home-bg); }
+/* The tumbling-card backdrop sat under opaque screens almost everywhere and
+   is retired with the new look; Home dropped it first. */
+.bg-cards, .bg-scrim { display: none; }
+
+/* ---- 3. Top bars ------------------------------------------------------------ */
+#screen-lobby .landing-topbar,
+#screen-group .landing-topbar { border-bottom: 0; padding: 10px 14px 6px; }
+/* Round buttons, as on Home. */
+.landing-topbar .icon-btn {
+  width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0;
+  border-radius: 50%; border: 0;
+  background: rgba(255,255,255,0.07); color: #e3ece8;
+}
+.landing-topbar .icon-btn .icon { width: 20px; height: 20px; margin: 0; }
+.landing-topbar .icon-btn:hover { background: rgba(255,255,255,0.12); }
+/* Every other small square button (copy code, share, add a bot, close). */
+.icon-btn { border: 0; border-radius: 12px; background: rgba(255,255,255,0.08); color: #e3ece8; }
+.icon-btn:hover { background: rgba(255,255,255,0.13); }
+
+/* ---- 4. Panels: blocks on a screen, popups, sheets --------------------------- */
+/* A block on a screen -- lobby, group, waiting. Lighter than the page, no
+   outline, a soft shadow under it. */
+.mode-block {
+  background: var(--home-card); border: 0; border-radius: 16px;
+  box-shadow: 0 4px 0 var(--home-edge), 0 10px 24px rgba(0,0,0,0.18);
+}
+.mode-block h3 { font-size: 16px; font-weight: 700; color: #fff; }
+.mode-block-sub,
+#screen-lobby .mode-block .hint,
+#screen-group .mode-block .hint,
+#screen-lobby .mode-block label,
+#screen-group .mode-block label { color: var(--home-line); }
+/* A popup: the same colour as Home's sheets. */
+.overlay { background: rgba(3,12,9,0.62); }
+.card-panel {
+  background: var(--home-sheet); color: #fff;
+  border: 0; border-radius: 20px;
+  box-shadow: 0 18px 40px rgba(0,0,0,0.5);
+}
+.card-panel h2 { font-size: 20px; font-weight: 700; color: #fff; }
+/* Bottom sheets: the scorecard and both chats. */
+.sheet-panel,
+.chat-panel {
+  background: var(--home-sheet);
+  border: 0; border-radius: 22px 22px 0 0;
+  box-shadow: 0 -12px 32px rgba(0,0,0,0.45);
+}
+.sheet-head h2 { font-size: 19px; font-weight: 700; }
+/* The overflow menu (three dots). */
+.menu-sheet { background: var(--home-sheet); border: 0; border-radius: 16px; box-shadow: 0 12px 32px rgba(0,0,0,0.5); }
+.menu-row { font-size: 15px; font-weight: 500; }
+.menu-row:active { background: rgba(255,255,255,0.07); }
+
+/* ---- 5. Buttons -------------------------------------------------------------- */
+/* Gold: the one main action on a screen. */
+button.primary,
+button.declare {
+  background: linear-gradient(180deg, #f8cf62 0%, var(--brand) 48%, #ebb43a 100%);
+  color: #261a03; border: 0; border-radius: 14px; font-weight: 700;
+  box-shadow: 0 4px 0 var(--gold-edge), 0 8px 18px rgba(0,0,0,0.25);
+  transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.08s ease;
+}
+button.primary:hover:not(:disabled),
+button.declare:hover:not(:disabled) {
+  background: linear-gradient(180deg, #f8cf62 0%, var(--brand) 48%, #ebb43a 100%);
+  filter: brightness(1.04);
+}
+/* Everyday actions: a filled green button, not an outline. The extra
+   selectors out-rank older screen-specific rules that drew an outline. */
+button.secondary,
+button.action,
+#screen-lobby .mode-block button.secondary,
+#screen-landing .mode-block button.secondary,
+.landing-form button.secondary,
+#screen-landing .landing-form button.secondary,
+#screen-waiting-host .landing-form button.secondary,
+#screen-queue-waiting .landing-form button.secondary,
+.profile-modal-panel .secondary {
+  background: #2d5145; color: #fff; border: 0; border-radius: 14px; font-weight: 700;
+  box-shadow: 0 4px 0 #142a23;
+  transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.08s ease;
+}
+button.action:hover:not(:disabled), button.secondary:hover:not(:disabled) { background: #335b4e; }
+/* Red: costs you something. (A red row in a menu stays a plain row.) */
+button.danger:not(.menu-row) {
+  background: linear-gradient(180deg, #ef4d52 0%, var(--red) 55%, #cf1f26 100%);
+  color: #fff; border: 0; border-radius: 14px; font-weight: 700;
+  box-shadow: 0 4px 0 #8c1419;
+}
+/* Leave buttons: red words on a quiet fill -- clear, but never the loudest. */
+button.leave-btn:not(.tiny),
+#screen-waiting-host .landing-form button.leave-btn,
+#screen-queue-waiting .landing-form button.leave-btn {
+  background: rgba(255,138,128,0.10); color: var(--red-text);
+  border: 0; border-radius: 14px; font-weight: 700;
+  box-shadow: 0 4px 0 rgba(0,0,0,0.30);
+}
+/* Pressed: a button sinks onto its own edge. */
+button.primary:active:not(:disabled),
+button.declare:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 var(--gold-edge), 0 3px 8px rgba(0,0,0,0.25);
+}
+button.secondary:active:not(:disabled),
+button.action:active:not(:disabled),
+button.danger:not(.menu-row):active:not(:disabled),
+button.leave-btn:not(.tiny):active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.35);
+}
+/* Small buttons with no colour of their own (Scores, chat close...). */
+button.tiny:not(.primary):not(.secondary):not(.danger):not(.declare) {
+  background: rgba(255,255,255,0.08); border: 0; border-radius: 12px; color: #e9f1ed; font-weight: 700;
+}
+button.tiny.leave-btn { color: var(--red-text); }
+/* "See full scorecard" and friends: a quiet gold link. */
+.link-btn { font-weight: 600; text-decoration: none; }
+
+/* ---- 6. Inputs and pickers ---------------------------------------------------- */
+input[type=text],
+.dialog-panel input,
+.landing-form input[type=text],
+.profile-modal-panel input[type=text] {
+  border: 2px solid #2f5246; border-radius: 12px;
+  background: #0f241d; color: #fff; font-weight: 500;
+}
+input[type=text]:focus,
+.dialog-panel input:focus { border-color: var(--brand-line); outline: none; }
+input[type=text]::placeholder { color: #7d968b; font-weight: 500; }
+/* The app's own dropdown (Max Score, bot level in the lobby...). */
+.dd-toggle {
+  border: 0; border-radius: 12px; background: var(--home-field); color: #fff;
+  font-weight: 700; box-shadow: 0 3px 0 var(--home-edge);
+}
+.dd-toggle[aria-expanded="true"] { box-shadow: inset 0 0 0 2px var(--brand-line); }
+.dd-list { background: var(--home-sheet); border: 0; border-radius: 14px; box-shadow: 0 12px 30px rgba(0,0,0,0.5); padding: 6px; }
+.dd-list li { border-radius: 10px; font-weight: 500; }
+.dd-list li[aria-selected="true"] { background: rgba(242,193,78,0.16); color: var(--gold-bright); font-weight: 700; }
+#screen-lobby .screen-actions .dd-toggle { background: var(--home-field); border: 0; }
+select { border: 0; border-radius: 12px; background: var(--home-field); color: #fff; font-weight: 600; }
+/* Two- and three-way switches (Members / Marathon, Totals / By round...):
+   the same look as the choices on Home's sheets -- a gold ring on the one
+   chosen. */
+.segmented .seg {
+  border: 2px solid transparent; border-radius: 12px;
+  background: var(--home-field); color: #cfdcd6; font-weight: 700;
+  box-shadow: 0 3px 0 var(--home-edge);
+}
+.segmented .seg.active { background: var(--home-field-on); border-color: var(--brand); color: #fff; }
+/* On/off switch (Vibration). */
+.switch { border: 0; background: rgba(255,255,255,0.12); }
+.switch.on { background: rgba(242,193,78,0.35); }
+
+/* ---- 7. Text ------------------------------------------------------------------- */
+.hint { color: var(--home-line); }
+label { font-weight: 600; }
+.result-row { border-bottom-color: rgba(255,255,255,0.08); }
+
+/* ---- 8. Lobby and group details ------------------------------------------------ */
+#screen-lobby .mode-block select,
+#screen-group .mode-block select { background: var(--home-field); border: 0; border-radius: 10px; color: #fff; }
+#screen-lobby .player-list li { border-bottom-color: rgba(255,255,255,0.08); }
+.lobby-maxscore-row label,
+#screen-lobby .screen-actions label { color: var(--home-line); }
+#screen-lobby .screen-actions { border-top-color: rgba(255,255,255,0.06); }
+/* The group chat button: green like the app's everyday buttons -- red is
+   kept for things that cost you something. The unread badge stays red. */
+.chat-fab.group-chat-fab {
+  background: #2f5a4c; color: #fff;
+  box-shadow: 0 4px 0 #142a23, 0 10px 22px rgba(0,0,0,0.35);
+}
+/* My stats: a popup that shrank to its words ("Games played42"). Given a
+   width, with room between each label and its number. */
+#overlay-my-stats > .card-panel { width: 100%; max-width: 340px; }
+.result-row { gap: 12px; }
+
+/* ---- 9. Game screen ------------------------------------------------------------- */
+/* Sound + commentary: one filled box like the buttons around it, no outline. */
+.btn-pair { border: 0; border-radius: 12px; background: rgba(255,255,255,0.08); }
+.game-top .btn-pair > button.tiny { background: transparent !important; }
+.game-top .btn-pair > button.tiny + button.tiny { border-left: 1px solid rgba(255,255,255,0.12) !important; }
+/* A button that can't be pressed yet sits flat -- no edge to sink onto. */
+button.primary:disabled, button.declare:disabled,
+button.secondary:disabled, button.action:disabled { box-shadow: none; filter: saturate(0.6); }
+/* Buttons side by side in a popup line up: .danger and .leave-btn carry a
+   top margin of their own elsewhere. */
+.dialog-actions button { margin: 0; }
+/* Round result: each player's row a lighter field on the sheet. */
+.reveal-row { background: var(--home-field); border-radius: 12px; }
+.reveal-rows { border-top-color: rgba(255,255,255,0.08); }
+/* Leave Game under Start Now stays deliberately quiet -- words only, no
+   button shape -- so it is never mistaken for the way forward. */
+#btn-leave-round-result, #btn-leave-gameover {
+  background: transparent; color: var(--home-line); box-shadow: none;
+}
+#btn-leave-round-result:active, #btn-leave-gameover:active { transform: none; box-shadow: none; color: var(--red-text); }
+/* "Open Card" and "Joker" over the two centre cards: Poppins is wider than
+   the old serif, so on a crowded table the two labels met in the middle.
+   They now scale with the centre cards (the same --centre-card-w the cards
+   use), from 11px at full size down to 9px. */
+.table-center .pile-label {
+  font-size: clamp(9px, calc(var(--centre-card-w, 58px) * 0.19), 11px);
+  white-space: nowrap; color: #cfe0d8;
+}
+
+/* Live commentary in the app font: regular weight, names in bold gold. The
+   old 600 rendered as Poppins Bold, which is wide -- fewer words per line,
+   and the lane under the centre cards filled up with one heavy sentence. */
+.cm-line { font-size: 11.5px; font-weight: 500; line-height: 1.35; padding: 5px 11px 5px 9px; }
+.cm-line b { font-weight: 700; }
+
+/* Docked over the turn strip (a crowded table -- see layoutCommentaryLane):
+   the line takes the strip's place and shape for a few seconds, full width,
+   in the strip's own size of type. */
+.commentary.docked { transform: none; max-width: none; justify-content: stretch; z-index: 6; }
+.commentary.docked .cm-line {
+  width: 100%; height: 100%; box-sizing: border-box;
+  align-items: center; justify-content: center;
+  border-radius: var(--radius-md); padding: 0 12px;
+  font-size: 13px;
+  background: #13302a; border: 1px solid rgba(242,193,78,0.35);
+  box-shadow: none;
+}
+.commentary.docked .cm-line.hot { background: linear-gradient(90deg, rgba(150,38,30,0.95), rgba(150,108,14,0.95)); }
+.commentary.docked .cm-mic { margin-top: 0; }
