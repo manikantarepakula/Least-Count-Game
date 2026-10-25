@@ -75,7 +75,7 @@
      server.js) can never pair the new markup with the old styles or code.
      The same ?v= is on app.js at the bottom of this file. -->
 
-<link rel="stylesheet" href="style.css?v=game1-2026-10-25" />
+<link rel="stylesheet" href="style.css?v=game2-2026-10-25" />
 </head>
 <body>
 
@@ -827,6 +827,14 @@
     <span id="turn-strip-text" class="turn-strip-text"></span>
     <span id="turn-strip-time" class="turn-strip-time"></span>
   </div>
+  <!-- A leave queued mid-round (Oct 2026). It used to be a small red dot on
+       the Leave button that nobody read as "you're leaving"; now it says so,
+       and Stay calls it off. The rest of the table is told too (see
+       announce_leave in server.js). -->
+  <div id="leave-line" class="leave-line hidden" role="status">
+    <span class="leave-line-text">You’ll leave when this round ends</span>
+    <button id="btn-leave-stay" class="leave-line-stay" type="button">Stay</button>
+  </div>
 
   <div class="oval-table" id="oval-table">
     <div class="table-felt"></div>
@@ -927,13 +935,13 @@
   </div>
 
   <div class="hand-header">
-    <!-- "You drew 5♥" (Oct 2026): a small note right after "Your cards
-         (Value: N)", in place of the full-screen "You drew" panel that
-         darkened the whole table for 2.5 seconds on almost every turn. The
-         card itself flies into your hand and is marked NEW there. It sits
-         ON this line, not above it: above it is your own chair at the
-         bottom of the table. -->
-    <span class="hand-title">Your cards (Value: <b id="hand-value">0</b>)<span id="draw-toast" class="draw-toast hidden" aria-live="polite"></span></span>
+    <!-- The line above your cards (Oct 2026, step 2): your hand value as a
+         box that turns gold at 5 or less -- the moment you're allowed to
+         call -- then your card count and score, which used to sit on your
+         chair. "You drew 5♥" and the +2 trump-card note show over the count
+         and score for a moment (#draw-toast): above this line is your own
+         chair, so a note there landed on top of it. -->
+    <span class="hand-title"><span id="hand-value-pill" class="hand-value-pill">Value <b id="hand-value">0</b></span><span class="hand-stats-wrap"><span id="draw-toast" class="draw-toast hidden" aria-live="polite"></span><span id="hand-stats" class="hand-stats"></span></span></span>
     <div class="hand-header-actions">
       <button id="btn-show-hint" class="hint-btn hidden" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 21h6v-1.5H9V21ZM12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2v.3h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg> Show hint</button>
       <button id="chat-fab" class="chat-fab hidden" type="button" aria-label="Open chat">
@@ -959,8 +967,11 @@
   <div class="action-bar">
     <!-- .action, not .primary: this is the routine move of the game and the
          gold Least Count! beside it has to win the eye when it lights up. -->
-    <button id="btn-discard" class="action" disabled>Discard Selected</button>
-    <button id="btn-declare" class="declare" disabled>Least Count!</button>
+    <!-- "Discard 2" says how many cards you've picked (Oct 2026). The
+         second line on Least Count! says when it can be used, while it
+         can't. -->
+    <button id="btn-discard" class="action" disabled>Discard</button>
+    <button id="btn-declare" class="declare" disabled><span class="btn-main">Least Count!</span><span id="declare-sub" class="btn-sub">at 5 or less</span></button>
   </div>
   <p id="game-error" class="error"></p>
 </div>
@@ -1349,7 +1360,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js?v=game1-2026-10-25" defer></script>
+<script src="app.js?v=game2-2026-10-25" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
