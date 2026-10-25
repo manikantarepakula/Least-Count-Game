@@ -1294,7 +1294,13 @@ function introMsForRound(roundNumber) {
 //   2. SCORECARD_HOLD_MS   -- the round-result scorecard, with a visible
 //      countdown ticking down to the auto-start.
 // ---------------------------------------------------------------------------
-const ROUND_REVEAL_HOLD_MS = 8000;  // keep in sync with REVEAL_HOLD_MS (public/app.js)
+// Oct 2026: the client now plays the LEAST COUNT call first (2.4s --
+// DECLARE_CALL_MS + DECLARE_VERDICT_MS in app.js), then holds the cards
+// face-up for REVEAL_HOLD_MS (4s, down from 8s: players read the long still
+// table as frozen). The scorecard appears after both, so the auto-advance
+// counts both.
+const DECLARE_CALLOUT_MS = 2400;    // keep in sync with app.js
+const ROUND_REVEAL_HOLD_MS = DECLARE_CALLOUT_MS + 4000;  // 4000 = REVEAL_HOLD_MS (public/app.js)
 const SCORECARD_HOLD_MS = 10000;
 const AUTO_NEXT_ROUND_MS = ROUND_REVEAL_HOLD_MS + SCORECARD_HOLD_MS;
 
