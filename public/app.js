@@ -9507,7 +9507,7 @@
   var cmShowing = null;        // { pri, until } for the line on screen
   var cmTimer = null;
   var cmLastPick = {};         // event -> template last used, so lines don't repeat back to back
-  var cmRound = { number: null, streak: {}, low: {} };
+  var cmRound = { number: null, streak: {}, low: {}, said: {}, turns: 0 };
   var cmStandings = null;      // the order at the start of the previous round
 
   var CM_LINES = {
@@ -9525,7 +9525,7 @@
     matchMe: ['You match the {R}. Clean turn!', 'Nice match! No pick-up for you'],
     matchMany: ['{A} matches with {K} {Rs}!', '{Kc} {Rs} down, no pick-up for {A}!'],
     matchManyMe: ['You match with {K} {Rs}!', '{Kc} {Rs} gone, no pick-up!'],
-    bigThrow: ['{A} drops {K} {Rs} at once!', 'Big throw! {K} cards from {A}'],
+    bigThrow: ['{A} drops {K} {Rs} at once!', 'Big throw! {Kc} cards from {A}'],
     bigThrowMe: ['You drop {K} {Rs} at once!'],
     streak: ['{A} picks up again, 3 in a row', 'Tough run for {A}: 3 pick-ups'],
     streakMe: ['Third pick-up in a row for you'],
@@ -9542,6 +9542,32 @@
     comeback: ['Comeback! {A} climbs to {P}', '{A} is fighting back, now {P}'],
     comebackMe: ['Comeback! You climb to {P}'],
     finalTwo: ['Final two! {A} vs {B}', 'It all comes down to {A} and {B}!'],
+    // Insights (Oct 2026): questions that build suspense and nudge the table.
+    // Asked, never claimed -- three cards might be three Kings.
+    lowStop: ['{A} has only {N} cards! Will anyone stop them with a +2?', 'Just {N} cards for {A}! Time for a +2?'],
+    lowStopMe: ['Only {N} cards left for you! Will anyone stop you?'],
+    callTurn: ['{A}\u2019s turn with just {N} cards... will they call LEAST COUNT?', '{N} cards, and it\u2019s {A}\u2019s turn. A call coming?'],
+    callTurnOne: ['One card left and it\u2019s {A}\u2019s turn... will they call it?'],
+    riskCall: ['{A} has {N} cards but is on {S}. A wrong call could end their game. Risk it?'],
+    nextUp: ['{L} is next with {N} cards. A +2 now would hit them!', '{L} is next with only {N} cards. Anyone holding a 2?'],
+    nextUpMe: ['{L} is next with {N} cards. A +2 from you would hit them!'],
+    tipTwo: ['You hold a 2, and {L} is next with {N} cards!'],
+    leaderLow: ['Leader {A} is down to {N} cards. Can anyone catch them?'],
+    leaderLowMe: ['You lead, and you are down to {N} cards!'],
+    chainHitsLow: ['That hurts! {A} goes from {X} cards to {Y}', 'Big setback for {A}: {X} cards to {Y}'],
+    chainHitsLowMe: ['That hurts! You go from {X} cards to {Y}'],
+    long10: ['Ten turns and still no call. Who blinks first?'],
+    long20: ['Twenty turns! This round is a real battle'],
+    myLow: ['You\u2019re on {V}. Call it now, or risk one more turn?', '{V} points in hand! Call LEAST COUNT or play on?'],
+    // Runs across rounds (Oct 2026). A round is "won" with a round score of 0;
+    // a "rough round" is the round's single biggest score. The rough side is
+    // always said kindly -- it cheers them on, it never mocks.
+    winRun: ['{A} has won {N} rounds in a row! Can anyone stop them?', '{Nc} in a row for {A}! Who will break the run?'],
+    winRunMe: ['You have won {N} rounds in a row! Keep it going!'],
+    roughRun: ['Tough run for {A}: {N} rough rounds. Time to bounce back?', '{A} is due a good round. Will it be this one?'],
+    roughRunMe: ['{Nc} rough rounds for you. Time to bounce back!'],
+    runEnds: ['{A}\u2019s winning run ends at {N}!', 'The run is over! {A} stops at {N} wins'],
+    runEndsMe: ['Your winning run ends at {N}. Start a new one!'],
   };
   var CM_MIC = '<svg class="cm-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>';
 
@@ -9584,7 +9610,8 @@
   function cmSay(html, pri, opts) {
     if (!commentaryOn || !html) return;
     opts = opts || {};
-    const item = { html, pri, hot: !!opts.hot, stake: !!opts.stake, at: Date.now(), notBefore: opts.notBefore || 0 };
+    const item = { html, pri, hot: !!opts.hot, ask: !!opts.ask, stake: !!opts.stake, ttl: opts.ttl || 0,
+      at: Date.now(), notBefore: opts.notBefore || 0 };
     if (cmShowing && pri > cmShowing.pri && cmCanShow() && Date.now() >= item.notBefore) { cmShowLine(item); return; }
     cmQueue.push(item);
     cmQueue.sort((a, b) => b.pri - a.pri || a.at - b.at);
@@ -9598,7 +9625,7 @@
     if (cmShowing && now < cmShowing.until) { cmTimer = setTimeout(cmPump, cmShowing.until - now + 20); return; }
     // Old news is dropped: a line about a move from several seconds ago is
     // just noise. The round's stakes may wait out the deal.
-    cmQueue = cmQueue.filter((it) => now - it.at < (it.stake ? 25000 : 5000));
+    cmQueue = cmQueue.filter((it) => now - it.at < (it.ttl || (it.stake ? 25000 : 5000)));
     if (!cmQueue.length) { cmEndLine(); return; }
     if (!cmCanShow()) { cmEndLine(); cmTimer = setTimeout(cmPump, 500); return; }
     const ready = cmQueue.findIndex((it) => now >= it.notBefore);
@@ -9610,9 +9637,19 @@
     const lane = document.getElementById('commentary');
     if (!lane) return;
     layoutCommentaryLane();
-    lane.innerHTML = '<span class="cm-line' + (item.hot ? ' hot' : '') + '">' + CM_MIC
+    lane.innerHTML = '<span class="cm-line' + (item.hot ? ' hot' : (item.ask ? ' ask' : '')) + '">' + CM_MIC
       + '<span class="cm-text">' + item.html + '</span></span>';
     lane.classList.remove('hidden');
+    // One line that still doesn't fit: a little smaller type before any of
+    // it is cut off.
+    if (lane.classList.contains('one-line')) {
+      const line = lane.querySelector('.cm-line');
+      let size = 12;
+      while (line && line.scrollWidth > lane.clientWidth + 1 && size > 10) {
+        size -= 0.5;
+        line.style.fontSize = size + 'px';
+      }
+    }
     const showFor = ms || COMMENTARY_LINE_MS;
     cmShowing = { pri: item.pri, until: Date.now() + showFor };
     // Same wall-clock guard as every other timer-dismissed element here, so
@@ -9647,7 +9684,7 @@
   function commentaryReset() {
     commentaryHush();
     cmQueue = [];
-    cmRound = { number: null, streak: {}, low: {} };
+    cmRound = { number: null, streak: {}, low: {}, said: {}, turns: 0 };
     cmStandings = null;
   }
 
@@ -9657,12 +9694,13 @@
       if (!next || !Array.isArray(next.turnOrder)) return;
       if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
       if (cmRound.number !== next.roundNumber) {
-        cmRound = { number: next.roundNumber, streak: {}, low: {} };
+        cmRound = { number: next.roundNumber, streak: {}, low: {}, said: {}, turns: 0 };
         if (!next.roundOver) cmRoundStakes(next);
         return;
       }
       if (!prev || prev.roundNumber !== next.roundNumber || prev.roundOver || next.roundOver) return;
       cmTurn(prev, next);
+      if (next.currentPlayer !== prev.currentPlayer) cmNewTurn(next);
     } catch (e) { /* commentary never gets in the way of the game */ }
   }
 
@@ -9675,21 +9713,21 @@
     const max = g.eliminationScore;
     const order = alive.slice().sort((a, b) => (totals[a] || 0) - (totals[b] || 0));
     const lines = [];
-    const said = (key, id, vals, pri, hot) => {
+    const said = (key, id, vals, pri, style) => {
       const mine = id === myPlayerId && CM_LINES[key + 'Me'];
-      lines.push([cmLine(mine ? key + 'Me' : key, Object.assign({ A: cmName(id) }, vals || {})), pri, hot]);
+      lines.push([cmLine(mine ? key + 'Me' : key, Object.assign({ A: cmName(id) }, vals || {})), pri, style || {}]);
     };
     if (g.roundNumber === 1 || !cmStandings) {
-      if (g.roundNumber === 1) lines.push([cmLine('opener'), 1, false]);
+      if (g.roundNumber === 1) lines.push([cmLine('opener'), 1, {}]);
     } else {
       const before = cmStandings;
       if (alive.length === 2 && before.alive.length > 2) {
-        lines.push([cmLine('finalTwo', { A: cmName(order[0]), B: cmName(order[1]) }), 3, true]);
+        lines.push([cmLine('finalTwo', { A: cmName(order[0]), B: cmName(order[1]) }), 3, { hot: true }]);
       }
       if (max) {
         const close = alive.filter((id) => (totals[id] || 0) >= max * 0.85 && (totals[id] || 0) < max)
           .sort((a, b) => (totals[b] || 0) - (totals[a] || 0))[0];
-        if (close) said('danger', close, { S: totals[close] || 0, M: max }, 3, true);
+        if (close) said('danger', close, { S: totals[close] || 0, M: max }, 3, { hot: true });
       }
       let best = null;
       alive.forEach((id) => {
@@ -9697,15 +9735,54 @@
         if (was >= 0 && was - now >= 2 && (!best || was - now > best.gain)) best = { id, gain: was - now, pos: now };
       });
       if (best) {
-        said('comeback', best.id, { P: cmPlace(best.pos) }, 2, false);
+        said('comeback', best.id, { P: cmPlace(best.pos) }, 2);
       } else if (order.length > 1 && order[0] !== before.order[0]
           && (totals[order[0]] || 0) < (totals[order[1]] || 0)) {
-        said('leader', order[0], { S: totals[order[0]] || 0 }, 2, false);
+        said('leader', order[0], { S: totals[order[0]] || 0 }, 2);
       }
     }
+    cmRuns(g, alive, said);
     cmStandings = { order, alive };
+    // The two that matter most, after the deal and the turn-over.
     const after = Date.now() + 2400;
-    lines.slice(0, 2).forEach(([html, pri, hot]) => cmSay(html, pri, { hot, stake: true, notBefore: after }));
+    lines.sort((a, b) => b[1] - a[1]).slice(0, 2).forEach(([html, pri, style]) =>
+      cmSay(html, pri, { hot: !!style.hot, ask: !!style.ask, stake: true, notBefore: after }));
+  }
+
+  // Runs across rounds, read from the round history every player is sent:
+  //   won   -- a round score of 0 (a right call, or the lowest hand)
+  //   rough -- the single biggest score of the round
+  // Two in a row is a run. When a winning run of two or more is broken, that
+  // gets a line too.
+  function cmRuns(g, alive, said) {
+    const hist = Array.isArray(g.roundHistory) ? g.roundHistory : [];
+    if (hist.length < 2) return;
+    const wonIn = (r, id) => r.roundScores && r.roundScores[id] === 0;
+    const roughIn = (r, id) => {
+      const sc = r.roundScores || {};
+      const top = Math.max(...Object.values(sc));
+      return top > 0 && sc[id] === top && Object.values(sc).filter((v) => v === top).length === 1;
+    };
+    const run = (id, test, upTo) => {
+      let n = 0;
+      for (let i = upTo; i >= 0 && test(hist[i], id); i--) n++;
+      return n;
+    };
+    const last = hist.length - 1;
+    let win = null, rough = null, ended = null;
+    alive.forEach((id) => {
+      const w = run(id, wonIn, last);
+      if (w >= 2 && (!win || w > win.n)) win = { id, n: w };
+      const r = run(id, roughIn, last);
+      if (r >= 2 && (!rough || r > rough.n)) rough = { id, n: r };
+      if (w === 0) {
+        const was = run(id, wonIn, last - 1);
+        if (was >= 2 && (!ended || was > ended.n)) ended = { id, n: was };
+      }
+    });
+    if (win) said('winRun', win.id, { N: win.n, Nc: cmCount(win.n, true) }, 3, { ask: true });
+    if (ended) said('runEnds', ended.id, { N: ended.n }, 2);
+    if (rough) said('roughRun', rough.id, { N: rough.n, Nc: cmCount(rough.n, true) }, 2, { ask: true });
   }
 
   // One turn, read from the difference between two updates.
@@ -9725,10 +9802,16 @@
       if (next.chainCount > prev.chainCount) {
         cmSay(cmLine(pick('chainStack'), Object.assign({ N: next.chainCount * 2 }, names)), 3, { hot: true });
       } else if (next.chainCount === 0 && delta > 0) {
-        const key = me ? 'chainTakeMe' : (delta >= 6 ? 'chainTakeBig' : 'chainTake');
-        cmSay(cmLine(key, Object.assign({ N: delta }, names)), 3, { hot: true });
+        if (before <= 3) {
+          // The +2 landed on someone who was nearly out of cards.
+          cmSay(cmLine(me ? 'chainHitsLowMe' : 'chainHitsLow', Object.assign({ X: before, Y: after }, names)), 3, { hot: true });
+          cmRound.low[actor] = {};   // they're back up: their low-card moments can come round again
+        } else {
+          const key = me ? 'chainTakeMe' : (delta >= 6 ? 'chainTakeBig' : 'chainTake');
+          cmSay(cmLine(key, Object.assign({ N: delta }, names)), 3, { hot: true });
+        }
       }
-      cmLowCards(actor, after);
+      cmLowCards(actor, after, next);
       return;
     }
 
@@ -9753,19 +9836,110 @@
     const streak = cmRound.streak;
     streak[actor] = drew ? (streak[actor] || 0) + 1 : 0;
     if (streak[actor] === 3) cmSay(cmLine(me ? 'streakMe' : 'streak', names), 1);
-    cmLowCards(actor, after);
+    cmLowCards(actor, after, next);
+
+    // A long round with nobody calling.
+    cmRound.turns += 1;
+    if (cmRound.turns === 10 || cmRound.turns === 20) cmSay(cmLine('long' + cmRound.turns), 2, { ask: true });
   }
 
-  // Down to the last cards -- said once at two, once at one, per round.
-  function cmLowCards(id, count) {
+  // Down to the last cards (once each, per round):
+  //   first at 3 or fewer -- "Only 3 cards! Will anyone stop them with a +2?"
+  //   at 2 -- "down to 2" (or, for the leader, "can anyone catch them?")
+  //   at 1 -- "just ONE card left!"
+  function cmLowCards(id, count, g) {
     const low = cmRound.low[id] || (cmRound.low[id] = {});
     const me = id === myPlayerId;
+    const A = cmName(id);
     if (count === 1 && !low[1]) {
-      low[1] = low[2] = true;
-      cmSay(cmLine(me ? 'oneLeftMe' : 'oneLeft', { A: cmName(id) }), 3, { hot: true });
-    } else if (count === 2 && !low[2]) {
+      low[1] = low[2] = low.first = true;
+      cmSay(cmLine(me ? 'oneLeftMe' : 'oneLeft', { A }), 3, { hot: true });
+      return;
+    }
+    if (count < 2 || count > 3) return;
+    const leader = g && cmLeader(g) === id;
+    if (count === 2 && leader && !low.leader) {
+      low.leader = low[2] = low.first = true;
+      cmSay(cmLine(me ? 'leaderLowMe' : 'leaderLow', { A, N: count }), 3, { ask: true });
+      return;
+    }
+    if (!low.first) {
+      low.first = true;
+      if (count === 2) low[2] = true;
+      cmSay(cmLine(me ? 'lowStopMe' : 'lowStop', { A, N: count }), 3, { ask: !me, hot: me });
+      return;
+    }
+    if (count === 2 && !low[2]) {
       low[2] = true;
-      cmSay(cmLine(me ? 'twoLeftMe' : 'twoLeft', { A: cmName(id) }), 2, { hot: true });
+      cmSay(cmLine(me ? 'twoLeftMe' : 'twoLeft', { A }), 2, { hot: true });
+    }
+  }
+
+  // The unique lowest total among players still in -- from round 2, when
+  // there is a real leader to speak of.
+  function cmLeader(g) {
+    if (!g || !(g.roundNumber > 1)) return null;
+    const out = (g.eliminated || []).concat(g.quit || []);
+    const totals = g.scores || {};
+    const alive = (g.turnOrder || []).filter((x) => out.indexOf(x) === -1)
+      .sort((a, b) => (totals[a] || 0) - (totals[b] || 0));
+    if (alive.length < 2 || (totals[alive[0]] || 0) === (totals[alive[1]] || 0)) return null;
+    return alive[0];
+  }
+
+  // Who plays after this player (the round's turn order, skipping anyone
+  // who has quit).
+  function cmNextPlayer(g, id) {
+    const order = (g.turnOrder || []).filter((x) => (g.quit || []).indexOf(x) === -1);
+    const i = order.indexOf(id);
+    return i < 0 || order.length < 2 ? null : order[(i + 1) % order.length];
+  }
+
+  // A turn begins: the questions worth asking right now. Each once per
+  // player per round, and short-lived -- they're about THIS turn.
+  function cmNewTurn(g) {
+    if (!g || g.roundOver || !g.currentPlayer || g.chainCount > 0) return;
+    const said = cmRound.said;
+    const counts = g.handCounts || {};
+    const cur = g.currentPlayer;
+    const curN = counts[cur];
+    const totals = g.scores || {};
+    const max = g.eliminationScore;
+
+    if (cur === myPlayerId) {
+      // Your own hand at 5 or less -- only on your phone, and only once.
+      const v = g.yourHandValue;
+      if (typeof v === 'number' && v <= 5 && (g.yourHand || []).length && !said.myLow) {
+        said.myLow = true;
+        cmSay(cmLine('myLow', { V: v }), 3, { ask: true, ttl: 8000 });
+      }
+    } else if (typeof curN === 'number' && curN >= 1 && curN <= 3) {
+      const A = cmName(cur);
+      if (max && (totals[cur] || 0) >= max * 0.85 && (totals[cur] || 0) < max && !said['risk:' + cur]) {
+        said['risk:' + cur] = said['call:' + cur] = true;
+        cmSay(cmLine('riskCall', { A, N: curN, S: totals[cur] || 0 }), 3, { hot: true, ttl: 3500 });
+      } else if (!said['call:' + cur]) {
+        said['call:' + cur] = true;
+        cmSay(cmLine(curN === 1 ? 'callTurnOne' : 'callTurn', { A, N: curN }), 3, { ask: true, ttl: 3500 });
+      }
+    }
+
+    // The player after this one is nearly out of cards: a +2 now would hit
+    // them. Said to everyone; once per player per round (and again at one
+    // card).
+    const nxt = cmNextPlayer(g, cur);
+    const nN = nxt ? counts[nxt] : undefined;
+    if (!nxt || nxt === cur || nxt === myPlayerId || typeof nN !== 'number' || nN < 1 || nN > 3) return;
+    const key = (nN === 1 ? 'next1:' : 'next:') + nxt;
+    if (said[key]) return;
+    said[key] = true;
+    const L = cmName(nxt);
+    // Using YOUR cards ("you hold a 2") is coaching, so only against bots.
+    const holdTwo = cur === myPlayerId && (g.yourHand || []).some((c) => c.rank === '2');
+    if (holdTwo && amSoloVsBots()) {
+      cmSay(cmLine('tipTwo', { L, N: nN }), 3, { ask: true, ttl: 8000 });
+    } else {
+      cmSay(cmLine(cur === myPlayerId ? 'nextUpMe' : 'nextUp', { L, N: nN }), 2, { ask: true, ttl: 3500 });
     }
   }
 
@@ -9776,8 +9950,11 @@
     } catch (e) { /* never in the way */ }
   }
 
-  // The lane sits under the open card and joker, as wide as the chairs
-  // either side leave room for, and stops above your own chair.
+  // The lane sits under the open card and joker and stops above the first
+  // chair below it. With room for two lines it may wrap; on a crowded table,
+  // where the lower chairs come close, it becomes ONE line instead -- which
+  // then fits above those chairs at full width, rather than squeezing
+  // between them four words to a line.
   function layoutCommentaryLane() {
     const oval = document.getElementById('oval-table');
     const lane = document.getElementById('commentary');
@@ -9786,25 +9963,34 @@
     const o = oval.getBoundingClientRect();
     const c = centre.getBoundingClientRect();
     if (!o.width || !c.height) return;
-    const top = c.bottom - o.top + 10;
-    const band = 40;   // up to two lines
-    let half = Math.min(o.width * 0.44, 160);
-    let floor = o.height;
-    oval.querySelectorAll('.seat').forEach((s) => {
+    const mid = o.width / 2;
+    const top = c.bottom - o.top + 8;
+    const seats = Array.prototype.map.call(oval.querySelectorAll('.seat'), (s) => {
       const r = s.getBoundingClientRect();
-      const st = r.top - o.top, sb = r.bottom - o.top;
-      const cx = (r.left + r.right) / 2 - o.left;
-      if (Math.abs(cx - o.width / 2) < r.width / 2) {
-        // A chair straight below (yours): it decides how far down, not how wide.
-        if (st > top) floor = Math.min(floor, st - 4);
-        return;
-      }
-      if (sb < top || st > top + band) return;
-      half = Math.min(half, Math.abs(cx - o.width / 2) - r.width / 2 - 8);
+      return { top: r.top - o.top, bottom: r.bottom - o.top, inner: Math.abs((r.left + r.right) / 2 - o.left - mid) - r.width / 2 };
+    });
+    // How far down: the first chair below the lane that reaches into the
+    // middle 220px (yours, and the lower side chairs on a busy table).
+    let floor = o.height;
+    seats.forEach((r) => { if (r.top > top && r.inner < 110) floor = Math.min(floor, r.top - 4); });
+    const room = floor - top;
+    const twoLines = room >= 44;
+    // How wide: whatever the chairs level with the lane leave free -- up to
+    // the screen's own edges, not the table's, so a small table on a short
+    // phone still gets a line long enough to read.
+    const bandBottom = top + (twoLines ? 44 : 24);
+    const scr = oval.closest('.screen');
+    const sr = scr ? scr.getBoundingClientRect() : o;
+    const screenHalf = Math.min(o.left + mid - sr.left, sr.right - (o.left + mid)) - 12;
+    let half = Math.min(165, Math.max(o.width * 0.44, screenHalf));
+    seats.forEach((r) => {
+      if (r.bottom < top || r.top > bandBottom) return;
+      half = Math.min(half, r.inner - 8);
     });
     lane.style.top = Math.round(top) + 'px';
     lane.style.maxWidth = Math.round(Math.max(110, 2 * half)) + 'px';
-    lane.style.maxHeight = Math.round(Math.max(20, floor - top)) + 'px';
+    lane.style.maxHeight = Math.round(Math.max(20, room)) + 'px';
+    lane.classList.toggle('one-line', !twoLines);
   }
 
   // The mic button beside the sound button. On by default.
