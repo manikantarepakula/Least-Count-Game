@@ -4178,3 +4178,216 @@ body.game-active .bg-scrim { display: none; }
   #screen-game.round-reveal #joker-indicator .card, #screen-game.round-reveal #open-card-slot .card,
   #screen-game.round-reveal #joker-caption { animation: none !important; }
 }
+
+/* ==========================================================================
+   GAME SCREEN, STEP 2 (Oct 2026)
+   The chairs, the line above your cards, your cards, the two buttons, the +2
+   card, and leaving mid-round. Same colours, fonts and panels as the rest of
+   the game -- only the layout and the labels change.
+   ========================================================================== */
+
+/* ---- Chairs: the name alone on line 1, "12 cards · 40" on line 2, and
+   "threw 7♦" under that ----
+   The colour-and-initial disc, a dash and the score used to share line 1
+   with the name, leaving it three or four letters. The name has the line to
+   itself now; the score sits with the card count. */
+.seat-id { gap: calc(5px * var(--seat-scale)); }
+/* Lines 2 and 3 wrap naturally: "threw 7♦" drops under the count whenever
+   the chair is too narrow to hold both -- which is almost always. */
+.seat-stats {
+  flex-direction: row; flex-wrap: wrap; justify-content: center;
+  row-gap: calc(1px * var(--seat-scale)); column-gap: calc(5px * var(--seat-scale));
+  margin-top: calc(1px * var(--seat-scale));
+}
+.seat-line2 { display: inline-flex; align-items: baseline; justify-content: center; white-space: nowrap; max-width: 100%; }
+.seat-line2 .seat-score { font-size: calc(10.5px * var(--seat-scale)); }
+.seat-line2 .seat-score::before {
+  content: '\00b7'; margin: 0 calc(3px * var(--seat-scale));
+  color: var(--text-muted); font-weight: 400;
+}
+.seat-threw {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: calc(3px * var(--seat-scale)); max-width: 100%; min-width: 0;
+}
+.seat-threw-label { font-size: calc(9.5px * var(--seat-scale)); color: var(--text-muted); }
+.seat.active .seat-threw-label { color: rgba(0,0,0,0.6); }
+/* The card itself: a small white face in its own colours. */
+.seat-threw-card {
+  display: inline-block; flex: 0 0 auto;
+  padding: 0 calc(3px * var(--seat-scale)); border-radius: 3px;
+  background: #fff; border: 1px solid transparent;
+  font-size: calc(10px * var(--seat-scale)); font-weight: 800; line-height: 1.35;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
+.seat-threw-card.red { color: #c0392b; }
+.seat-threw-card.black { color: #1a1a1a; }
+.seat-threw-card.trump { border-color: #c0392b; }
+/* A crowded table: the card speaks for itself, and fits beside the count
+   when the chair is wide enough. */
+.oval-table.compact-seats .seat-threw-label { display: none; }
+
+/* The open card and the joker take exactly their own width, so the pair is
+   centred on the table: the wider "Open Card" label used to widen its column
+   and push both cards toward the right-hand chair. The label may run past
+   the card -- it has the gap to do it in. */
+.table-center .pile-group { width: var(--centre-card-w, 58px); }
+.table-center .pile-label { white-space: nowrap; margin-left: -24px; margin-right: -24px; }
+
+/* ---- The line above your cards: [Value 7]  7 cards · Score 40 ---- */
+.hand-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.hand-value-pill {
+  flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 4px;
+  padding: 3px 10px; border-radius: 14px;
+  background: var(--jade-panel-alt); border: 1px solid var(--jade-border);
+  font-size: 11px; font-weight: 700; line-height: 1.2; white-space: nowrap;
+  color: var(--text-muted);
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.hand-value-pill b { font-size: 15px; color: var(--text-light); font-variant-numeric: tabular-nums; }
+/* 5 or less -- you may call. The same gold as "Your turn" in the strip. */
+.hand-value-pill.can-call {
+  background: linear-gradient(160deg, var(--brand) 0%, var(--brand-2) 55%, var(--brand-3) 100%);
+  border-color: transparent; color: var(--brand-on);
+}
+.hand-value-pill.can-call b { color: var(--brand-on); }
+/* The title takes the whole line up to the buttons on the right, so a note
+   knows how much room it has: one line when it fits, two when "Show hint" is
+   up -- never over the buttons. */
+.hand-header > .hand-title { flex: 1 1 auto; }
+.hand-stats-wrap { position: relative; display: inline-flex; align-items: center; flex: 1 1 auto; min-width: 0; }
+.hand-stats {
+  font-size: 12px; color: var(--text-light);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* A note ("You drew 5♥", the +2 note) sits where the count and score are;
+   the value box stays in view. The toast comes first in the markup so this
+   needs only the sibling selector. */
+.draw-toast {
+  left: 0; max-width: 100%; white-space: normal; line-height: 1.25;
+  animation: lcToastIn 0.25s ease-out both, lcToastOut 0.3s ease-in calc(var(--toast-ms, 2000ms) - 300ms) forwards;
+}
+.draw-toast:not(.hidden) + .hand-stats { visibility: hidden; }
+/* The +2 trump-card note, in the chain banner's own red-to-gold. */
+.draw-toast.trump {
+  background: linear-gradient(90deg, #c0392b, var(--gold));
+  border-color: transparent; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
+
+/* ---- Your cards: bigger when there's room (fitHandCards in app.js) ---- */
+/* Room at the top of the tray for the tags that sit above a card ("2x",
+   "+2") and for a picked card's lift -- at 4px they were clipped. 8px, not
+   more: two rows of cards must still fit the tray on a 360x640 phone. */
+#hand { padding-top: 7px; }
+/* The NEW tag sits on the card's bottom edge rather than below it, so a
+   second row of cards never spills out of the tray. */
+#hand .card .new-tag { bottom: -3px; }
+#hand .card {
+  width: var(--hand-card-w, clamp(32px, 11.5vw, 44px));
+  height: calc(var(--hand-card-w, clamp(32px, 11.5vw, 44px)) * 1.409);
+}
+/* The face grows with the card. The fallback is the 44px card, which gives
+   exactly the sizes these always had. */
+#hand .card .center-rank   { font-size: calc(var(--hand-card-w, 44px) * 0.32); }
+#hand .card .center-suit   { font-size: calc(var(--hand-card-w, 44px) * 0.41); }
+#hand .card .corner-rank   { font-size: calc(var(--hand-card-w, 44px) * 0.23); }
+#hand .card .corner-suit   { font-size: calc(var(--hand-card-w, 44px) * 0.18); }
+#hand .card .joker-letters { font-size: calc(var(--hand-card-w, 44px) * 0.16); }
+#hand .card .joker-cap {
+  width:  calc(var(--hand-card-w, 44px) * 0.5);
+  height: calc(var(--hand-card-w, 44px) * 0.5);
+}
+/* No "0" badge on jokers: the gold edge already says it. */
+.card.is-joker::after { content: none; display: none; }
+
+/* Several of one rank: the edges of the cards underneath peek out top-right,
+   with a quiet count. (A white offset shadow shrunk 1px, on a dark one the
+   full size, draws each edge with its own outline.) */
+#hand .card.stacked-2 { --stack: 3px -3px 0 -1px #f4f4f4, 3px -3px 0 0 rgba(0,0,0,0.3); }
+#hand .card.stacked-3 {
+  --stack: 3px -3px 0 -1px #f4f4f4, 3px -3px 0 0 rgba(0,0,0,0.3),
+           6px -6px 0 -1px #e9e9e9, 6px -6px 0 0 rgba(0,0,0,0.26);
+}
+#hand .card.stacked { box-shadow: var(--stack), 0 2px 6px rgba(0,0,0,0.3); }
+#hand .card.stacked.is-joker { box-shadow: 0 0 0 1px rgba(212,175,55,0.45), var(--stack), 0 2px 6px rgba(0,0,0,0.3); }
+#hand .card.stacked.hint-suggested { box-shadow: 0 0 0 3px var(--gold), var(--stack), var(--shadow-sm); }
+#hand .card-count-badge {
+  top: -7px; right: -7px; width: auto; height: auto;
+  padding: 1px 5px; border-radius: 8px;
+  background: rgba(12,34,27,0.94); color: var(--text-light);
+  font-size: 9.5px; font-weight: 700; line-height: 1.3;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.3);
+}
+
+/* ---- The +2 card ----
+   A red edge on every 2, wherever it appears, and a "+2" tag where there's
+   room -- in the chain banner's red-to-gold. Gold edges stay for jokers. */
+.card.trump { border-color: #c0392b; }
+.card.trump.selected { border-color: var(--gold); }
+#hand .card.trump { box-shadow: 0 0 0 1px rgba(192,57,43,0.5), 0 2px 6px rgba(0,0,0,0.3); }
+.trump-tag {
+  position: absolute; top: -7px; right: -7px; z-index: 3; pointer-events: none;
+  padding: 1px 5px; border-radius: 8px;
+  background: linear-gradient(90deg, #c0392b, var(--gold)); color: #fff;
+  font-size: 9.5px; font-weight: 800; line-height: 1.3; letter-spacing: 0.02em;
+  font-family: inherit; text-shadow: 0 1px 1px rgba(0,0,0,0.3);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+.table-center .trump-tag { font-size: calc(var(--centre-card-w, 58px) * 0.19); top: -9px; right: -9px; }
+/* A +2 chain aimed at you: your 2s -- your way out -- glow and lift; the
+   cards you can't play step back. */
+#hand .card.trump-ready { transform: translateY(-5px); animation: lcTrumpReady 1.1s ease-in-out infinite; }
+@keyframes lcTrumpReady {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(192,57,43,0.9), 0 0 10px rgba(242,193,78,0.45); }
+  50%      { box-shadow: 0 0 0 3px rgba(242,193,78,0.95), 0 0 18px rgba(242,193,78,0.6); }
+}
+#hand .card.chain-dim { opacity: 0.4; filter: saturate(0.6); }
+
+/* ---- Discard 2 / Least Count! (at 5 or less) ---- */
+#btn-declare {
+  flex-direction: column; gap: 1px; line-height: 1.1;
+  padding-top: 5px; padding-bottom: 5px;
+}
+#btn-declare .btn-sub { font-size: 10px; font-weight: 600; opacity: 0.85; }
+#btn-declare .btn-sub.off { display: none; }
+
+/* ---- Leaving when this round ends ---- */
+.leave-line {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 0 4px 4px; padding: 4px 5px 4px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(var(--red-rgb), 0.14); border: 1px solid var(--red-text);
+  color: var(--red-text); font-size: 12.5px; font-weight: 700;
+}
+.leave-line.hidden { display: none; }
+.leave-line-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leave-line-stay {
+  flex: 0 0 auto; width: auto; margin: 0;
+  padding: 4px 16px; border-radius: 14px;
+  font-size: 12px; font-weight: 700;
+  background: var(--text-light); color: #1a1a1a;
+}
+/* The pulsing dot this replaces. */
+.leave-btn.leave-pending::after { content: none; display: none; }
+/* Someone else leaving: their chair says so, for five seconds. */
+.seat-chat-bubble.leaving {
+  background: #fff1ef; color: #8c1d18; font-weight: 700;
+  box-shadow: 0 0 0 1px #e4564f, 0 3px 10px rgba(0,0,0,0.4);
+}
+.seat-chat-bubble.leaving.below::after { border-bottom-color: #fff1ef; }
+.seat-chat-bubble.leaving.above::after { border-top-color: #fff1ef; }
+
+@media (prefers-reduced-motion: reduce) {
+  #hand .card.trump-ready { animation: none !important; }
+}
+
+/* ---- The round's outcome in the middle of the table, sized from it ----
+   "Mani got Least Count" was a fixed 17px across 74% of the table. On a
+   short phone the table is small, so it filled the middle and ran into the
+   chairs on both sides. It now scales with the table (the same measure as the
+   open card and joker), and stays inside the gap between the side chairs --
+   wrapping to two lines there rather than running over them. On a full-size
+   table it is the 17px it always was. */
+.reveal-banner { max-width: min(74%, calc(100% - 2 * var(--seat-w, 96px) - 8px)); }
+.reveal-banner-title { font-size: clamp(12px, calc(var(--centre-card-w, 58px) * 0.3), 17px); }
+.reveal-banner-sub   { font-size: clamp(10px, calc(var(--centre-card-w, 58px) * 0.225), 13px); }
