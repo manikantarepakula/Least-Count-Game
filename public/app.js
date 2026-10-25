@@ -6539,45 +6539,6 @@
     });
   }
 
-  // ------------------------------------------------------------------
-  // Bigger cards when there's room (Oct 2026). The tray is a fixed height --
-  // on purpose, so the table never grows and shrinks turn to turn (see .hand
-  // in style.css) -- and with a short hand most of it sat empty while the
-  // cards stayed 44px. Each render now takes the largest card, up to 60px,
-  // at which every tile still fits on ONE row with room above for a picked
-  // card to lift. A hand that needs two rows keeps exactly the size it had.
-  // ------------------------------------------------------------------
-  const HAND_CARD_MAX_W = 60;
-  function fitHandCards() {
-    const hand = document.getElementById('hand');
-    if (!hand) return;
-    hand.style.removeProperty('--hand-card-w');
-    const tiles = hand.querySelectorAll('.card');
-    if (!tiles.length) return;
-    const cs = getComputedStyle(hand);
-    const innerW = hand.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-    const innerH = hand.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    const gap = parseFloat(cs.columnGap) || 5;
-    const baseW = tiles[0].getBoundingClientRect().width;
-    if (!(innerW > 0 && innerH > 0 && baseW > 0)) return;
-    const divider = document.getElementById('hand-divider');
-    // The divider is 1px plus a 1px margin each side, and costs one more gap.
-    const dividerW = divider && !divider.classList.contains('hidden') ? 3 + gap : 0;
-    // The tray's top padding already holds a picked card's 8px lift and the
-    // tags above each card; the NEW tag hangs 7px below the card, and a pile's
-    // edges and its count reach 8px past its right side. All of it has to
-    // stay inside the tray.
-    const ROOM_BELOW = 8;
-    const ROOM_RIGHT = 8;
-    for (let w = HAND_CARD_MAX_W; w > baseW; w -= 1) {
-      const rowW = tiles.length * w + (tiles.length - 1) * gap + dividerW + ROOM_RIGHT;
-      if (rowW <= innerW && w * 1.409 + ROOM_BELOW <= innerH) {
-        hand.style.setProperty('--hand-card-w', w + 'px');
-        return;
-      }
-    }
-  }
-
   // ---------------- main game rendering ----------------
   function renderGame(game) {
     // The host's "Next Round" click only hides the round-result popup on
@@ -6732,7 +6693,6 @@
     document.getElementById('hand-divider').classList.toggle('hidden', jokerGroups.length === 0);
     renderHandTiles(document.getElementById('hand-jokers'), jokerGroups, isMyTurn, game, duringChain);
     renderHandTiles(document.getElementById('hand-normal'), normalGroups, isMyTurn, game, duringChain);
-    try { fitHandCards(); } catch (e) { /* sizing only -- the default size is fine */ }
 
     const discardBtn = document.getElementById('btn-discard');
     const declareBtn = document.getElementById('btn-declare');
@@ -6827,7 +6787,11 @@
   //     hiding them is what frees the middle of the oval for the boxes.
   // --------------------------------------------------------------------
   const REVEAL_MAX_SEAT_TILES = 5;
-  const REVEAL_HOLD_MS = 8000;
+  // 4s, was 8s (Oct 2026): with the LEAST COUNT call now played first (2.4s),
+  // the table sat still for over ten seconds before the scorecard, and
+  // players read it as frozen. Any tap still skips straight to the scores.
+  // server.js counts this in ROUND_REVEAL_HOLD_MS -- change them together.
+  const REVEAL_HOLD_MS = 4000;
   let revealPhaseActive = false;
   // Whose turn it was on the previous render -- used to spot the moment the
   // turn becomes yours (see closeChatForMyTurn).
@@ -6871,6 +6835,8 @@
     if (myScore !== undefined) {
       parts.push(`<div class="reveal-banner-sub">You ${myScore === 0 ? 'scored 0' : '+' + myScore}</div>`);
     }
+    // A still table reads as a frozen one -- say that a tap moves on.
+    parts.push('<div class="reveal-banner-tap">Tap for scores</div>');
     el.innerHTML = parts.join('');
     el.classList.remove('hidden');
   }
