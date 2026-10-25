@@ -6149,7 +6149,10 @@
     // at 26% a 393px phone gave an 82px chair and three or four letters of
     // the name. The side chairs still clear the open card and joker at every
     // width measured (320-430px): the centre pair is sized from the table too.
-    const centreCardW = Math.round(Math.max(34, Math.min(58, tableW * 0.155)));
+    // Smaller since Oct 2026 (was 15.5% of the table, up to 58px): at that
+    // size the open card and the joker filled the middle of the felt, and the
+    // live commentary under them had no clean room of its own.
+    const centreCardW = Math.round(Math.max(32, Math.min(48, tableW * 0.125)));
     // 14px at least: on a small table the "Open Card" label runs a little past
     // its card, and this is the room it runs into before it meets "Joker".
     const centreGap = Math.round(Math.max(14, Math.min(18, tableW * 0.05)));
@@ -6564,6 +6567,9 @@
     const hint = mine ? (chain ? ' \u2014 play a 2 or take the penalty' : ' \u2014 pick a card') : '';
     document.getElementById('turn-strip-text').textContent = who + hint;
     strip.classList.toggle('mine', mine);
+    // A commentary line docked over this strip gives way the moment it
+    // becomes your turn (see cmDocked).
+    if (mine && cmDocked && cmShowing) { try { cmEndLine(); } catch (e) { /* cosmetic */ } }
     const cur = latestRoom && (latestRoom.players || []).find((p) => p && p.playerId === game.currentPlayer);
     turnStripShowsSeconds = !(cur && cur.isBot);
     if (!game.turnDeadline || !turnStripShowsSeconds) {
@@ -9656,6 +9662,9 @@
   })();
   var cmQueue = [];            // waiting lines, most important first
   var cmShowing = null;        // { pri, until } for the line on screen
+  // True while the line is docked over the turn strip (a crowded table has
+  // no clean lane under the centre cards -- see layoutCommentaryLane).
+  var cmDocked = false;
   var cmTimer = null;
   var cmLastPick = {};         // event -> template last used, so lines don't repeat back to back
   var cmRound = { number: null, streak: {}, low: {}, said: {}, turns: 0 };
@@ -9752,6 +9761,12 @@
     if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return false;
     const call = document.getElementById('declare-callout');
     if (call && !call.classList.contains('hidden')) return false;
+    // Docked over the turn strip, a line waits out your own turn: the strip
+    // is saying "Your turn" and counting down, and that matters more.
+    if (cmDocked) {
+      const strip = document.getElementById('turn-strip');
+      if (strip && strip.classList.contains('mine')) return false;
+    }
     const scr = document.getElementById('screen-game');
     return !!(scr && scr.classList.contains('active'));
   }
@@ -9795,7 +9810,7 @@
     // it is cut off.
     if (lane.classList.contains('one-line')) {
       const line = lane.querySelector('.cm-line');
-      let size = 12;
+      let size = lane.classList.contains('docked') ? 13 : 11.5;
       while (line && line.scrollWidth > lane.clientWidth + 1 && size > 10) {
         size -= 0.5;
         line.style.fontSize = size + 'px';
@@ -10138,11 +10153,38 @@
       if (r.bottom < top || r.top > bandBottom) return;
       half = Math.min(half, r.inner - 8);
     });
+    // A crowded table -- six to eight chairs on a phone -- leaves no clean
+    // lane under the centre cards: the lower chairs crowd in from both sides
+    // and the line sat on top of them (Oct 2026, reported on 8 players). Then
+    // the line docks over the turn strip just above the table instead: full
+    // width, clear of every chair and card. It covers "Chaitanya's turn" for
+    // a few seconds -- the gold chair still says whose turn it is -- and
+    // never "Your turn" (see cmCanShow and renderTurnStrip).
+    const strip = document.getElementById('turn-strip');
+    const sr2 = strip && !strip.classList.contains('hidden') ? strip.getBoundingClientRect() : null;
+    cmDocked = !!(sr2 && sr2.height > 0 && (2 * half < CM_MIN_LANE_W || room < 20));
+    lane.classList.toggle('docked', cmDocked);
+    if (cmDocked) {
+      lane.style.top = Math.round(sr2.top - o.top) + 'px';
+      lane.style.left = Math.round(sr2.left - o.left) + 'px';
+      lane.style.width = Math.round(sr2.width) + 'px';
+      lane.style.height = Math.round(sr2.height) + 'px';
+      lane.style.maxWidth = 'none';
+      lane.style.maxHeight = 'none';
+      lane.classList.add('one-line');
+      return;
+    }
+    lane.style.left = '';
+    lane.style.width = '';
+    lane.style.height = '';
     lane.style.top = Math.round(top) + 'px';
     lane.style.maxWidth = Math.round(Math.max(110, 2 * half)) + 'px';
     lane.style.maxHeight = Math.round(Math.max(20, room)) + 'px';
     lane.classList.toggle('one-line', !twoLines);
   }
+  // The narrowest lane under the centre cards worth using: about a short
+  // sentence ("Bot 3 drops three 6s at once!") at the commentary's size.
+  var CM_MIN_LANE_W = 200;
 
   // The mic button beside the sound button. On by default.
   (function wireCommentaryButton() {
