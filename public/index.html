@@ -75,7 +75,7 @@
      server.js) can never pair the new markup with the old styles or code.
      The same ?v= is on app.js at the bottom of this file. -->
 
-<link rel="stylesheet" href="style.css?v=game3-2026-10-25" />
+<link rel="stylesheet" href="style.css?v=cm1-2026-10-25" />
 </head>
 <body>
 
@@ -809,7 +809,12 @@
       <div id="game-round" class="game-round"></div>
     </div>
     <div class="top-actions top-actions-right">
-      <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
+      <!-- Sound and live commentary share one box (Oct 2026), so the bar
+           stays two and two. -->
+      <div class="btn-pair">
+        <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
+        <button id="btn-commentary" class="tiny mute-btn" type="button" aria-label="Turn off live commentary" aria-pressed="true"><svg class="icon icon-cm-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg><svg class="icon icon-cm-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 2 20 20"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><path d="M12 19v3"/></svg></button>
+      </div>
       <!-- The only mid-round exit. Without it the table had no way out at
            all, and a refresh auto-rejoins the room, so there was no way back
            to the menu either. -->
@@ -852,6 +857,11 @@
         <div id="joker-caption" class="pile-caption"></div>
       </div>
     </div>
+    <!-- Live commentary (Oct 2026): one short line at a time under the open
+         card and the joker, sized by app.js to the space the chairs leave.
+         See LIVE COMMENTARY in app.js; the mic button in the top bar turns
+         it off. -->
+    <div id="commentary" class="commentary hidden" aria-live="polite"></div>
     <!-- Round outcome, shown in the middle of the table during the card
          reveal. The reveal used to show everyone's hands with no statement
          of what actually happened -- you could see the cards but not who
@@ -1360,7 +1370,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js?v=game3-2026-10-25" defer></script>
+<script src="app.js?v=cm1-2026-10-25" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
