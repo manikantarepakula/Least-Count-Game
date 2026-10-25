@@ -2512,6 +2512,8 @@
     // ended -- and its timer must not start that round's reveal on top of
     // this one.
     clearDeclareCallout();
+    // No commentary over the deal; the new round's stakes wait for the table.
+    commentaryHush();
 
     // No full-screen overlay at any point now (Oct 2026): the round banner,
     // the deal and the joker/open-card turn-over all happen ON the table.
@@ -6343,6 +6345,8 @@
     // ------------------------------------------------------------------
     oval.querySelectorAll('.seat').forEach((el) => el.remove());
     oval.appendChild(seatFrag);
+    // The commentary lane fits itself between the chairs just drawn.
+    try { layoutCommentaryLane(); } catch (e) { /* layout only */ }
 
     reopenPlayerActionPopoverIfNeeded(oval);
   }
@@ -6378,6 +6382,7 @@
   })();
 
   socket.on('seat_reaction', ({ type, affectedPlayerId }) => {
+    if (type === 'timeout') commentaryOnTimeout(affectedPlayerId);
     const rule = SEAT_REACTION_RULES[type];
     if (!rule || !latestRoom) return;
     if (rule.self) triggerSeatReaction(affectedPlayerId, rule.self);
@@ -6655,13 +6660,16 @@
     // Two animations on the joker (turn-over, then glow) -- two delays.
     if (midReveal) jokerEl.style.animationDelay = (0 - revealAgo) + 'ms, ' + (450 - revealAgo) + 'ms';
     jokerSlot.appendChild(jokerEl);
-    // What the joker MEANS, under it (Oct 2026). A bare "Q" with a gold
-    // border left new players to work out that every Queen in their hand
-    // was now worth nothing.
+    // What the joker MEANS (Oct 2026): "= 0", written on the joker card
+    // itself under its rank, so the card reads "Q = 0". It used to be a
+    // line hanging under the card ("Every Q = 0"), which crowded the space
+    // below the two cards -- the space the live commentary now uses.
+    const zero = document.createElement('span');
+    zero.className = 'joker-zero';
+    zero.textContent = '= 0';
+    (jokerEl.querySelector('.card-center') || jokerEl).appendChild(zero);
     const jokerCaption = document.getElementById('joker-caption');
-    if (jokerCaption) {
-      jokerCaption.textContent = game.roundJokerRank ? 'Every ' + game.roundJokerRank + ' = 0' : 'Jokers = 0';
-    }
+    if (jokerCaption) jokerCaption.textContent = '';
 
     const handValue = game.yourHandValue ?? 0;
     document.getElementById('hand-value').textContent = handValue;
@@ -7070,6 +7078,7 @@
     if (!r || !r.declaredBy || !el) { done(); return; }
     clearDeclareCallout();
     const mine = r.declaredBy === myPlayerId;
+    commentaryHush();   // the call is the commentary now
     document.getElementById('declare-callout-who').textContent =
       mine ? 'You call' : playerName(r.declaredBy) + ' calls';
     const verdict = document.getElementById('declare-callout-verdict');
@@ -8153,6 +8162,7 @@
       latestRoom = null;
       latestGame = null;
       setLeavePending(false);   // don't carry a queued leave into the next room
+      commentaryReset();        // ...nor this game's commentary
       window.__lastRoundResultShownFor = null;
       // Leaving mid-reveal would otherwise strand the phase flag as true,
       // and the next room's table would render every seat's reveal box
@@ -9464,6 +9474,366 @@
     }
   });
 
+
+  // ====================================================================
+  // LIVE COMMENTARY (Oct 2026)
+  //
+  // One short line at a time in the middle of the table, under the open
+  // card and the joker -- a commentator calling the game. Worked out on this
+  // phone from the same game updates every player receives, so it costs the
+  // server nothing and says the same things at every seat (in "you" form for
+  // your own moves).
+  //
+  // THE RULE: it only ever says what the whole table can already see --
+  // cards thrown, cards picked up, how many cards someone holds, the +2
+  // chain, the scores. Never anything about a hidden hand, and never how
+  // close someone might be to calling.
+  //
+  // It is loudest where the game is tense -- a +2 chain, a player down to
+  // their last cards, someone near the score limit, a comeback, the final
+  // two -- and says nothing at all on a quiet turn. Lines are short, friendly
+  // and never make fun of anyone.
+  //
+  // On by default. The mic button beside the sound button turns it off, and
+  // the choice is remembered on this phone. `var` throughout: renderOvalTable
+  // and runStartSequence, far above, call into this block.
+  // ====================================================================
+  var COMMENTARY_KEY = 'leastcount_commentary';
+  var COMMENTARY_LINE_MS = 3200;
+  var commentaryOn = (function () {
+    try { return localStorage.getItem(COMMENTARY_KEY) !== 'off'; } catch (e) { return true; }
+  })();
+  var cmQueue = [];            // waiting lines, most important first
+  var cmShowing = null;        // { pri, until } for the line on screen
+  var cmTimer = null;
+  var cmLastPick = {};         // event -> template last used, so lines don't repeat back to back
+  var cmRound = { number: null, streak: {}, low: {} };
+  var cmStandings = null;      // the order at the start of the previous round
+
+  var CM_LINES = {
+    opener: ['Game on! Keep that hand low', 'Cards are dealt. Good luck, everyone!', 'Here we go! Lowest hand wins'],
+    chainStart: ['{A} throws a 2! {T} must answer', 'A 2 from {A}! Pressure on {T}', '+2 on the table for {T}!'],
+    chainStartByMe: ['You throw a 2 at {T}!', 'Your 2 puts {T} on the spot!'],
+    chainStartAtMe: ['{A} hits you with a 2!', 'A 2 from {A}! Can you answer it?'],
+    chainStack: ['{A} answers with a 2! +{N} for {T}', 'The chain grows! +{N} for {T}', 'Stacked! {T} now faces +{N}'],
+    chainStackByMe: ['You stack a 2! +{N} for {T}', 'Right back at them! +{N} for {T}'],
+    chainStackAtMe: ['{A} stacks it! You face +{N}', 'The chain grows! +{N} coming your way'],
+    chainTake: ['{A} picks up {N}. Ouch!', '{A} takes the +{N}. Chain over', 'The chain ends with {A}: +{N}'],
+    chainTakeBig: ['{A} picks up {N}! What a swing!', 'Huge! {A} takes all {N} cards'],
+    chainTakeMe: ['You pick up {N}. Ouch!', 'You take the +{N}. Chain over'],
+    match: ['{A} matches the {R}. No pick-up!', 'Clean turn from {A}!', 'Perfect match by {A}'],
+    matchMe: ['You match the {R}. Clean turn!', 'Nice match! No pick-up for you'],
+    matchMany: ['{A} matches with {K} {Rs}!', '{Kc} {Rs} down, no pick-up for {A}!'],
+    matchManyMe: ['You match with {K} {Rs}!', '{Kc} {Rs} gone, no pick-up!'],
+    bigThrow: ['{A} drops {K} {Rs} at once!', 'Big throw! {K} cards from {A}'],
+    bigThrowMe: ['You drop {K} {Rs} at once!'],
+    streak: ['{A} picks up again, 3 in a row', 'Tough run for {A}: 3 pick-ups'],
+    streakMe: ['Third pick-up in a row for you'],
+    twoLeft: ['{A} is down to 2 cards!', 'Only 2 cards left for {A}...'],
+    twoLeftMe: ['You are down to 2 cards!'],
+    oneLeft: ['{A} has just ONE card left!', 'One card left for {A}. Watch out!'],
+    oneLeftMe: ['Just one card left for you!'],
+    timeout: ['{A} ran out of time!', 'The clock beats {A} this time'],
+    timeoutMe: ['You ran out of time!'],
+    danger: ['{A} is on {S}. Close to {M}!', 'One bad round and {A} is out!'],
+    dangerMe: ['Careful! You are on {S} of {M}'],
+    leader: ['New leader: {A} on {S}!', '{A} takes the lead!'],
+    leaderMe: ['You take the lead on {S}!'],
+    comeback: ['Comeback! {A} climbs to {P}', '{A} is fighting back, now {P}'],
+    comebackMe: ['Comeback! You climb to {P}'],
+    finalTwo: ['Final two! {A} vs {B}', 'It all comes down to {A} and {B}!'],
+  };
+  var CM_MIC = '<svg class="cm-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>';
+
+  function cmLine(key, vals) {
+    const list = CM_LINES[key] || [];
+    if (!list.length) return '';
+    let i = Math.floor(Math.random() * list.length);
+    if (list.length > 1 && i === cmLastPick[key]) i = (i + 1) % list.length;
+    cmLastPick[key] = i;
+    return list[i].replace(/\{(\w+)\}/g, (m, k) => (vals && vals[k] !== undefined ? vals[k] : m));
+  }
+  function cmName(id) { return '<b>' + escapeHtml(playerName(id)) + '</b>'; }
+  function cmRankWord(r, plural) {
+    const w = ({ A: 'Ace', K: 'King', Q: 'Queen', J: 'Jack', JOKER: 'Joker' })[r] || String(r);
+    return plural ? w + 's' : w;
+  }
+  function cmCount(k, capital) {
+    const w = (['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'])[k] || String(k);
+    return capital ? w.charAt(0).toUpperCase() + w.slice(1) : w;
+  }
+  function cmPlace(pos) {
+    return pos === 0 ? 'the top' : (pos === 1 ? '2nd' : pos === 2 ? '3rd' : (pos + 1) + 'th');
+  }
+
+  // Can a line be on the table right now? Not mid-deal, not during the
+  // LEAST COUNT call or the reveal (those announce themselves), never in the
+  // tutorial, never over another screen.
+  function cmCanShow() {
+    if (!commentaryOn || !latestGame || latestGame.roundOver) return false;
+    if (startSeqActive || revealPhaseActive) return false;
+    if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return false;
+    const call = document.getElementById('declare-callout');
+    if (call && !call.classList.contains('hidden')) return false;
+    const scr = document.getElementById('screen-game');
+    return !!(scr && scr.classList.contains('active'));
+  }
+
+  // Queue a line. A hotter line than the one on screen cuts in; anything
+  // else waits its turn, and a busy table drops its smallest news.
+  function cmSay(html, pri, opts) {
+    if (!commentaryOn || !html) return;
+    opts = opts || {};
+    const item = { html, pri, hot: !!opts.hot, stake: !!opts.stake, at: Date.now(), notBefore: opts.notBefore || 0 };
+    if (cmShowing && pri > cmShowing.pri && cmCanShow() && Date.now() >= item.notBefore) { cmShowLine(item); return; }
+    cmQueue.push(item);
+    cmQueue.sort((a, b) => b.pri - a.pri || a.at - b.at);
+    if (cmQueue.length > 3) cmQueue.length = 3;
+    cmPump();
+  }
+
+  function cmPump() {
+    if (cmTimer) { clearTimeout(cmTimer); cmTimer = null; }
+    const now = Date.now();
+    if (cmShowing && now < cmShowing.until) { cmTimer = setTimeout(cmPump, cmShowing.until - now + 20); return; }
+    // Old news is dropped: a line about a move from several seconds ago is
+    // just noise. The round's stakes may wait out the deal.
+    cmQueue = cmQueue.filter((it) => now - it.at < (it.stake ? 25000 : 5000));
+    if (!cmQueue.length) { cmEndLine(); return; }
+    if (!cmCanShow()) { cmEndLine(); cmTimer = setTimeout(cmPump, 500); return; }
+    const ready = cmQueue.findIndex((it) => now >= it.notBefore);
+    if (ready < 0) { cmEndLine(); cmTimer = setTimeout(cmPump, 300); return; }
+    cmShowLine(cmQueue.splice(ready, 1)[0]);
+  }
+
+  function cmShowLine(item, ms) {
+    const lane = document.getElementById('commentary');
+    if (!lane) return;
+    layoutCommentaryLane();
+    lane.innerHTML = '<span class="cm-line' + (item.hot ? ' hot' : '') + '">' + CM_MIC
+      + '<span class="cm-text">' + item.html + '</span></span>';
+    lane.classList.remove('hidden');
+    const showFor = ms || COMMENTARY_LINE_MS;
+    cmShowing = { pri: item.pri, until: Date.now() + showFor };
+    // Same wall-clock guard as every other timer-dismissed element here, so
+    // a backgrounded phone can't leave a line stuck on the table.
+    holdTransient('commentary', showFor);
+    if (cmTimer) clearTimeout(cmTimer);
+    cmTimer = setTimeout(cmPump, showFor);
+  }
+
+  function cmEndLine() {
+    const lane = document.getElementById('commentary');
+    cmShowing = null;
+    releaseTransient('commentary');
+    if (!lane || lane.classList.contains('hidden')) return;
+    const line = lane.querySelector('.cm-line');
+    if (!line) { lane.classList.add('hidden'); return; }
+    line.classList.add('out');
+    setTimeout(() => {
+      if (line.parentNode === lane && !cmShowing) { lane.classList.add('hidden'); lane.innerHTML = ''; }
+    }, 260);
+  }
+
+  // Off the table at once -- the deal, the call, leaving the game.
+  function commentaryHush() {
+    if (cmTimer) { clearTimeout(cmTimer); cmTimer = null; }
+    cmQueue = cmQueue.filter((it) => it.stake);
+    cmShowing = null;
+    releaseTransient('commentary');
+    const lane = document.getElementById('commentary');
+    if (lane) { lane.classList.add('hidden'); lane.innerHTML = ''; }
+  }
+  function commentaryReset() {
+    commentaryHush();
+    cmQueue = [];
+    cmRound = { number: null, streak: {}, low: {} };
+    cmStandings = null;
+  }
+
+  // Every game update: what just happened, if it's worth a line.
+  function commentaryObserve(prev, next) {
+    try {
+      if (!next || !Array.isArray(next.turnOrder)) return;
+      if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
+      if (cmRound.number !== next.roundNumber) {
+        cmRound = { number: next.roundNumber, streak: {}, low: {} };
+        if (!next.roundOver) cmRoundStakes(next);
+        return;
+      }
+      if (!prev || prev.roundNumber !== next.roundNumber || prev.roundOver || next.roundOver) return;
+      cmTurn(prev, next);
+    } catch (e) { /* commentary never gets in the way of the game */ }
+  }
+
+  // The start of a round: what's at stake. Waits out the deal and the
+  // joker/open-card turn-over.
+  function cmRoundStakes(g) {
+    const out = (g.eliminated || []).concat(g.quit || []);
+    const alive = g.turnOrder.filter((id) => out.indexOf(id) === -1);
+    const totals = g.scores || {};
+    const max = g.eliminationScore;
+    const order = alive.slice().sort((a, b) => (totals[a] || 0) - (totals[b] || 0));
+    const lines = [];
+    const said = (key, id, vals, pri, hot) => {
+      const mine = id === myPlayerId && CM_LINES[key + 'Me'];
+      lines.push([cmLine(mine ? key + 'Me' : key, Object.assign({ A: cmName(id) }, vals || {})), pri, hot]);
+    };
+    if (g.roundNumber === 1 || !cmStandings) {
+      if (g.roundNumber === 1) lines.push([cmLine('opener'), 1, false]);
+    } else {
+      const before = cmStandings;
+      if (alive.length === 2 && before.alive.length > 2) {
+        lines.push([cmLine('finalTwo', { A: cmName(order[0]), B: cmName(order[1]) }), 3, true]);
+      }
+      if (max) {
+        const close = alive.filter((id) => (totals[id] || 0) >= max * 0.85 && (totals[id] || 0) < max)
+          .sort((a, b) => (totals[b] || 0) - (totals[a] || 0))[0];
+        if (close) said('danger', close, { S: totals[close] || 0, M: max }, 3, true);
+      }
+      let best = null;
+      alive.forEach((id) => {
+        const was = before.order.indexOf(id), now = order.indexOf(id);
+        if (was >= 0 && was - now >= 2 && (!best || was - now > best.gain)) best = { id, gain: was - now, pos: now };
+      });
+      if (best) {
+        said('comeback', best.id, { P: cmPlace(best.pos) }, 2, false);
+      } else if (order.length > 1 && order[0] !== before.order[0]
+          && (totals[order[0]] || 0) < (totals[order[1]] || 0)) {
+        said('leader', order[0], { S: totals[order[0]] || 0 }, 2, false);
+      }
+    }
+    cmStandings = { order, alive };
+    const after = Date.now() + 2400;
+    lines.slice(0, 2).forEach(([html, pri, hot]) => cmSay(html, pri, { hot, stake: true, notBefore: after }));
+  }
+
+  // One turn, read from the difference between two updates.
+  function cmTurn(prev, next) {
+    const actor = prev.currentPlayer, target = next.currentPlayer;
+    if (!actor || actor === target) return;
+    const before = (prev.handCounts || {})[actor], after = (next.handCounts || {})[actor];
+    if (typeof before !== 'number' || typeof after !== 'number') return;
+    const delta = after - before;
+    const me = actor === myPlayerId, atMe = target === myPlayerId;
+    const names = { A: cmName(actor), T: cmName(target) };
+    const pick = (key) => (me && CM_LINES[key + 'ByMe']) ? key + 'ByMe'
+      : (atMe && CM_LINES[key + 'AtMe']) ? key + 'AtMe'
+      : (me && CM_LINES[key + 'Me']) ? key + 'Me' : key;
+
+    if (prev.chainCount > 0) {
+      if (next.chainCount > prev.chainCount) {
+        cmSay(cmLine(pick('chainStack'), Object.assign({ N: next.chainCount * 2 }, names)), 3, { hot: true });
+      } else if (next.chainCount === 0 && delta > 0) {
+        const key = me ? 'chainTakeMe' : (delta >= 6 ? 'chainTakeBig' : 'chainTake');
+        cmSay(cmLine(key, Object.assign({ N: delta }, names)), 3, { hot: true });
+      }
+      cmLowCards(actor, after);
+      return;
+    }
+
+    const pOpen = prev.openCard, nOpen = next.openCard;
+    if (!nOpen || (pOpen && nOpen.id === pOpen.id)) return;
+    const wild = prev.roundJokerRank;
+    const freePass = !!pOpen && (pOpen.rank === 'JOKER' || (!!wild && pOpen.rank === wild));
+    const matched = !!pOpen && nOpen.rank === pOpen.rank;
+    const drew = (matched || freePass) ? 0 : 1;
+    const thrown = Math.max(1, drew - delta);
+    const rankVals = { R: cmRankWord(nOpen.rank), Rs: cmRankWord(nOpen.rank, true), K: cmCount(thrown), Kc: cmCount(thrown, true) };
+
+    if (next.chainCount > 0) {
+      cmSay(cmLine(pick('chainStart'), names), 3, { hot: true });
+    } else if (matched) {
+      const key = thrown >= 2 ? (me ? 'matchManyMe' : 'matchMany') : (me ? 'matchMe' : 'match');
+      cmSay(cmLine(key, Object.assign({}, names, rankVals)), thrown >= 2 ? 2 : 1);
+    } else if (thrown >= 3) {
+      cmSay(cmLine(me ? 'bigThrowMe' : 'bigThrow', Object.assign({}, names, rankVals)), 2);
+    }
+
+    const streak = cmRound.streak;
+    streak[actor] = drew ? (streak[actor] || 0) + 1 : 0;
+    if (streak[actor] === 3) cmSay(cmLine(me ? 'streakMe' : 'streak', names), 1);
+    cmLowCards(actor, after);
+  }
+
+  // Down to the last cards -- said once at two, once at one, per round.
+  function cmLowCards(id, count) {
+    const low = cmRound.low[id] || (cmRound.low[id] = {});
+    const me = id === myPlayerId;
+    if (count === 1 && !low[1]) {
+      low[1] = low[2] = true;
+      cmSay(cmLine(me ? 'oneLeftMe' : 'oneLeft', { A: cmName(id) }), 3, { hot: true });
+    } else if (count === 2 && !low[2]) {
+      low[2] = true;
+      cmSay(cmLine(me ? 'twoLeftMe' : 'twoLeft', { A: cmName(id) }), 2, { hot: true });
+    }
+  }
+
+  function commentaryOnTimeout(playerId) {
+    try {
+      if (!playerId) return;
+      cmSay(cmLine(playerId === myPlayerId ? 'timeoutMe' : 'timeout', { A: cmName(playerId) }), 2);
+    } catch (e) { /* never in the way */ }
+  }
+
+  // The lane sits under the open card and joker, as wide as the chairs
+  // either side leave room for, and stops above your own chair.
+  function layoutCommentaryLane() {
+    const oval = document.getElementById('oval-table');
+    const lane = document.getElementById('commentary');
+    const centre = oval && oval.querySelector('.table-center');
+    if (!oval || !lane || !centre) return;
+    const o = oval.getBoundingClientRect();
+    const c = centre.getBoundingClientRect();
+    if (!o.width || !c.height) return;
+    const top = c.bottom - o.top + 10;
+    const band = 40;   // up to two lines
+    let half = Math.min(o.width * 0.44, 160);
+    let floor = o.height;
+    oval.querySelectorAll('.seat').forEach((s) => {
+      const r = s.getBoundingClientRect();
+      const st = r.top - o.top, sb = r.bottom - o.top;
+      const cx = (r.left + r.right) / 2 - o.left;
+      if (Math.abs(cx - o.width / 2) < r.width / 2) {
+        // A chair straight below (yours): it decides how far down, not how wide.
+        if (st > top) floor = Math.min(floor, st - 4);
+        return;
+      }
+      if (sb < top || st > top + band) return;
+      half = Math.min(half, Math.abs(cx - o.width / 2) - r.width / 2 - 8);
+    });
+    lane.style.top = Math.round(top) + 'px';
+    lane.style.maxWidth = Math.round(Math.max(110, 2 * half)) + 'px';
+    lane.style.maxHeight = Math.round(Math.max(20, floor - top)) + 'px';
+  }
+
+  // The mic button beside the sound button. On by default.
+  (function wireCommentaryButton() {
+    const btn = document.getElementById('btn-commentary');
+    if (!btn) return;
+    const iconOn = btn.querySelector('.icon-cm-on');
+    const iconOff = btn.querySelector('.icon-cm-off');
+    function refresh() {
+      if (iconOn) iconOn.classList.toggle('hidden', !commentaryOn);
+      if (iconOff) iconOff.classList.toggle('hidden', commentaryOn);
+      btn.setAttribute('aria-label', commentaryOn ? 'Turn off live commentary' : 'Turn on live commentary');
+      btn.setAttribute('aria-pressed', commentaryOn ? 'true' : 'false');
+      btn.title = commentaryOn ? 'Live commentary: on' : 'Live commentary: off';
+    }
+    refresh();
+    btn.onclick = () => {
+      commentaryOn = !commentaryOn;
+      try { localStorage.setItem(COMMENTARY_KEY, commentaryOn ? 'on' : 'off'); } catch (e) { /* this game only */ }
+      refresh();
+      commentaryHush();
+      cmQueue = [];
+      // A word in the lane itself, so the switch says what it did.
+      if (latestGame && !latestGame.roundOver && !revealPhaseActive && !startSeqActive) {
+        cmShowLine({ html: commentaryOn ? 'Commentary on' : 'Commentary off', pri: 9 }, 1500);
+      }
+    };
+  })();
+
   // ---------------- socket listeners ----------------
   function syncWithServer() {
     if (!myRoomCode || !myPlayerId) return;
@@ -9647,6 +10017,8 @@
       pendingStartReveal = false;
       showStartReveal(game, lastStartRevealMs);
     }
+    // Live commentary reads the same update, after the table is drawn.
+    commentaryObserve(prev, game);
   });
 
   socket.on('error_message', (data) => setGameError(data.message));
