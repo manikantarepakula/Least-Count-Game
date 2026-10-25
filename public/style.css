@@ -4273,29 +4273,18 @@ body.game-active .bg-scrim { display: none; }
   border-color: transparent; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.35);
 }
 
-/* ---- Your cards: bigger when there's room (fitHandCards in app.js) ---- */
+/* ---- Your cards ----
+   One size, always (Oct 2026). For a few builds the cards grew to fill the
+   tray whenever the hand was short, so they changed size from turn to turn --
+   which players found odd. They stay the size they always were; the room the
+   tray has to spare is left free on purpose. */
 /* Room at the top of the tray for the tags that sit above a card ("2x",
-   "+2") and for a picked card's lift -- at 4px they were clipped. 8px, not
+   "+2") and for a picked card's lift -- at 4px they were clipped. 7px, not
    more: two rows of cards must still fit the tray on a 360x640 phone. */
 #hand { padding-top: 7px; }
 /* The NEW tag sits on the card's bottom edge rather than below it, so a
    second row of cards never spills out of the tray. */
 #hand .card .new-tag { bottom: -3px; }
-#hand .card {
-  width: var(--hand-card-w, clamp(32px, 11.5vw, 44px));
-  height: calc(var(--hand-card-w, clamp(32px, 11.5vw, 44px)) * 1.409);
-}
-/* The face grows with the card. The fallback is the 44px card, which gives
-   exactly the sizes these always had. */
-#hand .card .center-rank   { font-size: calc(var(--hand-card-w, 44px) * 0.32); }
-#hand .card .center-suit   { font-size: calc(var(--hand-card-w, 44px) * 0.41); }
-#hand .card .corner-rank   { font-size: calc(var(--hand-card-w, 44px) * 0.23); }
-#hand .card .corner-suit   { font-size: calc(var(--hand-card-w, 44px) * 0.18); }
-#hand .card .joker-letters { font-size: calc(var(--hand-card-w, 44px) * 0.16); }
-#hand .card .joker-cap {
-  width:  calc(var(--hand-card-w, 44px) * 0.5);
-  height: calc(var(--hand-card-w, 44px) * 0.5);
-}
 /* No "0" badge on jokers: the gold edge already says it. */
 .card.is-joker::after { content: none; display: none; }
 
@@ -4391,3 +4380,27 @@ body.game-active .bg-scrim { display: none; }
 .reveal-banner { max-width: min(74%, calc(100% - 2 * var(--seat-w, 96px) - 8px)); }
 .reveal-banner-title { font-size: clamp(12px, calc(var(--centre-card-w, 58px) * 0.3), 17px); }
 .reveal-banner-sub   { font-size: clamp(10px, calc(var(--centre-card-w, 58px) * 0.225), 13px); }
+
+/* ---- The table is an oval while you play, too ----
+   The felt was inset 12% on every side, so its shape followed the table's box
+   -- nearly round during play, and only a tall oval at the round result, when
+   the turn strip and the buttons give the table their height. The oval is
+   the look players liked, so during play the felt reaches further up and
+   down (5%) inside the same box: the same oval, with the chairs sitting on
+   its rim, without taking any room from the cards or the buttons. */
+#screen-game:not(.reveal-phase) .table-felt { inset: 5% 12%; }
+/* ...and the chair at the top sits ON the rim, the way the one at the bottom
+   does, rather than hanging down inside the table: during play it is centred
+   on its point like every other chair. (It is hung from its top edge only so
+   the tall round-result box can't grow up into the header -- that still
+   applies during the reveal.) 8px above the table keeps it clear of the turn
+   strip. */
+#screen-game:not(.reveal-phase) .seat.anchor-top { transform: translate(-50%, -50%); }
+#screen-game:not(.reveal-phase) .oval-table { margin-top: 8px; }
+
+/* "Tap for scores" under the round's outcome: the reveal ends on any tap. */
+.reveal-banner-tap {
+  margin-top: 6px; font-size: 11px; font-weight: 600; color: var(--text-muted);
+  letter-spacing: 0.02em; text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+  animation: lcFadeDown 0.4s ease-out 0.8s both;
+}
