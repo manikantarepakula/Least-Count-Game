@@ -83,7 +83,7 @@
      server.js) can never pair the new markup with the old styles or code.
      The same ?v= is on app.js at the bottom of this file. -->
 
-<link rel="stylesheet" href="style.css?v=home2-2026-10-25" />
+<link rel="stylesheet" href="style.css?v=app2-2026-10-25" />
 <!-- The Home screen's 3D icons, written into a stylesheet of their own
      (Microsoft's Fluent Emoji, MIT licence -- the notice is inside the file).
      They never change, hence the fixed ?v=. -->
@@ -494,7 +494,7 @@
          make someone wait out the 40s prompt below just to back out. -->
     <button id="btn-queue-cancel" class="secondary leave-btn" type="button">Cancel</button>
     <div id="queue-waiting-choice" class="queue-waiting-choice hidden">
-      <p class="hint">Still looking -- what would you like to do?</p>
+      <p class="hint">Still looking &mdash; what would you like to do?</p>
       <button id="btn-queue-keep-waiting" class="secondary" type="button">Keep Waiting</button>
       <button id="btn-queue-fill-bots" class="secondary" type="button">Fill with Bots</button>
     </div>
@@ -775,7 +775,7 @@
   <div class="landing-form waiting-host-panel">
     <div class="waiting-host-spinner" aria-hidden="true"></div>
     <h2>Waiting for host</h2>
-    <p class="hint">The game's already in progress -- <span id="waiting-host-name">the host</span> needs to let you in. You'll join starting next round.</p>
+    <p class="hint">The game's already in progress &mdash; <span id="waiting-host-name">the host</span> needs to let you in. You'll join from the next round.</p>
     <!-- Filled in by app.js from the server's `needsAd` on the pending ack, and
          shown ONLY when an ad actually applies. First-time players are exempt,
          and must not be warned about an advert they will never see -- a new
@@ -1120,7 +1120,7 @@
       </div>
       <div class="rules-item">
         <div class="rules-heading">🔄 Your Turn</div>
-        <p>Discard one card (or a group of the same rank) from your hand. If it matches the open card's rank -- or the open card is this round's Joker -- that's it, turn over. Otherwise you'll automatically draw one card from the stock pile as a penalty for not matching. Try to keep your hand's total value as low as possible.</p>
+        <p>Discard one card (or a group of the same rank) from your hand. If it matches the open card's rank &mdash; or the open card is this round's Joker &mdash; that's it, turn over. Otherwise you'll automatically draw one card from the stock pile as a penalty for not matching. Try to keep your hand's total value as low as possible.</p>
       </div>
       <div class="rules-item">
         <div class="rules-heading">🔥 +2 Chain</div>
@@ -1354,8 +1354,10 @@
     <h2 id="leave-game-title">Leave this game?</h2>
     <p class="hint" id="leave-game-text">You'll forfeit the game and go back to the menu. The others carry on without you.</p>
     <div class="dialog-actions">
-      <button id="btn-leave-game-cancel" class="secondary" type="button">Stay</button>
-      <button id="btn-leave-game-confirm" class="primary" type="button">Leave</button>
+      <!-- Gold for staying, red words for leaving (Oct 2026): gold is the
+           good thing in this app, and leaving costs you the game. -->
+      <button id="btn-leave-game-cancel" class="primary" type="button">Stay</button>
+      <button id="btn-leave-game-confirm" class="secondary leave-btn" type="button">Leave</button>
     </div>
   </div>
 </div>
@@ -1400,7 +1402,7 @@
     <p class="hint" id="group-delete-text">This removes the group and its marathon for everyone. It can't be undone.</p>
     <div class="dialog-actions">
       <button id="btn-group-delete-cancel" class="secondary" type="button">Cancel</button>
-      <button id="btn-group-delete-confirm" class="primary" type="button">Delete</button>
+      <button id="btn-group-delete-confirm" class="danger" type="button">Delete</button>
     </div>
   </div>
 </div>
@@ -1409,7 +1411,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js?v=home2-2026-10-25" defer></script>
+<script src="app.js?v=app2-2026-10-25" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
