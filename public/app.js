@@ -119,6 +119,8 @@
     if (alreadySaved || nameInput.value.trim()) return;
     nameInput.value = user.displayName;
     localStorage.setItem('leastcount_name', user.displayName);
+    // Home's "Good evening, ..." picks the new name up at once.
+    try { updateHomeGreeting(); } catch (e) { /* cosmetic */ }
   }
 
   // Current Firebase uid (if any), sent along with create/join so the server
@@ -292,6 +294,9 @@
   const myStatsBtn = document.getElementById('btn-my-stats');
   if (myStatsBtn) {
     myStatsBtn.onclick = async () => {
+      // It lives in the profile panel now (Oct 2026): the stats replace it.
+      const profilePanel = document.getElementById('profile-menu-panel');
+      if (profilePanel) profilePanel.classList.add('hidden');
       const body = document.getElementById('my-stats-body');
       body.innerHTML = '<p class="hint">Loading...</p>';
       document.getElementById('overlay-my-stats').classList.remove('hidden');
@@ -832,6 +837,45 @@
   function syncDropdown(selectEl) {
     const entry = dropdownWraps.get(selectEl);
     if (entry) entry.syncLabel();
+    const chips = chipRenders.get(selectEl);
+    if (chips) chips();
+  }
+
+  // ------------------------------------------------------------------
+  // One-tap choices (Oct 2026). Home's "how many bots / which level / how
+  // many players" were dropdowns: two taps each, with the options hidden
+  // until you opened them. Now each is a row of buttons, the current one
+  // lit. The <select> stays in the page, hidden, as the single source of
+  // truth -- every handler that reads its .value works unchanged -- and a
+  // tap sets it and fires 'change' exactly as choosing from it did.
+  // ------------------------------------------------------------------
+  const chipRenders = new Map();
+  function initChips(selectId, labelOf) {
+    const select = document.getElementById(selectId);
+    const host = document.querySelector('.chips[data-for="' + selectId + '"]');
+    if (!select || !host) return;
+    function render() {
+      host.innerHTML = '';
+      Array.from(select.options).forEach((opt) => {
+        const on = opt.value === select.value;
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'chip' + (on ? ' on' : '');
+        b.textContent = labelOf ? labelOf(opt) : opt.textContent;
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        b.setAttribute('aria-label', opt.textContent);
+        b.onclick = () => {
+          if (select.value === opt.value) return;
+          select.value = opt.value;
+          select.dispatchEvent(new Event('change'));
+          render();
+        };
+        host.appendChild(b);
+      });
+    }
+    chipRenders.set(select, render);
+    select.addEventListener('change', render);
+    render();
   }
 
   // ---------------- your-turn visual pulse ----------------
@@ -2096,11 +2140,18 @@
     }
     document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
     document.getElementById(id).classList.add('active');
+    // Home's sheets belong to Home. Whatever takes you elsewhere -- a game
+    // starting, a lobby, a group -- closes them, so you never come back to
+    // Home with one still up.
+    if (id !== 'screen-landing') {
+      try { closeHomeSheet(); } catch (e) { /* never block navigation */ }
+    }
     // Offer the tutorial whenever the landing screen comes up, not only on
     // the very first paint: a player who lands here after their first game
     // still gets one chance at it, and wasSeen() makes sure it is only ever
     // one chance.
     if (id === 'screen-landing') {
+      try { updateHomeGreeting(); } catch (e) { /* cosmetic */ }
       try { maybeOfferTutorial(); } catch (e) { /* never block navigation */ }
       try { maybeAskNameAfterFirstGame(); } catch (e) { /* never block navigation */ }
     }
@@ -2971,16 +3022,99 @@
   // wants either their permanent tables or a one-off game, never both at
   // once. Invite mode hides the whole .mode-blocks wrapper, so these don't
   // need to know about it.
-  (function wireLandingTabs() {
-    const tabs = document.getElementById('landing-tabs');
-    if (!tabs) return;
-    tabs.querySelectorAll('.seg').forEach((seg) => {
-      seg.onclick = () => {
-        tabs.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s === seg));
-        const want = seg.dataset.pane;
+  // Home and Groups are the two bottom-bar items (Oct 2026) -- they used to
+  // be tabs at the top of the page, with Stats and Rules in the bottom bar.
+  (function wireFooterNav() {
+    const items = document.querySelectorAll('.landing-footer-nav .footer-nav-item[data-pane]');
+    items.forEach((item) => {
+      item.onclick = () => {
+        const want = item.dataset.pane;
+        items.forEach((x) => x.classList.toggle('active', x === item));
         document.getElementById('pane-groups').classList.toggle('hidden', want !== 'groups');
         document.getElementById('pane-quick').classList.toggle('hidden', want !== 'quick');
+        const body = document.querySelector('#screen-landing .landing-body');
+        if (body) body.scrollTop = 0;
       };
+    });
+  })();
+
+  // ------------------------------------------------------------------
+  // Home sheets (Oct 2026, Home v2). Each way to play is one card on Home;
+  // its choices -- how many bots, how many players, a code to join -- open on
+  // a sheet from the bottom instead of sitting on the page. The controls
+  // inside keep their old ids, so every handler further down (Create Room,
+  // Join, Find Match, Start, the one-tap choices) works unchanged.
+  //
+  // The phone's Back button closes an open sheet rather than the app: opening
+  // one adds a history entry, and Capacitor's default Back steps back through
+  // the WebView's history whenever it can, which fires popstate here.
+  //
+  // `var`, not `let`: showScreen() calls closeHomeSheet(), and showScreen can
+  // run during startup, before this line has executed.
+  // ------------------------------------------------------------------
+  var openSheetId = null;
+  var sheetHistoryPushed = false;
+  var sheetBackAt = 0;
+
+  function openHomeSheet(id) {
+    const sheet = document.getElementById(id);
+    const backdrop = document.getElementById('home-sheet-backdrop');
+    if (!sheet || !backdrop) return;
+    document.querySelectorAll('.home-sheet').forEach((s) => { if (s !== sheet) s.classList.add('hidden'); });
+    sheet.querySelectorAll('.sheet-error').forEach((e) => { e.textContent = ''; });
+    backdrop.classList.remove('hidden');
+    sheet.classList.remove('hidden');
+    openSheetId = id;
+    if (!sheetHistoryPushed) {
+      try { history.pushState({ lcSheet: true }, ''); sheetHistoryPushed = true; } catch (e) { sheetHistoryPushed = false; }
+    }
+    // Focus the sheet itself, not the code box: focusing that would throw the
+    // keyboard up over the Create Room button.
+    try { sheet.setAttribute('tabindex', '-1'); sheet.focus({ preventScroll: true }); } catch (e) { /* cosmetic */ }
+    logAnalytics('home_mode_opened', { mode: id.replace('sheet-', '') });
+  }
+
+  function closeHomeSheet(opts) {
+    opts = opts || {};
+    const was = openSheetId;
+    openSheetId = null;
+    document.querySelectorAll('.home-sheet').forEach((s) => s.classList.add('hidden'));
+    const backdrop = document.getElementById('home-sheet-backdrop');
+    if (backdrop) backdrop.classList.add('hidden');
+    // Take our history entry back off, unless Back already did. Only ever
+    // the entry we added -- never a step further back than that.
+    if (sheetHistoryPushed) {
+      sheetHistoryPushed = false;
+      if (!opts.fromBack) {
+        try {
+          if (history.state && history.state.lcSheet) { sheetBackAt = Date.now(); history.back(); }
+        } catch (e) { /* nothing to undo */ }
+      }
+    }
+    // Keyboard and screen-reader users land back on the card they opened.
+    if (was && opts.refocus) {
+      const card = document.querySelector('.home-mode[data-sheet="' + was + '"]');
+      if (card) { try { card.focus({ preventScroll: true }); } catch (e) { /* cosmetic */ } }
+    }
+  }
+
+  (function wireHomeSheets() {
+    document.querySelectorAll('#screen-landing .home-mode[data-sheet]').forEach((card) => {
+      card.addEventListener('click', () => openHomeSheet(card.dataset.sheet));
+    });
+    document.querySelectorAll('#screen-landing .home-sheet .sheet-close').forEach((b) => {
+      b.addEventListener('click', () => closeHomeSheet({ refocus: true }));
+    });
+    const backdrop = document.getElementById('home-sheet-backdrop');
+    if (backdrop) backdrop.addEventListener('click', () => closeHomeSheet());
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && openSheetId) closeHomeSheet({ refocus: true });
+    });
+    window.addEventListener('popstate', () => {
+      // Our own history.back() from closing a sheet lands here a moment
+      // later; a sheet opened in that moment must not be shut by it.
+      if (Date.now() - sheetBackAt < 400) return;
+      if (openSheetId) { sheetHistoryPushed = false; closeHomeSheet({ fromBack: true }); }
     });
   })();
 
@@ -2995,6 +3129,31 @@
     const saved = localStorage.getItem(NAME_STORAGE_KEY);
     if (saved) document.getElementById('input-name').value = saved;
   })();
+
+  // ------------------------------------------------------------------
+  // Home greeting (Oct 2026, Home v2): "Good evening, Mani" over "Ready to
+  // play?". The time of day is the phone's own clock; the name is the one in
+  // the profile, and is simply left off until there is one.
+  // A function declaration reading only the page and storage -- showScreen()
+  // calls it, and can run before this part of the file has.
+  // ------------------------------------------------------------------
+  function updateHomeGreeting() {
+    const el = document.getElementById('home-greet-hello');
+    if (!el) return;
+    const h = new Date().getHours();
+    const part = h >= 5 && h < 12 ? 'Good morning' : (h >= 12 && h < 17 ? 'Good afternoon' : 'Good evening');
+    let name = '';
+    try {
+      const box = document.getElementById('input-name');
+      name = ((box && box.value) || localStorage.getItem('leastcount_name') || '').trim();
+    } catch (e) { /* storage blocked: no name */ }
+    el.textContent = name ? part + ', ' + name : part;
+  }
+  updateHomeGreeting();
+  // Coming back to the app hours later: morning may have become evening.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') updateHomeGreeting();
+  });
 
   // Opening a shared invite link (?room=CODE, see btn-share-room below)
   // pre-fills the join-room field so whoever tapped the link only has to
@@ -3986,6 +4145,9 @@
 
   function enterInviteMode(key, headline) {
     inviteJoinKey = key;
+    // A link tapped while a Home sheet is open: the invite card replaces the
+    // cards, so the sheet goes too.
+    try { closeHomeSheet(); } catch (e) { /* cosmetic */ }
     const card = document.getElementById('invite-card');
     const blocks = document.querySelector('.mode-blocks');
     if (!card || !blocks) return;
@@ -4142,22 +4304,8 @@
     });
   };
 
-  // Quick Play toggle: Play Online and Play with Bots ask the same question
-  // ("how many?") so they now share one block. Both sub-blocks stay in the
-  // DOM with their original ids -- only visibility switches -- so the
-  // existing matchmaking and solo handlers are untouched.
-  (function wireQuickPlayToggle() {
-    const toggle = document.getElementById('quickplay-toggle');
-    if (!toggle) return;
-    toggle.querySelectorAll('.seg').forEach((seg) => {
-      seg.onclick = () => {
-        const mode = seg.dataset.mode;
-        toggle.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s === seg));
-        document.getElementById('quickplay-online').classList.toggle('hidden', mode !== 'online');
-        document.getElementById('quickplay-bots').classList.toggle('hidden', mode !== 'bots');
-      };
-    });
-  })();
+  // (The vs Bots / Online switch is gone, Oct 2026: they are two cards on
+  // Home now, both always showing.)
 
   renderGroupsBlock();
   function getPlayerName() {
@@ -4912,6 +5060,10 @@
     // the group start bug was so hard to pin down.
     const groupErr = document.getElementById('group-error');
     if (groupErr) groupErr.textContent = msg || '';
+    // An open Home sheet covers the banner below, so the message goes on the
+    // sheet as well -- otherwise a refused join would look like Join did
+    // nothing.
+    document.querySelectorAll('.home-sheet:not(.hidden) .sheet-error').forEach((e) => { e.textContent = msg || ''; });
     const toast = document.getElementById('landing-toast-error');
     if (toast) {
       if (msg) {
@@ -5044,6 +5196,7 @@
   function closeProfileMenu() {
     if (profileMenuPanel) profileMenuPanel.classList.add('hidden');
     finishNamePrompt();
+    updateHomeGreeting();
   }
   if (btnProfileMenu && profileMenuPanel) {
     btnProfileMenu.onclick = (e) => {
@@ -5077,6 +5230,7 @@
   if (inputNameEl) {
     inputNameEl.addEventListener('input', () => {
       if (inputNameEl.value.trim()) setLandingError('');
+      updateHomeGreeting();
     });
     // The keyboard's Done key closes the sheet, which saves the name and
     // resumes whatever they had tapped -- no hunting for the Close button.
@@ -5099,16 +5253,12 @@
     syncDropdown(sel);
   })();
 
-  // One custom themed dropdown per native <select>, replacing the browser's
-  // own unstyleable popup everywhere in the app (see initDropdown above).
-  initDropdown('input-online-playercount');
-  initDropdown('input-bot-count');
-  // Restore the saved difficulty BEFORE the themed dropdown wraps the select --
-  // initDropdown reads the current value to build its trigger label, so setting
-  // it afterwards would leave the visible label showing Medium while the real
-  // value was Hard.
+  // Home's choices are one-tap buttons (Oct 2026) -- see initChips below.
+  // The saved difficulty is restored first so the right button lights up.
   restoreBotDifficulty();
-  initDropdown('input-bot-difficulty');
+  initChips('input-bot-count', (opt) => opt.value);
+  initChips('input-bot-difficulty');
+  initChips('input-online-playercount');
   initDropdown('input-maxscore');
   initDropdown('round-maxscore-select');
 
@@ -5240,7 +5390,7 @@
   // guarded with `if (myStatsBtn)`) attaches to it exactly the same either
   // way. Rules reuses the existing rules overlay (normally only reachable
   // from the lobby, now also reachable before ever joining a room).
-  document.getElementById('btn-footer-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
+  document.getElementById('btn-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
 
   // ---------------- "Play Online" matchmaking ----------------
   const QUEUE_PROMPT_DELAY_MS = 40000; // ~40s of real waiting before offering wait/bots/cancel
@@ -5672,6 +5822,7 @@
     });
     host.appendChild(frag);
   }
+
 
   // Eight hues spaced round the wheel, picked to stay clear of the gold the
   // active seat uses. Chosen by a hash of the playerId rather than by seat
