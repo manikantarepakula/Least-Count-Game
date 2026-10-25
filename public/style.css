@@ -3885,7 +3885,7 @@ body.game-active .bg-scrim { display: none; }
 
 /* ---- compact: + drop the nice-to-have lines, trim control padding --------- */
 [data-fit~="compact"] .fit-optional { display: none !important; }
-:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="compact"] .mode-block button:not(.tiny):not(.icon-btn):not(.seg):not(.dd-toggle),
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="compact"] .mode-block button:not(.tiny):not(.icon-btn):not(.seg):not(.dd-toggle):not(.chip),
 :is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="compact"] .screen-actions button:not(.dd-toggle) {
   padding-top: 11px; padding-bottom: 11px; min-height: 44px;
 }
@@ -3904,7 +3904,7 @@ body.game-active .bg-scrim { display: none; }
 :is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .mode-block { padding: 8px 12px; border-radius: 12px; }
 :is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .mode-blocks,
 :is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .landing-pane { gap: 6px; }
-:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .mode-block button:not(.tiny):not(.icon-btn):not(.seg):not(.dd-toggle),
+:is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .mode-block button:not(.tiny):not(.icon-btn):not(.seg):not(.dd-toggle):not(.chip),
 :is(#screen-landing, #screen-lobby, #screen-group)[data-fit~="tight"] .screen-actions button:not(.dd-toggle) {
   padding-top: 8px; padding-bottom: 8px;
 }
@@ -4487,3 +4487,381 @@ body.game-active .bg-scrim { display: none; }
    width (see layoutCommentaryLane). */
 .commentary.one-line .cm-line { white-space: nowrap; }
 .commentary.one-line .cm-text { overflow: hidden; text-overflow: ellipsis; }
+
+/* ==========================================================================
+   HOME, CLEANED UP (Oct 2026)
+   Three cards, one per way to play -- vs Bots, Online, with Friends -- each
+   with one line and one button; one-tap choices instead of dropdowns; Home
+   and Groups in the bottom bar; Rules top right; Stats in the profile. Same
+   panels, colours and type as before.
+   ========================================================================== */
+/* Rules, top right: the same round button as the profile on the left. */
+.landing-rules-btn { min-width: 44px; min-height: 44px; }   /* same as #btn-profile-menu */
+.landing-rules-btn .icon { width: 19px; height: 19px; margin: 0; }
+
+/* Title and its one line, tight together. */
+.play-card-head h3 { margin: 0; }
+.play-card-head .mode-block-sub { margin: 2px 0 0; }
+#screen-landing .play-card .row { margin-top: 10px; }
+
+/* One-tap choices: a label, then buttons that share the row equally. */
+.chip-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.chip-label { flex: 0 0 52px; font-size: 12px; color: #9a9aa2; }
+.chips { flex: 1 1 auto; display: flex; gap: 6px; min-width: 0; }
+#screen-landing .chips .chip {
+  flex: 1 1 0; min-width: 0; width: auto; margin: 0;
+  min-height: 36px; padding: 6px 4px;
+  border-radius: 18px; border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.05); color: #d6dad8;
+  font-size: 14px; font-weight: 600; line-height: 1.1;
+}
+/* The choice made: bright, but not gold -- gold is for Start alone. */
+#screen-landing .chips .chip.on {
+  background: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.75); color: #fff;
+}
+
+/* What you type in the code box shows in capitals; the hint inside it
+   doesn't shout. */
+.code-input { text-transform: uppercase; }
+.code-input::placeholder { text-transform: none; }
+
+/* My stats, in the profile panel. */
+.profile-stats-btn { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 14px; margin-bottom: 10px; }
+.profile-stats-btn .icon { width: 16px; height: 16px; margin: 0; }
+
+/* Shorter phones: the same three cards, a little closer together. */
+#screen-landing[data-fit~="snug"] .chip-row { margin-top: 8px; }
+#screen-landing[data-fit~="snug"] .play-card .row { margin-top: 8px; }
+#screen-landing[data-fit~="compact"] .chips .chip { min-height: 34px; padding: 5px 4px; }
+#screen-landing[data-fit~="tight"] .chip-row { margin-top: 6px; }
+#screen-landing[data-fit~="tight"] .play-card .row { margin-top: 6px; }
+#screen-landing[data-fit~="tight"] .chips .chip { min-height: 32px; padding: 4px; font-size: 13px; }
+
+/* ==========================================================================
+   HOME v2 (Oct 2026) -- inspired by chess.com
+   ==========================================================================
+   What we took from chess.com, and why:
+     - ONE font, bold and clean: Poppins (loaded in index.html) for every
+       title, line and button on Home. Before, the labels were Georgia and
+       the buttons fell back to the phone's own font -- two voices on one
+       screen, which is a big part of why it looked unfinished.
+     - A calm, flat background with LIGHTER cards on it. The cards stand out
+       by being lighter, with a soft shadow under them -- not by outlines.
+     - Chunky buttons with a darker bottom edge, so they look pressable, and
+       they sink when pressed. Gold is still for the one main button.
+     - Big cards with a colourful icon, a bold title and one grey line, and
+       no settings on the page: a card opens a sheet with that mode's
+       choices (see openHomeSheet() in app.js).
+   Ours, kept: deep jade, gold, and the Cinzel LEAST COUNT wordmark.
+   Scoped to the Home screen and the profile popup opened from it -- no other
+   screen changes until we decide to roll the look out.
+   Text contrast, measured: grey lines (#9fb5ab) 5.9:1 on a card, 6.3:1 on a
+   sheet, 7.5:1 on the page; white titles 12.8:1; dark text on gold 10.2:1.
+   ========================================================================== */
+:root {
+  --font-ui: 'Poppins', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --home-bg: #0f241d;
+  --home-card: #1c372f;
+  --home-card-hover: #213f36;
+  --home-card-press: #244439;
+  --home-sheet: #183229;
+  --home-field: #24443a;
+  --home-field-on: #2c5245;
+  --home-line: #9fb5ab;
+  --home-edge: rgba(0,0,0,0.32);
+  --gold-edge: #a8770c;
+}
+
+/* ---- One font for the whole screen ------------------------------------- */
+/* Buttons and inputs don't inherit a font by default (the browser gives them
+   its own), so they are told to. */
+#screen-landing,
+#profile-menu-panel { font-family: var(--font-ui); }
+#screen-landing button, #screen-landing input,
+#profile-menu-panel button, #profile-menu-panel input { font-family: inherit; }
+
+/* ---- A calm background ------------------------------------------------- */
+#screen-landing.screen.active { background: var(--home-bg); }
+/* The tumbling-card backdrop stays on the other screens; Home has its own
+   fan of cards now and wants a quiet page around it. */
+body:has(#screen-landing.active) .bg-cards,
+body:has(#screen-landing.active) .bg-scrim { display: none; }
+
+/* ---- Top bar: no rule under it; round buttons a touch bigger ----------- */
+#screen-landing .landing-topbar { border-bottom: 0; padding: 10px 14px 6px; }
+#screen-landing .landing-avatar {
+  width: 44px; height: 44px; background: rgba(255,255,255,0.07); color: #e3ece8;
+}
+#screen-landing .landing-avatar:hover { background: rgba(255,255,255,0.12); }
+#screen-landing .landing-avatar .icon { width: 20px; height: 20px; margin: 0; }
+
+/* ---- The page: a greeting, then the three cards --------------------------- */
+#screen-landing .landing-body { padding: 4px 16px 16px; gap: 12px; }
+#screen-landing .mode-blocks { flex: 1 0 auto; }
+#screen-landing #pane-quick { flex: 1 0 auto; gap: 14px; }
+#screen-landing #pane-quick > .tutorial-offer { margin: 0; }
+
+/* "Good evening, Mani" over "Ready to play?", with a 3D hand that waves
+   once each time Home comes up (an animation restarts whenever its screen is
+   shown again). */
+.home-greet { display: flex; align-items: center; gap: 10px; padding: 16px 2px 2px; }
+.home-greet-wave {
+  flex: 0 0 42px; width: 42px; height: 42px;
+  transform-origin: 70% 85%;
+  animation: homeWave 1.6s ease-in-out 0.3s 1;
+}
+@keyframes homeWave {
+  0%, 100% { transform: rotate(0deg); }
+  15% { transform: rotate(14deg); }
+  30% { transform: rotate(-8deg); }
+  45% { transform: rotate(14deg); }
+  60% { transform: rotate(-4deg); }
+  75% { transform: rotate(10deg); }
+}
+@media (prefers-reduced-motion: reduce) { .home-greet-wave { animation: none; } }
+.home-greet-text { flex: 1 1 auto; min-width: 0; }
+.home-greet-hello {
+  margin: 0; font-size: 13px; font-weight: 500; line-height: 1.35; color: var(--home-line);
+  /* A long name must not wrap the line under the hand. */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#screen-landing .home-greet-title {
+  margin: 0; font-size: 23px; font-weight: 700; line-height: 1.2; letter-spacing: -0.2px; color: #fff;
+}
+
+/* ---- The three ways to play -------------------------------------------- */
+.home-modes { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+#screen-landing .home-mode {
+  display: flex; align-items: center; justify-content: flex-start; gap: 12px;
+  width: 100%; min-height: 72px; margin: 0;
+  padding: 10px 10px 10px 14px;
+  background: var(--home-card); color: #fff; text-align: left;
+  border: 0; border-radius: 14px;
+  box-shadow: 0 4px 0 var(--home-edge), 0 10px 24px rgba(0,0,0,0.18);
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+#screen-landing .home-mode:hover { background: var(--home-card-hover); }
+/* Pressed: it sinks onto its own shadow, like a real button. */
+#screen-landing .home-mode:active {
+  transform: translateY(3px);
+  background: var(--home-card-press);
+  box-shadow: 0 1px 0 var(--home-edge), 0 4px 12px rgba(0,0,0,0.18);
+}
+#screen-landing .home-mode:focus-visible { outline: 2px solid var(--brand-line); outline-offset: 3px; }
+/* Play with Friends is the main way to play: first, and the only card with a
+   hint of gold around it. Same height as the other two. */
+#screen-landing .home-mode-main {
+  background: linear-gradient(135deg, #23443a 0%, var(--home-card) 72%);
+  box-shadow: inset 0 0 0 1.5px rgba(242,193,78,0.38), 0 4px 0 var(--home-edge), 0 10px 24px rgba(0,0,0,0.18);
+}
+#screen-landing .home-mode-main:active {
+  box-shadow: inset 0 0 0 1.5px rgba(242,193,78,0.38), 0 1px 0 var(--home-edge), 0 4px 12px rgba(0,0,0,0.18);
+}
+/* The 3D icons (home-art.css). */
+.home-mode-icon { flex: 0 0 46px; width: 46px; height: 46px; }
+.home-mode-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.home-mode-title { font-size: 16px; font-weight: 700; line-height: 1.25; color: #fff; }
+.home-mode-sub { margin-top: 1px; font-size: 12.5px; font-weight: 500; line-height: 1.35; color: var(--home-line); }
+.home-mode-chev { flex: 0 0 18px; width: 18px; height: 18px; color: #6f8f82; }
+
+/* ---- Bottom bar --------------------------------------------------------- */
+#screen-landing .landing-footer-nav { border-top: 1px solid rgba(255,255,255,0.06); padding: 6px 4px 8px; }
+#screen-landing .footer-nav-item {
+  min-width: 96px; min-height: 48px; gap: 3px;
+  font-size: 11.5px; font-weight: 500; color: #8fa89d;
+}
+#screen-landing .footer-nav-item .nav-icon,
+#screen-landing .footer-nav-item .icon { width: 24px; height: 24px; }
+#screen-landing .footer-nav-item.active { color: #fff; }
+#screen-landing .footer-nav-item.active .nav-icon { color: var(--brand-line); }
+
+/* ---- Errors on Home ------------------------------------------------------ */
+#screen-landing .landing-toast-error { font-size: 13px; font-weight: 500; border-radius: 12px; }
+
+/* ==========================================================================
+   The sheets: a mode's choices, sliding up from the bottom
+   ========================================================================== */
+/* Both stop above the ad banner, like every popup (--ad-safe-bottom). */
+.home-sheet-backdrop {
+  position: fixed; left: 0; right: 0; top: 0; bottom: var(--ad-safe-bottom, 0px);
+  z-index: 5; background: rgba(3,12,9,0.62);
+  animation: homeFadeIn 0.18s ease-out;
+}
+.home-sheet {
+  position: fixed; left: 0; right: 0; bottom: var(--ad-safe-bottom, 0px); z-index: 6;
+  width: 100%; max-width: 480px; margin: 0 auto; box-sizing: border-box;
+  max-height: calc(100svh - var(--ad-safe-bottom, 0px) - 24px); overflow-y: auto;
+  padding: 8px 18px 20px;
+  background: var(--home-sheet); color: #fff;
+  border-radius: 22px 22px 0 0;
+  box-shadow: 0 -12px 32px rgba(0,0,0,0.45);
+  animation: homeSheetUp 0.24s cubic-bezier(.2,.9,.3,1);
+}
+@keyframes homeSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes homeFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .home-sheet, .home-sheet-backdrop { animation: none; }
+}
+.sheet-grab { width: 40px; height: 4px; margin: 0 auto 12px; border-radius: 2px; background: rgba(255,255,255,0.2); }
+.sheet-head { display: flex; align-items: center; gap: 12px; }
+.sheet-icon { flex: 0 0 44px; width: 44px; height: 44px; }
+.sheet-head-text { flex: 1 1 auto; min-width: 0; }
+.sheet-head-text h2 { margin: 0; font-size: 20px; font-weight: 700; line-height: 1.2; color: #fff; }
+.sheet-head-text p { margin: 2px 0 0; font-size: 13px; font-weight: 500; line-height: 1.35; color: var(--home-line); }
+#screen-landing .sheet-close {
+  flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px;
+  margin: -2px -6px 0 0; padding: 0; align-self: flex-start;
+  border: 0; border-radius: 50%;
+  background: rgba(255,255,255,0.08); color: #d5e3dc;
+}
+#screen-landing .sheet-close:hover { background: rgba(255,255,255,0.14); }
+#screen-landing .sheet-close .icon { width: 20px; height: 20px; margin: 0; }
+
+.sheet-field { margin-top: 20px; }
+.sheet-label {
+  display: block; margin: 0 0 8px;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--home-line);
+}
+#screen-landing .home-sheet .chips { display: flex; gap: 8px; }
+#screen-landing .home-sheet .chips .chip {
+  flex: 1 1 0; min-width: 0; width: auto; margin: 0;
+  min-height: 50px; padding: 0 4px;
+  border: 2px solid transparent; border-radius: 12px;
+  background: var(--home-field); color: #e6efea;
+  font-size: 17px; font-weight: 700; line-height: 1;
+  box-shadow: 0 3px 0 var(--home-edge);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+#screen-landing .home-sheet .chips .chip:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--home-edge); }
+/* The choice made: a gold ring. The fill stays dark, so the one solid gold
+   thing on the sheet is still the button that starts the game. */
+#screen-landing .home-sheet .chips .chip.on {
+  background: var(--home-field-on); border-color: var(--brand); color: #fff;
+}
+
+/* The one gold button: chunky, with a darker bottom edge; it sinks when
+   pressed. */
+#screen-landing .home-sheet button.sheet-go {
+  margin-top: 24px; min-height: 56px; padding: 0 16px;
+  border: 0; border-radius: 14px;
+  font-size: 18px; font-weight: 700; letter-spacing: 0.2px;
+  background: linear-gradient(180deg, #f8cf62 0%, var(--brand) 48%, #ebb43a 100%);
+  color: #261a03;
+  box-shadow: 0 5px 0 var(--gold-edge), 0 10px 22px rgba(0,0,0,0.30);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+#screen-landing .home-sheet button.sheet-go:hover:not(:disabled) { filter: brightness(1.04); }
+#screen-landing .home-sheet button.sheet-go:active:not(:disabled) {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 var(--gold-edge), 0 4px 10px rgba(0,0,0,0.30);
+}
+
+/* Friends: "or join with a code", then the code box and Join. */
+.sheet-or {
+  display: flex; align-items: center; gap: 12px; margin: 24px 0 14px;
+  font-size: 13px; font-weight: 500; color: var(--home-line);
+}
+.sheet-or::before, .sheet-or::after { content: ''; flex: 1 1 auto; height: 1px; background: rgba(255,255,255,0.12); }
+.sheet-join-row { display: flex; gap: 10px; }
+#screen-landing .home-sheet input.code-input {
+  flex: 1 1 auto; min-width: 0; width: auto; margin: 0;
+  height: 54px; padding: 0 12px;
+  border: 2px solid #2f5246; border-radius: 14px;
+  background: #0f241d; color: #fff;
+  font-size: 20px; font-weight: 700; letter-spacing: 0.18em; text-align: center;
+}
+#screen-landing .home-sheet input.code-input::placeholder {
+  font-size: 16px; font-weight: 500; letter-spacing: normal; color: #7d968b;
+}
+#screen-landing .home-sheet input.code-input:focus { border-color: var(--brand-line); outline: none; }
+#screen-landing .home-sheet button.sheet-join {
+  flex: 0 0 auto; width: auto; height: 54px; min-height: 54px; margin: 0; padding: 0 24px;
+  border: 0; border-radius: 14px;
+  background: #2d5145; color: #fff;
+  font-size: 17px; font-weight: 700;
+  box-shadow: 0 4px 0 #142a23;
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+#screen-landing .home-sheet button.sheet-join:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 #142a23; }
+
+/* A refused join or start shows here too: the banner on the page itself is
+   behind the sheet while it is open. */
+.sheet-error { margin: 14px 0 0; font-size: 13px; font-weight: 500; line-height: 1.4; color: var(--red-text); text-align: center; }
+.sheet-error:empty { display: none; }
+
+/* ---- The Groups tab, in the same style ---------------------------------- */
+#screen-landing #pane-groups .mode-block {
+  background: var(--home-card); border: 0; border-radius: 16px; padding: 16px;
+  box-shadow: 0 4px 0 var(--home-edge), 0 10px 24px rgba(0,0,0,0.18);
+}
+#screen-landing #pane-groups .mode-block h3 { margin: 0 0 4px; font-size: 18px; font-weight: 700; color: #fff; }
+#screen-landing #pane-groups .mode-block-sub,
+#screen-landing #pane-groups .hint { font-size: 13px; font-weight: 500; line-height: 1.4; color: var(--home-line); }
+#screen-landing #pane-groups .mode-block-join-row { gap: 10px; margin-top: 12px; }
+#screen-landing #pane-groups .hint { text-align: left; }
+#screen-landing #pane-groups #groups-empty { margin: 2px 0 0; }
+/* Your groups: one row each, the same lighter "field" as the choices on a
+   sheet; the row is the tap (it opens the group). */
+#screen-landing #pane-groups .group-list { gap: 8px; margin: 10px 0 2px; }
+#screen-landing #pane-groups .group-row {
+  min-height: 52px; padding: 12px 14px;
+  background: var(--home-field); border: 0; border-radius: 12px;
+  box-shadow: 0 3px 0 var(--home-edge);
+}
+#screen-landing #pane-groups .group-row:hover { background: #29493f; }
+#screen-landing #pane-groups .group-row:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--home-edge); }
+#screen-landing #pane-groups .group-row-name { font-size: 16px; font-weight: 700; color: #fff; }
+#screen-landing #pane-groups .group-row-go { font-size: 13px; font-weight: 700; color: var(--brand-line); }
+#screen-landing #pane-groups input[type=text] {
+  height: 50px; padding: 0 14px; margin: 0;
+  border: 2px solid #2f5246; border-radius: 12px;
+  background: #0f241d; color: #fff; font-size: 16px; font-weight: 500;
+}
+#screen-landing #pane-groups input.code-input { font-weight: 700; letter-spacing: 0.18em; text-align: center; font-size: 18px; }
+#screen-landing #pane-groups input.code-input::placeholder { letter-spacing: normal; font-weight: 500; font-size: 16px; }
+#screen-landing #pane-groups input[type=text]:focus { border-color: var(--brand-line); outline: none; }
+#screen-landing #pane-groups .mode-block-join-row button.secondary {
+  height: 50px; min-height: 50px; padding: 0 20px;
+  border: 0; border-radius: 12px;
+  background: #2d5145; color: #fff; font-size: 16px; font-weight: 700;
+  box-shadow: 0 4px 0 #142a23;
+}
+#screen-landing #pane-groups .mode-block-join-row button.secondary:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 #142a23; }
+
+/* ---- The profile popup, opened from Home -------------------------------- */
+#profile-menu-panel .profile-modal-panel {
+  background: var(--home-sheet); border: 0; border-radius: 20px;
+  box-shadow: 0 18px 40px rgba(0,0,0,0.5);
+}
+#profile-menu-panel .profile-modal-panel h2 { font-size: 20px; font-weight: 700; }
+#profile-menu-panel .profile-modal-panel label { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--home-line); }
+#profile-menu-panel .profile-modal-panel input[type=text] {
+  border: 2px solid #2f5246; border-radius: 12px; background: #0f241d; color: #fff;
+  font-size: 16px; font-weight: 500;
+}
+#profile-menu-panel .profile-modal-panel input[type=text]:focus { border-color: var(--brand-line); }
+#profile-menu-panel .profile-modal-panel .secondary {
+  border: 0; border-radius: 12px; background: #2d5145; color: #fff; font-weight: 700;
+  box-shadow: 0 4px 0 #142a23;
+}
+#profile-menu-panel .profile-modal-panel .secondary:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 #142a23; }
+#profile-menu-panel .settings-label { font-weight: 700; }
+#profile-menu-panel .settings-hint,
+#profile-menu-panel .signin-status { color: var(--home-line); font-weight: 500; }
+
+/* ---- Shorter phones ------------------------------------------------------ */
+/* Spacing gives way first; the cards never go below 44px targets. */
+@media (max-height: 700px) {
+  .home-greet { padding-top: 10px; }
+  .home-greet-wave { flex-basis: 38px; width: 38px; height: 38px; }
+  #screen-landing .home-greet-title { font-size: 21px; }
+  #screen-landing #pane-quick { gap: 12px; }
+}
+#screen-landing[data-fit~="snug"] .home-mode { min-height: 66px; padding-top: 8px; padding-bottom: 8px; }
+#screen-landing[data-fit~="tight"] .home-modes { gap: 10px; }
+#screen-landing[data-fit~="tight"] .home-mode { min-height: 60px; padding-top: 7px; padding-bottom: 7px; }
+#screen-landing[data-fit~="tight"] .home-mode-icon { width: 40px; height: 40px; flex-basis: 40px; }
