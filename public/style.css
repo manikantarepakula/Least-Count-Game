@@ -5129,3 +5129,160 @@ button.secondary:disabled, button.action:disabled { box-shadow: none; filter: sa
 }
 .commentary.docked .cm-line.hot { background: linear-gradient(90deg, rgba(150,38,30,0.95), rgba(150,108,14,0.95)); }
 .commentary.docked .cm-mic { margin-top: 0; }
+
+/* ==========================================================================
+   LOBBY v2 (Oct 2026) -- Home's three ingredients in the room
+   ==========================================================================
+   A header (3D icon, the table's name, one line saying who is here), the
+   room code as a ticket, and the players as seats -- instead of a form with
+   a list in it. */
+.lobby-head { display: flex; align-items: center; gap: 12px; padding: 4px 2px 0; }
+.lobby-head-icon { flex: 0 0 44px; width: 44px; height: 44px; }
+.lobby-head-text { flex: 1 1 auto; min-width: 0; }
+#screen-lobby .lobby-title {
+  margin: 0; font-size: 22px; font-weight: 700; line-height: 1.2; color: #fff; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#screen-lobby .lobby-sub {
+  margin: 2px 0 0; font-size: 12.5px; font-weight: 500; line-height: 1.35;
+  color: var(--home-line); text-align: left;
+}
+#screen-lobby .lobby-head .lobby-head-btn { flex: 0 0 auto; width: 44px; height: 44px; border-radius: 12px; }
+#screen-lobby .lobby-head .lobby-head-btn.hidden { display: none; }
+
+/* The ticket: label, then the code big and gold on the left, copy and share
+   on the right, the WhatsApp invite underneath. */
+#screen-lobby .lobby-ticket { padding: 14px; }
+#screen-lobby .lobby-ticket .room-code-label {
+  text-align: left; margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  color: var(--home-line);
+}
+#screen-lobby .lobby-ticket .room-code-row { align-items: center; margin: 2px 0 8px; }
+#screen-lobby .lobby-ticket .room-code-display {
+  text-align: left; font-size: 34px; font-weight: 700; letter-spacing: 6px; line-height: 1.15;
+  padding: 0; text-shadow: none;
+}
+#screen-lobby .lobby-ticket .room-code-row .icon-btn {
+  width: 44px; height: 44px; min-height: 44px; border-radius: 12px; background: var(--home-field);
+}
+#screen-lobby .lobby-ticket .roomcode-feedback { text-align: left; margin: -4px 0 4px; }
+#screen-lobby .lobby-ticket .roomcode-feedback:empty { display: none; }
+#screen-lobby .lobby-ticket .invite-btn { margin-top: 4px; }
+
+/* Players as seats, four to a row. */
+#screen-lobby .lobby-players-block { padding: 12px 10px 14px; }
+#screen-lobby .lobby-label {
+  margin: 0 4px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--home-line);
+}
+.lobby-seats {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 4px;
+}
+.lobby-seat {
+  position: relative; min-width: 0; padding: 2px 0;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  -webkit-tap-highlight-color: transparent;
+}
+.lobby-seat.tappable { cursor: pointer; }
+.ls-face {
+  position: relative; width: 48px; height: 48px; flex: 0 0 auto; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 19px; font-weight: 700; color: #0d1a16;
+}
+/* The robot is a picture, not a circle. */
+.lobby-seat.bot .ls-face { border-radius: 0; }
+/* The host: a gold ring, and the word under the name in gold. */
+.lobby-seat.host .ls-face { box-shadow: 0 0 0 3px var(--home-card), 0 0 0 5px var(--brand); }
+.lobby-seat.host .ls-sub { color: var(--gold-bright); font-weight: 700; }
+.lobby-seat.offline .ls-face, .lobby-seat.offline .ls-name { opacity: 0.45; }
+.ls-name {
+  max-width: 100%; font-size: 12px; font-weight: 700; color: #fff;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ls-sub { margin-top: -3px; font-size: 10.5px; font-weight: 500; color: var(--home-line); white-space: nowrap; }
+/* Your own seat: a small pencil -- tap to change how your name shows here. */
+.ls-edit {
+  position: absolute; right: -5px; bottom: -4px;
+  width: 20px; height: 20px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: #2d5145; color: #fff; box-shadow: 0 0 0 2px var(--home-card);
+}
+.ls-edit svg { width: 11px; height: 11px; }
+/* An empty seat invites. */
+.lobby-seat.empty .ls-face {
+  width: 44px; height: 44px; margin: 2px;
+  border: 2px dashed rgba(255,255,255,0.24); background: transparent;
+  color: var(--home-line); font-size: 22px; font-weight: 500;
+}
+.lobby-seat.empty:active .ls-face { border-color: var(--brand-line); color: var(--brand-line); }
+/* A bot's character line, on tap. */
+.ls-bubble {
+  position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%); z-index: 20;
+  width: max-content; max-width: 190px; padding: 8px 10px; border-radius: 10px;
+  background: #f4f6f5; color: #13231d;
+  font-size: 12px; font-weight: 500; line-height: 1.35; text-align: center;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+  animation: popoverFadeIn 0.12s ease-out both;
+}
+.ls-bubble.align-left { left: 0; transform: none; }
+.ls-bubble.align-right { left: auto; right: 0; transform: none; }
+/* The report / mute popover, anchored under a seat. */
+.lobby-seats li .player-action-popover { top: 100%; left: 50%; transform: translateX(-50%); margin-top: 4px; }
+.lobby-seats li .player-action-popover.align-left { left: 0; transform: none; }
+.lobby-seats li .player-action-popover.align-right { left: auto; right: 0; transform: none; }
+/* Bots row (host only): a quieter line under the seats. */
+#screen-lobby .lobby-bots-row { margin-top: 12px; padding: 10px 4px 0; border-top-color: rgba(255,255,255,0.08); }
+#screen-lobby .lobby-bots-label { color: var(--home-line); font-weight: 700; }
+/* Short phones: the seats tighten before anything else does. */
+#screen-lobby[data-fit~="snug"] .lobby-seats { row-gap: 8px; }
+#screen-lobby[data-fit~="compact"] .ls-face { width: 40px; height: 40px; font-size: 16px; }
+#screen-lobby[data-fit~="compact"] .lobby-seat.empty .ls-face { width: 36px; height: 36px; }
+#screen-lobby[data-fit~="compact"] .lobby-head-icon { flex-basis: 36px; width: 36px; height: 36px; }
+#screen-lobby[data-fit~="compact"] .lobby-title { font-size: 19px; }
+
+/* ==========================================================================
+   WAITING SCREENS v2 (Oct 2026) -- Finding players, Waiting for host
+   ==========================================================================
+   The plain spinner becomes a 3D picture with a soft pulse around it: the
+   globe while we look for players, the hourglass while the host decides. */
+.waiting-host-spinner { display: none; }
+.waiting-host-panel { padding-top: 40px; }
+.wait-art { position: relative; width: 150px; height: 150px; margin: 10px auto 14px; }
+.wait-pic {
+  position: absolute; left: 50%; top: 50%;
+  width: 84px; height: 84px; margin: -42px 0 0 -42px;
+  animation: waitBob 2.4s ease-in-out infinite;
+}
+.wait-ring {
+  position: absolute; inset: 15px; border-radius: 50%;
+  border: 2px solid rgba(242,193,78,0.35);
+  animation: waitPulse 2.4s ease-out infinite;
+}
+.wait-ring.two { animation-delay: 1.2s; }
+@keyframes waitPulse { 0% { transform: scale(0.65); opacity: 1; } 100% { transform: scale(1.25); opacity: 0; } }
+@keyframes waitBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+.waiting-host-panel h2 { font-size: 22px; margin: 0 0 4px; }
+/* Your seat and the ones still to fill. */
+.wait-seats { display: flex; justify-content: center; gap: 10px; margin: 18px 0 6px; }
+.wait-seats:empty { display: none; }
+.ws-seat {
+  width: 40px; height: 40px; border-radius: 50%; box-sizing: border-box;
+  border: 2px dashed rgba(255,255,255,0.24);
+  animation: wsBreath 1.8s ease-in-out infinite;
+}
+.ws-seat.me {
+  border: 0; background: var(--brand); color: #261a03;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 700; animation: none;
+}
+@keyframes wsBreath { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .wait-pic, .ws-seat { animation: none; }
+  .wait-ring { display: none; }
+}
+#screen-lobby .screen-actions .lobby-maxscore-row label { color: var(--home-line); font-weight: 700; }
+/* Short phones: five seats to a row, so a table of four plus its Invite seat
+   is one row instead of a row and a half that has to scroll. */
+#screen-lobby[data-fit~="compact"] .lobby-seats { grid-template-columns: repeat(5, minmax(0, 1fr)); row-gap: 6px; }
+#screen-lobby[data-fit~="compact"] .ls-name { font-size: 11px; }
