@@ -5286,3 +5286,272 @@ button.secondary:disabled, button.action:disabled { box-shadow: none; filter: sa
    is one row instead of a row and a half that has to scroll. */
 #screen-lobby[data-fit~="compact"] .lobby-seats { grid-template-columns: repeat(5, minmax(0, 1fr)); row-gap: 6px; }
 #screen-lobby[data-fit~="compact"] .ls-name { font-size: 11px; }
+
+/* ==========================================================================
+   GROUP SCREEN v2 (Oct 2026) -- faces, the bell, medals
+   ==========================================================================
+   The lobby's colour circles, carried over: the people at the table at the
+   top, every member in the list, every sender in the chat. The 3D bell on
+   "I want to play", the trophy on the marathon, medals for its top three. */
+
+/* ---- Live strip: faces and two lines, then the button(s) underneath ---- */
+#screen-group .group-live {
+  display: flex; flex-wrap: wrap; align-items: stretch;
+  gap: 12px 10px; padding: 14px; text-align: left;
+}
+#screen-group .group-live-head { order: 0; flex: 1 1 100%; display: flex; align-items: center; gap: 12px; min-width: 0; }
+.group-live-faces { display: flex; flex: 0 0 auto; }
+.glf-face {
+  width: 38px; height: 38px; flex: 0 0 auto; border-radius: 50%; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 700; color: #0d1a16;
+  box-shadow: 0 0 0 3px var(--home-card);
+}
+.glf-face + .glf-face { margin-left: -10px; }
+.glf-face.more { background: var(--home-field-on); color: #fff; font-size: 13px; }
+.glf-face.empty { background: transparent; border: 2px dashed rgba(255,255,255,0.24); box-shadow: none; }
+.group-live-words { flex: 1 1 auto; min-width: 0; }
+#screen-group .group-live-text { font-size: 16px; font-weight: 700; line-height: 1.25; color: #fff; text-align: left; }
+#screen-group .group-live-names {
+  margin: 1px 0 0; min-height: 0;
+  font-size: 12px; font-weight: 500; line-height: 1.35; color: var(--home-line); text-align: left;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+#screen-group .group-live-names:empty { display: none; }
+/* Full width; two of them (Leave the table + Start Game) share the row. */
+#screen-group .group-live > button {
+  order: 1; flex: 1 1 0; min-width: 0; width: auto; margin: 0;
+  min-height: 46px; padding: 0 12px; gap: 8px;
+}
+#screen-group .group-live > #btn-group-play { order: 2; }
+#screen-group .group-live > #group-bell-hint { order: 3; flex: 1 1 100%; margin: -4px 0 0; font-size: 12px; text-align: center; }
+#screen-group .group-live > #group-error { order: 4; flex: 1 1 100%; margin: -4px 0 0; }
+#screen-group .group-live > #group-bell-hint:empty,
+#screen-group .group-live > #group-error:empty { display: none; }
+.group-bell-art { width: 24px; height: 24px; flex: 0 0 24px; }
+
+/* ---- Members: a colour circle each, the status dot on its corner ---- */
+#screen-group .group-member {
+  grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px;
+  padding: 6px 2px; font-size: 14px;
+}
+.gm-face {
+  position: relative; width: 32px; height: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 700; color: #0d1a16;
+}
+/* The host: the lobby's gold ring. */
+.group-member.host .gm-face { box-shadow: 0 0 0 2px var(--home-card), 0 0 0 4px var(--brand); }
+#screen-group .gm-face .gm-dot {
+  position: absolute; right: -2px; bottom: -2px;
+  width: 11px; height: 11px; box-sizing: border-box;
+  box-shadow: 0 0 0 2px var(--home-card);
+}
+#screen-group .gm-face .gm-dot.away { display: none; }
+#screen-group .gm-name { font-weight: 700; color: #fff; }
+.gm-you { font-size: 12px; font-weight: 500; color: var(--home-line); }
+#screen-group .gm-host {
+  border: 0; padding: 0; margin-left: 4px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0; color: var(--gold-bright);
+}
+#screen-group .gm-meta { font-size: 12px; font-weight: 500; color: var(--home-line); }
+#screen-group .gm-meta.table { color: var(--gold-bright); }
+#screen-group .gm-meta.online,
+#screen-group .gm-meta.playing { color: var(--good); }
+#screen-group .group-member.away { opacity: 0.55; }
+/* The code chip, in the field colour. */
+#screen-group .group-code-label { color: var(--home-line); font-weight: 500; }
+#screen-group .group-code-value { background: var(--home-field); border: 0; border-radius: 8px; color: #fff; }
+
+/* ---- Marathon: the trophy beside its state; medals for the top three ---- */
+#screen-group .group-marathon-strip {
+  display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 0;
+  padding: 10px 12px; background: var(--home-field); border: 0; border-radius: 12px;
+}
+.group-marathon-art { width: 40px; height: 40px; }
+.group-marathon-words { min-width: 0; }
+#screen-group .group-marathon-state { font-size: 15px; font-weight: 700; color: #fff; }
+#screen-group .group-marathon-sub { margin-top: 1px; font-size: 12px; font-weight: 500; color: var(--home-line); }
+#screen-group .group-marathon-strip button { grid-column: 1 / -1; margin-top: 10px; }
+.standings-row {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  background: var(--home-field); border: 0; border-radius: 12px;
+}
+.standings-row:first-child { border: 0; box-shadow: inset 0 0 0 1.5px rgba(242,193,78,0.45); }
+.standings-row.is-me .st-name { color: var(--gold-bright); }
+.st-rank { text-align: center; color: var(--home-line); }
+.st-medal { width: 28px; height: 28px; }
+.st-name { color: #fff; }
+.st-wins { font-size: 15px; }
+.st-wins small { font-size: 11px; font-weight: 500; color: var(--home-line); }
+
+/* ---- Chat: the sender's circle beside their first line ---- */
+.group-chat-msg { position: relative; padding-left: 32px; min-height: 24px; }
+.group-chat-msg.grouped { min-height: 0; }
+.gc-face {
+  position: absolute; left: 0; top: -1px;
+  width: 24px; height: 24px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: #0d1a16;
+}
+/* Your own lines and mentions of you keep their tint; the circle stays in
+   the same column as everyone else's. */
+.group-chat-msg.mine { padding-left: 40px; }
+.group-chat-msg.mine .gc-face { left: 8px; }
+.group-chat-msg.mentions-me { padding-left: 37px; }
+.group-chat-msg.mentions-me .gc-face { left: 5px; }
+/* In the chat sheet the lines had no side margin at all -- the circles sat
+   on the sheet's edge and the time on a long name was clipped. */
+#group-chat-panel .group-chat-list { padding-left: 14px; padding-right: 14px; }
+
+/* ---- A 3D picture at the top of a popup ---- */
+.popup-art { display: block; width: 56px; height: 56px; margin: 0 auto 6px; }
+
+/* ---- Short phones ---- */
+#screen-group[data-fit~="snug"] .group-live { padding: 12px; gap: 10px; }
+#screen-group[data-fit~="compact"] .glf-face { width: 34px; height: 34px; font-size: 14px; }
+#screen-group[data-fit~="compact"] .group-live > button { min-height: 44px; }
+#screen-group[data-fit~="compact"] .group-marathon-art { width: 32px; height: 32px; }
+#screen-group[data-fit~="compact"] .group-marathon-strip { grid-template-columns: 32px minmax(0, 1fr); }
+#screen-group[data-fit~="tight"] .group-live { padding: 10px 12px; gap: 8px; }
+#screen-group[data-fit~="tight"] .gm-face { width: 28px; height: 28px; font-size: 12px; }
+#screen-group[data-fit~="tight"] .group-member { grid-template-columns: 28px minmax(0, 1fr) auto; }
+
+/* ==========================================================================
+   RESULTS AND POPUPS v2 (Oct 2026) -- medals, number tiles, 3D pictures
+   ========================================================================== */
+
+/* ---- Round result ---------------------------------------------------------- */
+/* "Round 3 · Playing to 200 pts", one quiet line over a short title. */
+.rr-kicker {
+  display: flex; flex-wrap: wrap; justify-content: flex-start;
+  margin: 0 0 2px; font-size: 11.5px; font-weight: 500; color: var(--home-line);
+}
+#overlay-round-result > .podium-panel .rr-kicker .round-result-round,
+#overlay-round-result > .podium-panel .rr-kicker .round-result-maxscore {
+  margin: 0; font-size: inherit; font-weight: inherit; color: inherit;
+  text-transform: none; letter-spacing: 0;
+}
+.rr-kicker .round-result-round:not(:empty) + .round-result-maxscore:not(:empty)::before { content: '\00b7'; margin: 0 6px; }
+#overlay-round-result #round-result-title { margin: 0 0 12px; font-size: 18px; text-align: left; }
+.rr-penalty { color: var(--red-text); white-space: nowrap; }
+#overlay-round-result .round-result-note { text-align: left; }
+/* One line per player: medal or place | name | sum. */
+#overlay-round-result .reveal-rows { border-top: 0; padding-top: 0; gap: 6px; }
+#round-result-hands .reveal-row {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; column-gap: 10px;
+  margin: 0; padding: 7px 10px; border: 0; border-radius: 12px; background: var(--home-field);
+}
+/* The caller: outlined in gold. */
+#round-result-hands .reveal-row.declared { background: var(--home-field); border: 0; box-shadow: inset 0 0 0 1.5px rgba(242,193,78,0.65); }
+.reveal-rank {
+  width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; color: var(--home-line);
+}
+.reveal-rank.art { display: block; }
+#round-result-hands .reveal-name {
+  display: flex; align-items: baseline; gap: 6px; min-width: 0; margin: 0;
+  font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden;
+}
+.reveal-name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.reveal-you { flex: 0 0 auto; font-size: 12px; font-weight: 500; color: var(--home-line); }
+.reveal-tag { flex: 0 0 auto; font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em; }
+.reveal-tag.called { color: var(--gold-bright); }
+.reveal-tag.out { color: var(--red-text); }
+#round-result-hands .reveal-math { font-size: 12.5px; font-weight: 500; color: var(--home-line); }
+#round-result-hands .reveal-math b { font-size: 15px; font-weight: 700; color: var(--gold-bright); }
+/* Short phones: the rows tighten, the medals stay. */
+#overlay-round-result > .podium-panel[data-fit~="compact"] #round-result-title { margin-bottom: 8px; font-size: 16px; }
+#overlay-round-result > .podium-panel[data-fit~="compact"] #round-result-hands .reveal-row { padding: 5px 10px; }
+#overlay-round-result > .podium-panel[data-fit~="tight"] .reveal-rank { width: 26px; height: 26px; }
+#overlay-round-result > .podium-panel[data-fit~="tight"] #round-result-hands .reveal-row { grid-template-columns: 26px minmax(0, 1fr) auto; padding: 4px 10px; }
+
+/* ---- Popups with a 3D picture on top -------------------------------------- */
+.popup-art { flex: 0 0 auto; }
+.card-panel.with-art { text-align: center; }
+.card-panel.with-art > h2 { text-align: center; }
+/* Short phones: the picture shrinks before anything else does. */
+.overlay > .card-panel[data-fit~="compact"] .popup-art { width: 44px; height: 44px; margin-bottom: 4px; }
+.overlay > .card-panel[data-fit~="tight"] .popup-art { width: 36px; height: 36px; }
+
+/* ---- My stats: three number tiles ------------------------------------------ */
+.stat-tiles { display: flex; gap: 8px; margin: 6px 0 16px; }
+.stat-tile { flex: 1 1 0; min-width: 0; padding: 12px 4px 10px; border-radius: 12px; background: var(--home-field); text-align: center; }
+.stat-tile b { display: block; font-size: 24px; line-height: 1.1; font-weight: 700; color: #fff; }
+.stat-tile.wins b { color: var(--gold-bright); }
+.stat-tile span { display: block; margin-top: 3px; font-size: 11px; font-weight: 500; color: var(--home-line); }
+#my-stats-body .hint { margin: -6px 0 14px; }
+
+/* ---- Game over: a trophy between two party poppers ------------------------- */
+.gameover-art { display: flex; align-items: flex-end; justify-content: center; gap: 2px; margin: 0 auto 4px; }
+.go-trophy { width: 76px; height: 76px; animation: goPop 0.5s cubic-bezier(.2, 1.5, .4, 1) both; }
+.go-popper { width: 44px; height: 44px; margin-bottom: 6px; animation: goPop 0.5s 0.15s cubic-bezier(.2, 1.5, .4, 1) both; }
+.go-popper.left { animation-name: goPopFlip; }
+@keyframes goPop { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
+/* The left popper is the right one turned round, so it points in. */
+@keyframes goPopFlip { from { opacity: 0; transform: scaleX(-1) scale(0.4); } to { opacity: 1; transform: scaleX(-1) scale(1); } }
+.go-popper.left { transform: scaleX(-1); }
+#gameover-title { margin: 0 0 12px; font-size: 26px; font-weight: 700; color: #fff; }
+/* Final standings: medal or place | name | score. */
+#gameover-body .gameover-row {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; column-gap: 10px;
+  padding: 7px 2px; border-bottom-color: rgba(255,255,255,0.08); font-size: 14px; color: #fff;
+}
+.go-rank { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: var(--home-line); }
+.go-rank.art { display: block; }
+.go-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-weight: 700; }
+.go-score { font-size: 12.5px; font-weight: 500; color: var(--home-line); white-space: nowrap; }
+.gameover-row.winner-row .go-name,
+.gameover-row.winner-row .go-score { color: var(--gold-bright); }
+#overlay-gameover > .card-panel[data-fit~="compact"] .go-trophy { width: 56px; height: 56px; }
+#overlay-gameover > .card-panel[data-fit~="compact"] .go-popper { width: 34px; height: 34px; }
+@media (prefers-reduced-motion: reduce) {
+  .go-trophy, .go-popper { animation: none; }
+}
+
+/* ==========================================================================
+   GAME TABLE v2 (Oct 2026) -- our own card back, a glow on the call
+   ========================================================================== */
+
+/* (A thin gold rim around the felt was tried here and taken out on
+   request: the table keeps its original dark edge.) */
+
+/* Our card back: deep green with a fine gold lattice, a gold edge and a gold
+   line inside it, and a soft gold glow in the middle -- on the decks, the
+   shuffle and the card that flies to each chair as it deals. (Was a navy
+   stripe nobody had chosen.) */
+:root {
+  --lc-back-bg:
+    radial-gradient(circle at 50% 50%, rgba(242,193,78,0.20) 0 16%, transparent 17%),
+    repeating-linear-gradient(45deg, rgba(242,193,78,0.14) 0 1px, transparent 1px 5px),
+    repeating-linear-gradient(-45deg, rgba(242,193,78,0.14) 0 1px, transparent 1px 5px),
+    linear-gradient(160deg, #17563f 0%, #0c3526 100%);
+  --lc-back-shadow: inset 0 0 0 2px #0d3a2a, inset 0 0 0 3px rgba(242,193,78,0.65);
+}
+.deal-flyer, .deck-stack, .shuffle-card, .card.back, .mini-card-back {
+  background: var(--lc-back-bg);
+  border: 1px solid #c99a2e;
+  box-shadow: var(--lc-back-shadow), 0 3px 8px rgba(0,0,0,0.45);
+}
+.mini-card-back { box-shadow: var(--lc-back-shadow); }
+/* The deck itself carries the mark: LC in the wordmark's Cinzel. */
+.deck-stack {
+  font-family: 'Cinzel', Georgia, 'Times New Roman', serif; font-weight: 800;
+  font-size: 12px; letter-spacing: 1px; color: var(--gold-bright);
+  text-shadow: 0 1px 1px rgba(0,0,0,0.55);
+}
+
+/* Least Count!: a soft gold glow that breathes while you are allowed to
+   call (your turn, 5 or less), and nothing at all when you are not. On a
+   layer of its own, so pressing the button still sinks it as before. */
+#btn-declare { position: relative; }
+#btn-declare::after {
+  content: ''; position: absolute; inset: -4px; border-radius: 18px;
+  box-shadow: 0 0 16px 3px rgba(242,193,78,0.6);
+  opacity: 0; pointer-events: none;
+}
+#btn-declare:not(:disabled)::after { animation: lcCallGlow 2.4s ease-in-out infinite; }
+@keyframes lcCallGlow { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  #btn-declare:not(:disabled)::after { animation: none; opacity: 0.7; }
+}
