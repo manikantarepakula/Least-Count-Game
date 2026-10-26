@@ -5460,12 +5460,32 @@
       if (!res.ok) return setLandingError(res.error);
       queuedPlayerCount = playerCount;
       document.getElementById('queue-waiting-count').textContent = String(playerCount);
+      renderQueueSeats(playerCount);
       document.getElementById('queue-waiting-choice').classList.add('hidden');
       document.getElementById('queue-waiting-hint').classList.remove('hidden');
       showScreen('screen-queue-waiting');
       armQueuePrompt();
     });
   };
+
+  // Finding players (Oct 2026): your seat, in gold with your first letter,
+  // then an empty one for each player still to come. The server doesn't say
+  // how many it has found so far, so the empty seats simply breathe.
+  function renderQueueSeats(count) {
+    const box = document.getElementById('queue-seats');
+    if (!box) return;
+    box.innerHTML = '';
+    const me = document.createElement('span');
+    me.className = 'ws-seat me';
+    me.textContent = seatInitial(getPlayerName() || 'You');
+    box.appendChild(me);
+    for (let i = 1; i < count; i++) {
+      const seat = document.createElement('span');
+      seat.className = 'ws-seat';
+      seat.style.animationDelay = (i * 0.3) + 's';
+      box.appendChild(seat);
+    }
+  }
 
   document.getElementById('btn-queue-keep-waiting').onclick = () => {
     // Just re-hides the choice and gives it another full waiting window --
@@ -5636,46 +5656,92 @@
     });
   };
 
+  // Lobby v2 (Oct 2026): four seats to a row; a room holds ten (the server's
+  // limit -- see join_room in server.js).
+  var LOBBY_SEAT_COLS = 4;
+  var LOBBY_MAX_SEATS = 10;
+  const LOBBY_PENCIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/></svg>';
+
+  // A bot's one-line character ("Saving a 2 for you. Usually too long."),
+  // shown when its seat is tapped -- a seat has no room for a sentence, and
+  // the line is what makes the bots learnable. One at a time; a second tap,
+  // or the next room update, puts it away.
+  function toggleLobbyTrait(li, text, align) {
+    const open = li.querySelector('.ls-bubble');
+    document.querySelectorAll('#lobby-players .ls-bubble').forEach((x) => x.remove());
+    if (open) return;
+    const bubble = document.createElement('span');
+    bubble.className = 'ls-bubble' + (align ? ' ' + align : '');
+    bubble.textContent = text;
+    li.appendChild(bubble);
+    setTimeout(() => { if (bubble.parentNode) bubble.remove(); }, 4000);
+  }
+
   function renderLobby(room) {
     document.getElementById('lobby-roomcode').textContent = room.roomCode;
     renderLobbyBots(room);
     const list = document.getElementById('lobby-players');
     list.innerHTML = '';
-    room.players.forEach((p) => {
+    // Players as seats: a circle in the player's own table colour with their
+    // first letter, the name under it, one word under that. The host's circle
+    // wears a gold ring and the word "Host" (a crown was tried and turned
+    // down). Bots are the 3D robot. Your own seat carries a pencil: tapping it
+    // changes how your name shows here. Anyone else's opens the same
+    // report/mute popover their chair has at the table.
+    room.players.forEach((p, i) => {
       const li = document.createElement('li');
+      const isMe = p.playerId === myPlayerId;
+      const isHost = p.playerId === room.hostPlayerId;
+      li.className = 'lobby-seat' + (p.isBot ? ' bot' : '') + (isHost ? ' host' : '')
+        + (isMe ? ' me' : '') + (p.connected || p.isBot ? '' : ' offline');
       li.dataset.playerId = p.playerId;
-      const hostTag = p.playerId === room.hostPlayerId ? '<span class="host-tag">HOST</span>' : '';
-      // Bots carry a one-line trait instead of a name, since the name is
-      // generic. That line is what makes the characters learnable -- a
-      // difference a player can name is worth far more than one they only
-      // sense. Humans have no trait, so this collapses to the old markup.
-      const traitHtml = p.trait
-        ? `<span class="player-trait">${escapeHtml(p.trait)}</span>`
-        : '';
-      li.innerHTML = `<span>${escapeHtml(displayName(p.name))} ${hostTag}${traitHtml}</span><span class="status">${p.connected ? 'online' : 'offline'}</span>`;
-      // Tap a player's row to report/mute them before the game even starts --
-      // same popover the seats use once play begins. Not wired for yourself
-      // or for bots (lobby rows are only ever real players anyway, but the
-      // guard is harmless).
-      if (p.playerId !== myPlayerId && !p.isBot) {
+      const name = displayName(p.name);
+      const col = i % LOBBY_SEAT_COLS;
+      const align = col === 0 ? 'align-left' : (col === LOBBY_SEAT_COLS - 1 ? 'align-right' : '');
+      const face = p.isBot
+        ? '<span class="ls-face art art-bots" aria-hidden="true"></span>'
+        : `<span class="ls-face" style="background:${seatColour(p.playerId)}" aria-hidden="true">${escapeHtml(seatInitial(name))}${isMe ? '<span class="ls-edit">' + LOBBY_PENCIL + '</span>' : ''}</span>`;
+      const sub = isHost ? (isMe ? 'Host · You' : 'Host')
+        : (p.isBot ? 'Bot' : (isMe ? 'You' : (p.connected ? 'online' : 'offline')));
+      li.innerHTML = face
+        + `<span class="ls-name">${escapeHtml(name)}</span>`
+        + `<span class="ls-sub">${escapeHtml(sub)}</span>`;
+      if (p.isBot) {
+        if (p.trait) {
+          li.classList.add('tappable');
+          li.onclick = (e) => { e.stopPropagation(); toggleLobbyTrait(li, p.trait, align); };
+        }
+      } else if (!isMe) {
         li.classList.add('tappable');
-        li.dataset.popoverAlign = 'align-right';
+        li.dataset.popoverAlign = align;
         li.onclick = (e) => {
           e.stopPropagation();
-          togglePlayerActionPopover(li, p.playerId, p.name, 'align-right');
+          togglePlayerActionPopover(li, p.playerId, p.name, align);
         };
-      } else if (p.playerId === myPlayerId) {
-        // Your own row opens the rename box instead of the report popover --
-        // there is nothing to report yourself for.
+      } else {
         li.classList.add('tappable', 'own-row');
-        const pencil = document.createElement('span');
-        pencil.className = 'row-edit';
-        pencil.textContent = 'Edit';
-        li.appendChild(pencil);
+        li.setAttribute('aria-label', 'Change how your name shows at this table');
         li.onclick = (e) => { e.stopPropagation(); openNameDialog(); };
       }
       list.appendChild(li);
     });
+    // Empty seats invite: enough to finish the first row, then one more while
+    // the room has space. Tapping one is the WhatsApp invite.
+    const free = Math.max(0, LOBBY_MAX_SEATS - room.players.length);
+    const invites = Math.min(free, room.players.length < LOBBY_SEAT_COLS ? LOBBY_SEAT_COLS - room.players.length : 1);
+    for (let k = 0; k < invites; k++) {
+      const li = document.createElement('li');
+      li.className = 'lobby-seat empty tappable';
+      li.setAttribute('role', 'button');
+      li.setAttribute('aria-label', 'Invite someone');
+      li.innerHTML = '<span class="ls-face" aria-hidden="true">+</span><span class="ls-sub">Invite</span>';
+      li.onclick = (e) => {
+        e.stopPropagation();
+        const wa = document.getElementById('btn-share-whatsapp');
+        if (wa) wa.click();
+      };
+      list.appendChild(li);
+    }
     reopenPlayerActionPopoverIfNeeded(list);
     // Start Game is available to EVERYONE at the table (Sept 2026), not just
     // the host: six people in a group, four free tonight, and those four
@@ -5693,20 +5759,20 @@
     btn.classList.toggle('primary', !alone);
     btn.classList.toggle('secondary', alone);
     document.getElementById('lobby-maxscore-row').classList.remove('hidden');
-    // Counted separately so the hint does not call a bot a player. With bots
-    // at the table "Ready with 3 players" would be true only in the sense that
-    // three seats are filled -- and the host, who just added them, is the one
-    // person guaranteed to notice the lie.
-    const botCount = room.players.filter((p) => p && p.isBot).length;
-    const humanCount = room.players.length - botCount;
+    // The line under the header. "At the table" counts every seat, bots
+    // included, so it never calls a bot a player.
     document.getElementById('lobby-hint').textContent = alone
-      ? 'Invite someone, or add bots to start now'
-      : botCount === 0
-        ? `Ready with ${humanCount} players — anyone can start`
-        : `Ready with ${humanCount} ${humanCount === 1 ? 'player' : 'players'} and ${botCount} ${botCount === 1 ? 'bot' : 'bots'} — anyone can start`;
+      ? 'Just you so far \u2014 invite someone or add bots'
+      : `${room.players.length} at the table \u00b7 anyone can start`;
 
     // ---- persistent group extras ----
     const isGroup = !!room.groupCode;
+    // The header names the table: the group's own name, or "Your table". The
+    // group's leaderboard trophy sits beside it.
+    const titleEl = document.getElementById('lobby-title');
+    if (titleEl) titleEl.textContent = (isGroup && room.groupName) ? room.groupName : 'Your table';
+    const boardBtn = document.getElementById('btn-group-leaderboard');
+    if (boardBtn) boardBtn.classList.toggle('hidden', !isGroup);
     const groupHeader = document.getElementById('lobby-group-header');
     const groupNameEl = document.getElementById('lobby-group-name');
     if (groupNameEl) groupNameEl.textContent = room.groupName || '';
