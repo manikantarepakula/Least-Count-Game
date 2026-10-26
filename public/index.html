@@ -83,11 +83,11 @@
      server.js) can never pair the new markup with the old styles or code.
      The same ?v= is on app.js at the bottom of this file. -->
 
-<link rel="stylesheet" href="style.css?v=app2-2026-10-25" />
+<link rel="stylesheet" href="style.css?v=lobby2-2026-10-26" />
 <!-- The Home screen's 3D icons, written into a stylesheet of their own
      (Microsoft's Fluent Emoji, MIT licence -- the notice is inside the file).
      They never change, hence the fixed ?v=. -->
-<link rel="stylesheet" href="home-art.css?v=1" />
+<link rel="stylesheet" href="home-art.css?v=2" />
 </head>
 <body>
 
@@ -487,9 +487,12 @@
      or after this prompt appears. -->
 <div id="screen-queue-waiting" class="screen">
   <div class="landing-form waiting-host-panel">
-    <div class="waiting-host-spinner" aria-hidden="true"></div>
+    <!-- The 3D globe with a soft pulse (Oct 2026), then your seat and the
+         empty ones still to fill (renderQueueSeats in app.js). -->
+    <div class="wait-art" aria-hidden="true"><span class="wait-ring"></span><span class="wait-ring two"></span><span class="wait-pic art art-online"></span></div>
     <h2>Finding players&hellip;</h2>
     <p class="hint" id="queue-waiting-hint">Looking for <span id="queue-waiting-count">3</span> players online.</p>
+    <div id="queue-seats" class="wait-seats" aria-hidden="true"></div>
     <!-- Always visible from the moment this screen appears -- no reason to
          make someone wait out the 40s prompt below just to back out. -->
     <button id="btn-queue-cancel" class="secondary leave-btn" type="button">Cancel</button>
@@ -651,19 +654,24 @@
     </div>
   </div>
   <div class="landing-body">
-    <div class="mode-block">
-      <!-- Only shown for a room opened from a permanent group -- for an
-           ordinary one-off room this stays hidden and the screen looks
-           exactly as it always did. The leaderboard is a top-right icon
-           opening an overlay, rather than a block in the page flow: as a
-           block it pushed Start Game and Leave below the fold on a phone,
-           which is what made the group lobby feel like it had no exit. -->
-      <div id="lobby-group-header" class="lobby-group-header hidden">
-        <div id="lobby-group-name" class="lobby-group-name"></div>
-        <button id="btn-group-leaderboard" class="icon-btn" type="button" aria-label="Leaderboard" title="Leaderboard">
-          <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 3h10v2h3a1 1 0 0 1 1 1c0 3-2 5-4.5 5.3A5.5 5.5 0 0 1 13 15.9V18h3v2H8v-2h3v-2.1A5.5 5.5 0 0 1 7.5 11.3C5 11 3 9 3 6a1 1 0 0 1 1-1h3V3Zm0 4H5c.2 1.5 1.2 2.6 2 3V7Zm10 0v3c.8-.4 1.8-1.5 2-3h-2Z"/></svg>
-        </button>
+    <!-- Lobby v2 (Oct 2026): a header like Home's -- the friends icon, the
+         table's name (a group's own name, or "Your table") and one line
+         saying who is here. #lobby-hint is that line; renderLobby() writes
+         it. The leaderboard trophy for a group's table sits on the right. -->
+    <div class="lobby-head">
+      <span class="lobby-head-icon art art-friends" aria-hidden="true"></span>
+      <div class="lobby-head-text">
+        <h2 id="lobby-title" class="lobby-title">Your table</h2>
+        <p id="lobby-hint" class="lobby-sub"></p>
       </div>
+      <button id="btn-group-leaderboard" class="icon-btn lobby-head-btn hidden" type="button" aria-label="Leaderboard" title="Leaderboard">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 3h10v2h3a1 1 0 0 1 1 1c0 3-2 5-4.5 5.3A5.5 5.5 0 0 1 13 15.9V18h3v2H8v-2h3v-2.1A5.5 5.5 0 0 1 7.5 11.3C5 11 3 9 3 6a1 1 0 0 1 1-1h3V3Zm0 4H5c.2 1.5 1.2 2.6 2 3V7Zm10 0v3c.8-.4 1.8-1.5 2-3h-2Z"/></svg>
+      </button>
+    </div>
+
+    <!-- The room code as a ticket: the code big and gold, copy and share
+         beside it, the WhatsApp invite under it. -->
+    <div class="mode-block lobby-ticket">
       <div class="room-code-label" id="lobby-roomcode-label">Room Code</div>
       <!-- Copy just the 4-letter code (for saying it out loud / typing it
            elsewhere) and Share the full join-link (for pasting straight into
@@ -683,6 +691,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg>
         </button>
       </div>
+
       <p id="roomcode-action-feedback" class="hint roomcode-feedback"></p>
       <!-- The single most important button in the app (Sept 2026). An empty
            lobby is useless, so inviting someone is the only action that
@@ -700,16 +709,15 @@
         <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2Zm0 18.15h-.01a8.2 8.2 0 0 1-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.2 8.2 0 0 1-1.26-4.38c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.83 2.42a8.19 8.19 0 0 1 2.41 5.83c0 4.54-3.7 8.23-8.24 8.23Zm4.52-6.17c-.25-.12-1.47-.72-1.69-.81-.23-.08-.39-.12-.56.13-.16.24-.64.8-.78.97-.15.16-.29.18-.53.06-.25-.13-1.05-.39-1.99-1.23-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.01-.38.11-.5.11-.11.25-.29.37-.44.13-.15.17-.25.25-.42.08-.16.04-.31-.02-.43-.06-.12-.56-1.34-.76-1.84-.2-.48-.4-.42-.56-.43h-.48c-.16 0-.43.06-.65.31-.22.25-.85.84-.85 2.03 0 1.2.87 2.35.99 2.51.12.16 1.71 2.62 4.15 3.67.58.25 1.03.4 1.39.51.58.19 1.11.16 1.53.1.47-.07 1.47-.6 1.67-1.18.21-.58.21-1.07.15-1.18-.06-.11-.22-.17-.47-.29Z"/></svg>
         Invite on WhatsApp
       </button>
-
-
     </div>
 
     <!-- data-fit-list: when a big table doesn't fit, layout.js lets THIS list
          scroll inside its own box (never below ~2 rows) so the invite above
          and Start Game below always stay on screen. -->
+    <!-- Players as seats (Oct 2026): see renderLobby() in app.js. -->
     <div class="mode-block lobby-players-block">
-      <h3>Players</h3>
-      <ul id="lobby-players" class="player-list" data-fit-list="84"></ul>
+      <h3 class="lobby-label">Players</h3>
+      <ul id="lobby-players" class="lobby-seats" data-fit-list="84"></ul>
       <!-- Host-only, lobby-only bot controls (Oct 2026). A two-player game is
            thin, so the host can pad the table out. Shown to the host alone --
            everyone else just sees the bots appear in the list above.
@@ -760,7 +768,6 @@
       <button id="btn-leave-lobby" class="secondary leave-btn">Leave Table</button>
       <button id="btn-start" class="primary" disabled>Start Game</button>
     </div>
-    <p id="lobby-hint" class="hint"></p>
     <p id="lobby-error" class="error"></p>
   </div>
 </div>
@@ -773,7 +780,7 @@
      (join_admitted / join_denied) -- no client-side timer to get out of sync. -->
 <div id="screen-waiting-host" class="screen">
   <div class="landing-form waiting-host-panel">
-    <div class="waiting-host-spinner" aria-hidden="true"></div>
+    <div class="wait-art" aria-hidden="true"><span class="wait-ring"></span><span class="wait-ring two"></span><span class="wait-pic art art-wait"></span></div>
     <h2>Waiting for host</h2>
     <p class="hint">The game's already in progress &mdash; <span id="waiting-host-name">the host</span> needs to let you in. You'll join from the next round.</p>
     <!-- Filled in by app.js from the server's `needsAd` on the pending ack, and
@@ -1411,7 +1418,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js?v=app2-2026-10-25" defer></script>
+<script src="app.js?v=lobby2-2026-10-26" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
