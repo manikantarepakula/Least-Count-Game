@@ -83,11 +83,11 @@
      server.js) can never pair the new markup with the old styles or code.
      The same ?v= is on app.js at the bottom of this file. -->
 
-<link rel="stylesheet" href="style.css?v=lobby2-2026-10-26" />
+<link rel="stylesheet" href="style.css?v=screens2-2026-10-26" />
 <!-- The Home screen's 3D icons, written into a stylesheet of their own
      (Microsoft's Fluent Emoji, MIT licence -- the notice is inside the file).
      They never change, hence the fixed ?v=. -->
-<link rel="stylesheet" href="home-art.css?v=2" />
+<link rel="stylesheet" href="home-art.css?v=3" />
 </head>
 <body>
 
@@ -534,10 +534,20 @@
          fixes "the group is dead when I open it" -- it always says
          something, even when nobody is around. -->
     <div class="mode-block group-live">
-      <div id="group-live-text" class="group-live-text">No one at the table</div>
-      <div id="group-live-names" class="group-live-names"></div>
+      <!-- Group screen v2 (Oct 2026): the people at the table as faces --
+           the same colour circles as the lobby's seats -- with the status
+           beside them ("2 at the table" / "Bhavana and Ravi · waiting for
+           you"). app.js fills #group-live-faces; with nobody there it shows
+           one empty dashed seat. -->
+      <div class="group-live-head">
+        <div id="group-live-faces" class="group-live-faces" aria-hidden="true"></div>
+        <div class="group-live-words">
+          <div id="group-live-text" class="group-live-text">No one at the table</div>
+          <div id="group-live-names" class="group-live-names"></div>
+        </div>
+      </div>
       <button id="btn-group-bell" class="primary invite-btn" type="button">
-        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22a2.5 2.5 0 0 0 2.5-2.5h-5A2.5 2.5 0 0 0 12 22Zm7-5v-5a7 7 0 0 0-5.5-6.8V4a1.5 1.5 0 1 0-3 0v1.2A7 7 0 0 0 5 12v5l-1.6 1.6a.8.8 0 0 0 .6 1.4h16a.8.8 0 0 0 .6-1.4L19 17Z"/></svg>
+        <span class="art art-bell group-bell-art" aria-hidden="true"></span>
         <span id="btn-group-bell-label">I want to play</span>
       </button>
       <button id="btn-group-play" class="primary hidden" type="button">Start Game</button>
@@ -583,8 +593,11 @@
            starts one and picks how long it lasts. "Ends in 6 days" is a fact
            you can read; "resets on the 1st" was a rule you had to be told. -->
       <div class="group-marathon-strip">
-        <div id="group-marathon-state" class="group-marathon-state">No marathon running</div>
-        <div id="group-marathon-sub" class="group-marathon-sub"></div>
+        <span class="art art-trophy group-marathon-art" aria-hidden="true"></span>
+        <div class="group-marathon-words">
+          <div id="group-marathon-state" class="group-marathon-state">No marathon running</div>
+          <div id="group-marathon-sub" class="group-marathon-sub"></div>
+        </div>
         <button id="btn-start-marathon" class="secondary hidden" type="button">Start a marathon</button>
       </div>
       <!-- The four-tab board (Marathon / Today / Recent / Champs) was removed
@@ -1052,9 +1065,10 @@
 <div id="overlay-round-result" class="overlay hidden">
   <div class="card-panel podium-panel">
     <div id="round-result-emoji" class="round-result-emoji"></div>
-    <div id="round-result-round" class="round-result-round"></div>
+    <!-- v2 (Oct 2026): "Round 3 · Playing to 200 pts" as one small line over
+         the title, which is now short: "Mani called too early +75". -->
+    <div class="rr-kicker"><span id="round-result-round" class="round-result-round"></span><span id="round-result-maxscore" class="round-result-maxscore"></span></div>
     <h2 id="round-result-title">Round Result</h2>
-    <div id="round-result-maxscore" class="round-result-maxscore"></div>
 
     <div id="podium" class="podium"></div>
     <div id="round-result-note" class="round-result-note"></div>
@@ -1115,7 +1129,8 @@
 
 <div id="overlay-rules" class="overlay hidden">
   <div class="card-panel rules-panel">
-    <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6c-1.8-1.3-4.2-1.8-7-1.5v13c2.8-.3 5.2.2 7 1.5"/><path d="M12 6c1.8-1.3 4.2-1.8 7-1.5v13c-2.8-.3-5.2.2-7 1.5"/><path d="m6.5 9.5 1.2 1.2L10 8.5"/><path d="M14 9.5h4M14 12.5h4"/></svg> Game Rules</h2>
+    <span class="art art-book popup-art" aria-hidden="true"></span>
+    <h2>Game Rules</h2>
     <div class="rules-body">
       <div class="rules-item">
         <div class="rules-heading">🎯 Goal</div>
@@ -1195,16 +1210,20 @@
 </div>
 
 <div id="overlay-my-stats" class="overlay hidden">
-  <div class="card-panel">
-    <h2><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="3" y="12" width="5" height="9" rx="1"/><rect x="9.5" y="7" width="5" height="14" rx="1"/><rect x="16" y="3" width="5" height="18" rx="1"/></svg> My Stats</h2>
+  <div class="card-panel with-art">
+    <span class="art art-chart popup-art" aria-hidden="true"></span>
+    <h2>My stats</h2>
     <div id="my-stats-body"></div>
     <button id="btn-close-my-stats" class="secondary">Close</button>
   </div>
 </div>
 
 <div id="overlay-gameover" class="overlay hidden">
-  <div class="card-panel">
-    <h1 id="gameover-title">🏆</h1>
+  <div class="card-panel with-art">
+    <!-- v2 (Oct 2026): a 3D trophy between two party poppers, over the
+         confetti. The title is just the words ("Bhavana wins!"). -->
+    <div class="gameover-art" aria-hidden="true"><span class="art art-popper go-popper left"></span><span class="art art-trophy go-trophy"></span><span class="art art-popper go-popper right"></span></div>
+    <h1 id="gameover-title">Game over</h1>
     <div id="gameover-body" data-fit-list="110"></div>
     <button id="btn-new-game" class="primary hidden">Play Again (same room)</button>
     <button id="btn-leave-gameover" class="secondary leave-btn">Leave Room</button>
@@ -1290,7 +1309,8 @@
      Wins first, then better (lower) average score -- see standingsToList in
      server.js for the exact ordering. -->
 <div id="overlay-standings" class="overlay hidden">
-  <div class="card-panel">
+  <div class="card-panel with-art">
+    <span class="art art-trophy popup-art" aria-hidden="true"></span>
     <h2>Leaderboard</h2>
     <ul id="lobby-standings" class="standings-list" data-fit-list="120"></ul>
     <p id="lobby-standings-empty" class="hint hidden">No games yet — the first result lands here.</p>
@@ -1357,7 +1377,8 @@
      Second state below is shown once a leave is already queued; app.js
      swaps the text and the button labels. -->
 <div id="leave-game-dialog" class="overlay hidden">
-  <div class="card-panel dialog-panel">
+  <div class="card-panel dialog-panel with-art">
+    <span class="art art-door popup-art" aria-hidden="true"></span>
     <h2 id="leave-game-title">Leave this game?</h2>
     <p class="hint" id="leave-game-text">You'll forfeit the game and go back to the menu. The others carry on without you.</p>
     <div class="dialog-actions">
@@ -1384,7 +1405,8 @@
 </div>
 
 <div id="marathon-start-dialog" class="overlay hidden">
-  <div class="card-panel dialog-panel">
+  <div class="card-panel dialog-panel with-art">
+    <span class="art art-trophy popup-art" aria-hidden="true"></span>
     <h2>Start a marathon</h2>
     <!-- No longer promises "a permanent line on the champions list": the
          champions view was removed from the group screen, and copy shouldn't
@@ -1404,7 +1426,8 @@
 </div>
 
 <div id="group-delete-dialog" class="overlay hidden">
-  <div class="card-panel dialog-panel">
+  <div class="card-panel dialog-panel with-art">
+    <span class="art art-bin popup-art" aria-hidden="true"></span>
     <h2>Delete group?</h2>
     <p class="hint" id="group-delete-text">This removes the group and its marathon for everyone. It can't be undone.</p>
     <div class="dialog-actions">
@@ -1418,7 +1441,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js?v=lobby2-2026-10-26" defer></script>
+<script src="app.js?v=screens2-2026-10-26" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
