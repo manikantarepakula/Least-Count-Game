@@ -311,12 +311,16 @@
           body.innerHTML = `<p class="error">${escapeHtml((res && res.error) || 'Could not load stats.')}</p>`;
           return;
         }
-        const { gamesPlayed, wins } = res.stats;
+        const gamesPlayed = Number(res.stats.gamesPlayed) || 0;
+        const wins = Number(res.stats.wins) || 0;
         const winRate = gamesPlayed > 0 ? Math.round((wins / gamesPlayed) * 100) : 0;
+        // v2: three number tiles side by side, wins in gold.
         body.innerHTML =
-          `<div class="result-row"><span>Games played</span><span>${gamesPlayed}</span></div>` +
-          `<div class="result-row"><span>Wins</span><span>${wins}</span></div>` +
-          `<div class="result-row"><span>Win rate</span><span>${winRate}%</span></div>` +
+          '<div class="stat-tiles">' +
+            `<div class="stat-tile"><b>${gamesPlayed}</b><span>Games</span></div>` +
+            `<div class="stat-tile wins"><b>${wins}</b><span>Wins</span></div>` +
+            `<div class="stat-tile"><b>${winRate}%</b><span>Win rate</span></div>` +
+          '</div>' +
           (gamesPlayed === 0 ? '<p class="hint">Play a game to start building your stats!</p>' : '');
       });
     };
@@ -3529,6 +3533,57 @@
     return Math.floor(days / 7) + 'w ago';
   }
 
+  // Group screen v2 (Oct 2026): the people at the table as overlapping colour
+  // circles -- the lobby's seat faces, smaller. Three circles at most: past
+  // three, two faces and a "+N". Nobody there is one empty dashed seat, so
+  // the strip still has a shape when it has no people.
+  const GROUP_FACES_MAX = 3;
+  // The 3D medals (home-art.css) for first, second and third: the group's
+  // marathon standings and each round's result.
+  const MEDAL_ART = ['art-gold', 'art-silver', 'art-bronze'];
+  // You first, then everyone else in the order they came -- the faces and
+  // the names line beside them read the same way round.
+  function groupMeFirst(people) {
+    const me = myFirebaseUid();
+    const isMe = (p) => !!me && p.uid === me;
+    return people.filter(isMe).concat(people.filter((p) => !isMe(p)));
+  }
+  function paintGroupFaces(el, people) {
+    if (!el) return;
+    el.innerHTML = '';
+    people = groupMeFirst(people);
+    if (!people.length) {
+      const seat = document.createElement('span');
+      seat.className = 'glf-face empty';
+      el.appendChild(seat);
+      return;
+    }
+    const shown = people.length > GROUP_FACES_MAX ? people.slice(0, GROUP_FACES_MAX - 1) : people;
+    shown.forEach((p) => {
+      const f = document.createElement('span');
+      f.className = 'glf-face';
+      f.style.background = seatColour(p.uid || p.name);
+      f.textContent = seatInitial(p.name);
+      el.appendChild(f);
+    });
+    if (shown.length < people.length) {
+      const more = document.createElement('span');
+      more.className = 'glf-face more';
+      more.textContent = '+' + (people.length - shown.length);
+      el.appendChild(more);
+    }
+  }
+
+  // "Bhavana and Ravi", "Bhavana, Ravi and Mani", "Bhavana, Ravi and 2 more".
+  // You are "You", and first.
+  function groupNamesLine(people) {
+    const me = myFirebaseUid();
+    const names = groupMeFirst(people).map((p) => (me && p.uid === me ? 'You' : p.name));
+    if (names.length <= 1) return names.join('');
+    if (names.length <= 3) return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+    return names.slice(0, 2).join(', ') + ' and ' + (names.length - 2) + ' more';
+  }
+
   function renderGroupScreen(group) {
     if (!group) return;
     groupScreenData = group;
@@ -3537,6 +3592,7 @@
     document.getElementById('group-code-text').textContent = group.code;
 
     // ---- live strip ----
+    const liveFaces = document.getElementById('group-live-faces');
     const liveText = document.getElementById('group-live-text');
     const liveNames = document.getElementById('group-live-names');
     const bellBtn = document.getElementById('btn-group-bell');
@@ -3551,8 +3607,10 @@
     // groupPlayMode decides what the one Play button does when tapped --
     // start the table, or walk into one that's already open.
     if (group.gameInProgress) {
+      const playing = group.members.filter((m) => m.status === 'playing');
+      paintGroupFaces(liveFaces, playing);
       liveText.textContent = 'A game is in progress';
-      liveNames.textContent = group.members.filter((m) => m.status === 'playing').map((m) => m.name).join(', ');
+      liveNames.textContent = groupNamesLine(playing);
       bellBtn.classList.add('hidden');
       standBtn.classList.add('hidden');
       playBtn.classList.remove('hidden');
@@ -3563,11 +3621,13 @@
       // The room is open but nothing is dealt yet -- somebody is sitting in
       // the lobby waiting. This branch didn't exist, which is exactly how the
       // host ended up alone with nobody able to reach them.
-      const names = (group.inRoom || []).map((p) => p.name);
-      liveText.textContent = names.length === 1
-        ? `${names[0]} is waiting to start`
+      const inRoom = group.inRoom || [];
+      paintGroupFaces(liveFaces, inRoom);
+      liveText.textContent = inRoom.length === 1
+        ? `${inRoom[0].name} is waiting to start`
         : 'Table is open';
-      liveNames.textContent = names.join(', ');
+      // One name is already in the title.
+      liveNames.textContent = inRoom.length === 1 ? '' : groupNamesLine(inRoom);
       bellBtn.classList.add('hidden');
       standBtn.classList.add('hidden');
       playBtn.classList.remove('hidden');
@@ -3575,10 +3635,14 @@
       groupPlayMode = 'join';
       hint.textContent = 'Join and the game starts once everyone’s in.';
     } else if (seated.length) {
-      liveText.textContent = seated.length === 1
-        ? `${seated[0].name} is at the table`
-        : `${seated.length} at the table`;
-      liveNames.textContent = seated.map((s) => s.name).join(', ');
+      paintGroupFaces(liveFaces, seated);
+      if (seated.length === 1) {
+        liveText.textContent = meAtTable ? 'You’re at the table' : `${seated[0].name} is at the table`;
+        liveNames.textContent = meAtTable ? '' : 'Waiting for you';
+      } else {
+        liveText.textContent = `${seated.length} at the table`;
+        liveNames.textContent = groupNamesLine(seated) + (meAtTable ? '' : ' · waiting for you');
+      }
       bellBtn.classList.toggle('hidden', meAtTable);
       standBtn.classList.toggle('hidden', !meAtTable);
       // Start Game belongs to whoever raised their hand first -- they called
@@ -3587,12 +3651,16 @@
       playBtn.classList.toggle('hidden', !(iAmHost && seated.length >= 2));
       playBtn.textContent = 'Start Game';
       groupPlayMode = 'start';
-      hint.textContent = seated.length >= 2
-        ? (iAmHost ? 'Everyone at the table comes with you.' : 'Waiting for the host to start.')
-        : 'Waiting for someone else to join.';
+      // Someone not at the table already has "waiting for you" and the
+      // button; the hints are for the people sitting there.
+      hint.textContent = !meAtTable ? ''
+        : seated.length >= 2
+          ? (iAmHost ? 'Everyone at the table comes with you.' : 'Waiting for the host to start.')
+          : 'Waiting for someone else to join.';
     } else {
+      paintGroupFaces(liveFaces, []);
       liveText.textContent = 'No one at the table';
-      liveNames.textContent = '';
+      liveNames.textContent = 'Be the first to sit down';
       bellBtn.classList.remove('hidden');
       standBtn.classList.add('hidden');
       playBtn.classList.add('hidden');
@@ -3617,17 +3685,20 @@
     document.getElementById('group-member-count').textContent = group.members.length
       ? '· ' + group.members.length : '';
     list.innerHTML = '';
+    const meUid = myFirebaseUid();
     group.members.forEach((m) => {
       const li = document.createElement('li');
-      li.className = 'group-member' + (m.status === 'away' ? ' away' : '');
+      // v2: each member's own colour circle (as in the lobby), with the
+      // status dot on its corner; the host gets the lobby's gold ring.
+      li.className = 'group-member' + (m.status === 'away' ? ' away' : '') + (m.isHost ? ' host' : '');
       const status = GROUP_STATUS_LABEL[m.status];
       // "Played yesterday" carries the list when nobody is around. A column
       // of grey offline dots would read as MORE dead, not less.
       const meta = status || relativeDay(m.lastPlayedAt) || 'not played yet';
       li.innerHTML =
-        `<span class="gm-dot ${m.status}"></span>` +
-        `<span class="gm-name">${escapeHtml(m.name)}${m.isHost ? ' <span class="gm-host">HOST</span>' : ''}</span>` +
-        `<span class="gm-meta">${escapeHtml(meta)}</span>`;
+        `<span class="gm-face" style="background:${seatColour(m.uid || m.name)}" aria-hidden="true">${escapeHtml(seatInitial(m.name))}<span class="gm-dot ${m.status}"></span></span>` +
+        `<span class="gm-name">${escapeHtml(m.name)}${meUid && m.uid === meUid ? ' <span class="gm-you">(you)</span>' : ''}${m.isHost ? ' <span class="gm-host">Host</span>' : ''}</span>` +
+        `<span class="gm-meta ${m.status}">${escapeHtml(meta)}</span>`;
       list.appendChild(li);
     });
 
@@ -3733,6 +3804,13 @@
         + (grouped ? ' grouped' : '')
         + (mentionsMe ? ' mentions-me' : '');
       if (!grouped) {
+        // v2: the sender's colour circle, the same one as in Members.
+        const face = document.createElement('span');
+        face.className = 'gc-face';
+        face.setAttribute('aria-hidden', 'true');
+        face.style.background = seatColour(m.uid || m.name);
+        face.textContent = seatInitial(m.name || 'Player');
+        li.appendChild(face);
         const t = document.createElement('span');
         t.className = 'gc-time';
         t.textContent = chatClock(m.at);
@@ -3804,6 +3882,19 @@
   // g.champions still arrive in the payload and are simply not rendered;
   // left alone deliberately, so bringing any of them back is a UI change
   // rather than a server one.
+  // One marathon row, on the group screen and in the lobby's leaderboard.
+  // v2: gold, silver and bronze medals for the top three, a number after.
+  // By position, as the numbers were: the server breaks a tie on points by
+  // name, and names that first one as the marathon's winner.
+  function standingsRowHtml(s, i) {
+    const rank = i < 3
+      ? `<span class="st-rank st-medal art ${MEDAL_ART[i]}" role="img" aria-label="${i + 1}"></span>`
+      : `<span class="st-rank">${i + 1}</span>`;
+    return rank +
+      `<span class="st-name">${escapeHtml(s.name)}</span>` +
+      `<span class="st-wins">${Number(s.points) || 0}<small> pts</small></span>`;
+  }
+
   function renderGroupBoard() {
     const g = groupScreenData;
     if (!g) return;
@@ -3818,10 +3909,7 @@
       // Your own row is marked, so you can find yourself without reading
       // every name -- the whole point of a standings table is "where am I".
       li.className = 'standings-row' + (me && s.uid === me ? ' is-me' : '');
-      li.innerHTML =
-        `<span class="st-rank">${i + 1}</span>` +
-        `<span class="st-name">${escapeHtml(s.name)}</span>` +
-        `<span class="st-wins">${s.points}</span>`;
+      li.innerHTML = standingsRowHtml(s, i);
       board.appendChild(li);
     });
 
@@ -5806,12 +5894,7 @@
       rows.forEach((s, i) => {
         const li = document.createElement('li');
         li.className = 'standings-row';
-        // Average score is per game and LOWER is better in Least Count, so
-        // it's labelled explicitly rather than left to be guessed at.
-        li.innerHTML =
-          `<span class="st-rank">${i + 1}</span>` +
-          `<span class="st-name">${escapeHtml(s.name)}</span>` +
-          `<span class="st-wins">${s.points}</span>`;
+        li.innerHTML = standingsRowHtml(s, i);
         list.appendChild(li);
       });
     });
@@ -6972,7 +7055,7 @@
       declareBtn.classList.remove('hint-suggested');
     }
 
-    // Every round, once it's over, show the merged result screen -- podium,
+    // Every round, once it's over, show the merged result screen -- medals,
     // everyone's revealed cards, and the round-score math, all in one place
     // (see showRoundResult / renderHandRevealRows). On the final round this
     // same screen appears too (minus the Next Round button); the celebratory
@@ -7538,50 +7621,13 @@
   // ---------------- round result / scores / game over overlays ----------------
   // Ranks everyone by cumulative total score, ascending -- lowest total is
   // rank 1, since Least Count rewards staying low. Re-derived fresh every
-  // round, so the podium/table are always re-sorted by the latest totals.
+  // round, so the medals and rows are always re-sorted by the latest totals.
   function rankedPlayers(game) {
     return (latestRoom.players || [])
       .map((p) => ({ ...p, total: game.scores[p.playerId] ?? 0 }))
       .sort((a, b) => a.total - b.total);
   }
 
-  // Podium: 1st place centered and visibly higher (via extra padding/scale,
-  // not a bar chart), 2nd/3rd flanking lower. Only the top 3 appear here --
-  // everyone (including 4th place and below) still appears in the full
-  // sorted table underneath.
-  function renderPodium(game, ranked) {
-    const podium = document.getElementById('podium');
-    podium.innerHTML = '';
-    const top3 = ranked.slice(0, 3);
-    if (top3.length === 0) return;
-    const r = game.lastRoundResult;
-    const order = [];
-    if (top3[1]) order.push({ p: top3[1], place: 2 });
-    order.push({ p: top3[0], place: 1 });
-    if (top3[2]) order.push({ p: top3[2], place: 3 });
-
-    order.forEach(({ p, place }) => {
-      const slot = document.createElement('div');
-      // Own slot gets a neutral ring (own-podium, styled in style.css) instead
-      // of appending " (You)" as literal text -- that text used to share the
-      // exact same tight, already-truncation-prone width as everyone else's
-      // name here, so it clipped sooner than it should have for no good
-      // reason. Same fix already applied to the oval table's own-seat name.
-      slot.className = `podium-slot podium-place-${place}${p.playerId === myPlayerId ? ' own-podium' : ''}`;
-      const medal = place === 1 ? '🥇' : place === 2 ? '🥈' : '🥉';
-      const elim = game.eliminated && game.eliminated.includes(p.playerId) ? ' (out)' : '';
-      const delta = r && r.roundScores ? r.roundScores[p.playerId] : undefined;
-      const deltaHtml = delta !== undefined ? `<div class="podium-delta">+${delta} this round</div>` : '';
-      slot.innerHTML =
-        `<div class="podium-medal">${medal}</div>` +
-        `<div class="podium-name">${escapeHtml(displayName(p.name))}${elim}</div>` +
-        deltaHtml +
-        `<div class="podium-score">${p.total} pts</div>`;
-      podium.appendChild(slot);
-    });
-  }
-
-  // Full sorted table below the podium -- everyone, this round's delta, and
   // Same rank-value rule as gameLogic.js's cardValue() -- a printed Joker or
   // this round's wild rank scores 0, Ace is 1, face cards are 10, everything
   // else is its face value. Kept in sync manually since the client only ever
@@ -7610,44 +7656,56 @@
     const finalValues = game.finalHandValues || {};
     const wildRank = game.roundJokerRank;
 
-    ranked.forEach((p) => {
+    ranked.forEach((p, i) => {
       const roundScore = r && r.roundScores ? r.roundScores[p.playerId] : undefined;
       const newTotal = p.total;
       const prevTotal = roundScore !== undefined ? newTotal - roundScore : undefined;
       const elim = game.eliminated && game.eliminated.includes(p.playerId);
       const isDeclarer = r && r.declaredBy === p.playerId;
 
+      // v2 (Oct 2026): one line per player -- a medal or a place, the name,
+      // the sum. The rows are in order of total (lowest first), so the 3D
+      // gold, silver and bronze medals go to the first three: they replace
+      // the podium, which only ever showed those same three. Mid-game nobody
+      // who is out gets one; once the game is over (when everyone but the
+      // winner is out) they are the final standings. The caller's row is
+      // outlined in gold.
       const row = document.createElement('div');
-      row.className = 'reveal-row' + (isDeclarer ? ' declared' : '') + (elim ? ' eliminated' : '');
+      row.className = 'reveal-row' + (isDeclarer ? ' declared' : '') + (elim ? ' eliminated' : '')
+        + (p.playerId === myPlayerId ? ' is-me' : '');
+
+      const rankEl = document.createElement('span');
+      if (i < 3 && (!elim || game.gameOver)) {
+        rankEl.className = 'reveal-rank art ' + MEDAL_ART[i];
+        rankEl.setAttribute('role', 'img');
+        rankEl.setAttribute('aria-label', String(i + 1));
+      } else {
+        rankEl.className = 'reveal-rank';
+        rankEl.textContent = String(i + 1);
+      }
+      row.appendChild(rankEl);
 
       const nameEl = document.createElement('div');
       nameEl.className = 'reveal-name';
-      nameEl.textContent = displayName(p.name)
-        + (p.playerId === myPlayerId ? ' (You)' : '')
-        + (isDeclarer ? ' (declared)' : '')
-        + (elim ? ' (out)' : '');
+      const nameText = document.createElement('span');
+      nameText.className = 'reveal-name-text';
+      nameText.textContent = displayName(p.name);
+      nameEl.appendChild(nameText);
+      const tag = (cls, text) => {
+        const t = document.createElement('span');
+        t.className = cls;
+        t.textContent = text;
+        nameEl.appendChild(t);
+      };
+      if (p.playerId === myPlayerId) tag('reveal-you', '(you)');
+      if (isDeclarer) tag('reveal-tag called', 'called');
+      if (elim) tag('reveal-tag out', 'out');
       row.appendChild(nameEl);
 
-      const mainRow = document.createElement('div');
-      mainRow.className = 'reveal-main';
-
-      // No card tiles here any more. Every player's actual cards are now
-      // shown face-up at their own chair during the reveal phase that runs
-      // before this screen (see startRevealPhase), so repeating them here
-      // was pure duplication -- and they were by far the tallest thing on
-      // this panel, which is what forced it to scroll once a table had more
-      // than a few players. Dropping them is what lets every player fit on
-      // one screen, and frees the room the ad slot now occupies.
-      // Nothing on the left of the row any more -- no card tiles, and no
-      // hand-value text either. The cards AND their value are both shown at
-      // each player's chair during the reveal phase that runs just before
-      // this screen, so repeating the value here was the third time the same
-      // information appeared. The round-score sum on the right (this round +
-      // previous = new total) is what this screen is actually for.
-      const cardsWrap = document.createElement('div');
-      cardsWrap.className = 'reveal-cards';
-      mainRow.appendChild(cardsWrap);
-
+      // No card tiles and no hand value here: both are shown at each
+      // player's chair during the reveal that runs just before this screen.
+      // The round-score sum (this round + previous = new total) is what this
+      // screen is for.
       const mathEl = document.createElement('div');
       mathEl.className = 'reveal-math';
       if (roundScore !== undefined) {
@@ -7658,9 +7716,7 @@
       } else {
         mathEl.textContent = `${newTotal} pts`;
       }
-      mainRow.appendChild(mathEl);
-
-      row.appendChild(mainRow);
+      row.appendChild(mathEl);
       body.appendChild(row);
     });
   }
@@ -7837,10 +7893,19 @@
     // wrong declare now costs just their own hand value) -- show whatever
     // it actually was instead of hardcoding the old flat number.
     const declarerScore = r.roundScores[r.declaredBy];
-    const title = r.correct
-      ? `${playerName(r.declaredBy)} correctly declared Least Count!`
-      : `${playerName(r.declaredBy)} declared wrong! (+${declarerScore} penalty)`;
-    document.getElementById('round-result-title').textContent = title;
+    // v2: shorter. "Mani called too early +75" (the +75 in red) rather than
+    // "Mani declared wrong! (+75 penalty)"; "You" when it was you.
+    const titleEl = document.getElementById('round-result-title');
+    const caller = r.declaredBy === myPlayerId ? 'You' : playerName(r.declaredBy);
+    if (r.correct) {
+      titleEl.textContent = `${caller} called it right!`;
+    } else {
+      titleEl.textContent = `${caller} called too early `;
+      const pen = document.createElement('span');
+      pen.className = 'rr-penalty';
+      pen.textContent = '+' + declarerScore;
+      titleEl.appendChild(pen);
+    }
     const rrRound = document.getElementById('round-result-round');
     if (rrRound) rrRound.textContent = game.roundNumber ? 'Round ' + game.roundNumber : '';
     document.getElementById('round-result-maxscore').textContent = `Playing to ${game.eliminationScore} pts`;
@@ -7861,20 +7926,11 @@
     emojiEl.style.animation = 'scoreCardEmojiPop 3.4s ease 1 both';
 
     const ranked = rankedPlayers(game);
-    // Podium is a FINAL-STANDINGS idea, so it only earns its space once the
-    // game is actually over. Mid-game it was showing the top 3 of a race
-    // that isn't finished, while the rows below already list every player's
-    // round score and running total -- and it silently omitted anyone past
-    // 3rd, which on a 4+ player table meant hiding the most interesting
-    // number on the screen (whoever is closest to being knocked out).
+    // The podium (shown only once the game was over) is retired with v2:
+    // the medals on the first three rows below say the same thing, on every
+    // round, without a second copy of three names above the list.
     const podiumEl = document.getElementById('podium');
-    if (game.gameOver) {
-      podiumEl.classList.remove('hidden');
-      renderPodium(game, ranked);
-    } else {
-      podiumEl.classList.add('hidden');
-      podiumEl.innerHTML = '';
-    }
+    if (podiumEl) { podiumEl.classList.add('hidden'); podiumEl.innerHTML = ''; }
     renderHandRevealRows(game, ranked);
 
     const noteEl = document.getElementById('round-result-note');
@@ -8300,7 +8356,9 @@
       you_won: game.winner === myPlayerId,
     });
     document.getElementById('overlay-round-result').classList.add('hidden');
-    document.getElementById('gameover-title').textContent = `🏆 ${playerName(game.winner)} wins!`;
+    // v2: the trophy is a 3D picture above the title now, so no 🏆 in it.
+    document.getElementById('gameover-title').textContent =
+      game.winner === myPlayerId ? 'You win!' : `${playerName(game.winner)} wins!`;
     const body = document.getElementById('gameover-body');
     body.innerHTML = '';
     // The final round's score change is what actually ended the game --
@@ -8317,14 +8375,21 @@
       banner.innerHTML = `<div class="final-round-banner-label">Final round</div><div>${parts.join(' &nbsp;·&nbsp; ')}</div>`;
       body.appendChild(banner);
     }
-    Object.entries(game.scores).sort((a,b) => a[1]-b[1]).forEach(([pid, score]) => {
+    // Lowest total first -- with the winner always on top, so the gold medal
+    // can never sit on someone other than the name in the title.
+    Object.entries(game.scores).sort((a, b) =>
+      ((b[0] === game.winner) - (a[0] === game.winner)) || (a[1] - b[1])).forEach(([pid, score], i) => {
       const row = document.createElement('div');
-      row.className = 'result-row' + (pid === game.winner ? ' winner-row' : '');
+      row.className = 'result-row gameover-row' + (pid === game.winner ? ' winner-row' : '');
       const delta = lastRoundScores[pid];
       const deltaHtml = delta !== undefined
         ? `<span class="final-round-delta">+${delta}</span> this round · `
         : '';
-      row.innerHTML = `<span>${escapeHtml(playerName(pid))}</span><span>${deltaHtml}${score} pts total</span>`;
+      // v2: the final standings get the round result's medals.
+      const rank = i < 3
+        ? `<span class="go-rank art ${MEDAL_ART[i]}" role="img" aria-label="${i + 1}"></span>`
+        : `<span class="go-rank">${i + 1}</span>`;
+      row.innerHTML = rank + `<span class="go-name">${escapeHtml(playerName(pid))}</span><span class="go-score">${deltaHtml}${Number(score) || 0} pts total</span>`;
       body.appendChild(row);
     });
     maybeShowInstallCard(body);
