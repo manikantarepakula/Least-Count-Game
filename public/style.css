@@ -5897,3 +5897,15 @@ html.gs2 .hand-stats { font-size: 11px; font-weight: 500; color: var(--home-line
 /* Narrow phones: the unit and the max score go before anything wraps. */
 @media (max-width: 359px) { .hvp-unit { display: none; } }
 @media (max-width: 339px) { .hsp-max, .hint-btn-label { display: none; } }
+
+/* ==========================================================================
+   3D ICONS: THE BASE RULE, KEPT HERE TOO (Oct 2026)
+   ==========================================================================
+   Every 3D picture in the app (Home's cards, the lobby, the group screen,
+   the medals, the popups) is a .art element whose picture comes from
+   home-art.css. The rule that sizes them lived only in that file, right
+   after its header comment -- and an upload that lost the comment's first
+   two characters turned the comment into junk that took the rule with it:
+   every icon showed only its top-left corner, on every screen. The same
+   rule here means the icons are drawn right whatever happens to that file. */
+.art { display: inline-block; background-position: center; background-size: contain; background-repeat: no-repeat; }
