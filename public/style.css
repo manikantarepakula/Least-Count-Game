@@ -5555,3 +5555,345 @@ button.secondary:disabled, button.action:disabled { box-shadow: none; filter: sa
 @media (prefers-reduced-motion: reduce) {
   #btn-declare:not(:disabled)::after { animation: none; opacity: 0.7; }
 }
+
+/* ==========================================================================
+   GAME SCREEN v2 (Oct 2026, proposal) -- the premium look, behind one switch
+   ==========================================================================
+   Everything below is scoped to html.gs2: one class on <html> turns it on,
+   and taking it off puts the game screen back exactly as it was. The layout
+   is untouched -- same sizes, same places, so the seat and commentary maths
+   in app.js see the same boxes. Only surfaces, type and light change. The
+   felt itself is not touched. */
+
+/* ---- 1. Top bar: round buttons and a title badge, as on Home --------------- */
+/* (Padding left exactly as it was: the table takes whatever height is left
+   over, so every extra pixel up here made the table smaller.) */
+/* (Selectors this long on purpose: they have to out-rank the app-wide
+   button.tiny:not(...) rule and the bar's own pair rules.) */
+html.gs2 .game-top button.tiny:not(.primary):not(.secondary):not(.danger):not(.declare),
+html.gs2 .game-top .btn-pair {
+  border-radius: 999px;
+  background: rgba(255,255,255,0.07);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07), 0 3px 0 rgba(0,0,0,0.28);
+}
+html.gs2 .game-top .btn-pair > button.tiny:not(.primary):not(.secondary):not(.danger):not(.declare) { box-shadow: none; background: transparent; }
+html.gs2 .game-top #btn-scores { padding-left: 16px; padding-right: 16px; }
+html.gs2 .game-top button.tiny.leave-btn { color: var(--red-text); }
+html.gs2 .game-round {
+  padding: 5px 14px; border-radius: 999px;
+  background: rgba(0,0,0,0.22); box-shadow: inset 0 0 0 1px rgba(242,193,78,0.30);
+  font-size: 13px; letter-spacing: 0.04em;
+}
+html.gs2 .game-round:empty { display: none; }
+
+/* ---- 2. Turn strip: a live dot, and the time left as a draining bar -------- */
+html.gs2 .turn-strip {
+  position: relative; overflow: hidden;
+  margin: 2px 4px 4px; padding: 6px 12px;   /* as before: see the note on the top bar */
+  border: 0; border-radius: 14px;
+  background: rgba(255,255,255,0.06);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07);
+}
+html.gs2 .turn-strip-text::before {
+  content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 8px; vertical-align: 1px;
+  background: var(--gold-bright);
+  animation: gsLiveDot 1.6s ease-out infinite;
+}
+@keyframes gsLiveDot {
+  0%   { box-shadow: 0 0 0 0 rgba(242,193,78,0.55); }
+  100% { box-shadow: 0 0 0 7px rgba(242,193,78,0); }
+}
+html.gs2 .turn-strip.mine {
+  background: linear-gradient(180deg, #f8cf62 0%, var(--brand) 48%, #ebb43a 100%);
+  box-shadow: 0 3px 0 var(--gold-edge);
+}
+html.gs2 .turn-strip.mine .turn-strip-text::before { background: #261a03; animation: none; }
+html.gs2 .turn-strip.mine.low {
+  background: linear-gradient(180deg, #ef4d52 0%, var(--red) 55%, #cf1f26 100%);
+  box-shadow: 0 3px 0 #8c1419;
+}
+html.gs2 .turn-strip.mine.low .turn-strip-text::before { background: #fff; }
+html.gs2 .turn-strip.timed::after {
+  content: ''; position: absolute; left: 0; bottom: 0; height: 3px;
+  width: calc(var(--turn-pct, 100) * 1%);
+  background: rgba(242,193,78,0.85);
+  transition: width 0.25s linear;
+}
+html.gs2 .turn-strip.mine.timed::after { background: rgba(38,26,3,0.40); }
+html.gs2 .turn-strip.mine.low.timed::after { background: rgba(255,255,255,0.55); }
+/* A commentary line docked over the strip takes the strip's new shape. */
+html.gs2 .commentary.docked .cm-line { border-radius: 14px; }
+
+/* ---- 3. Chairs: small raised panels, like the cards on Home ---------------- */
+html.gs2 .seat-chip {
+  background: linear-gradient(180deg, rgba(36,68,58,0.97) 0%, rgba(24,50,41,0.97) 100%);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  box-shadow: 0 3px 0 rgba(3,12,9,0.55), 0 8px 16px rgba(0,0,0,0.28);
+}
+html.gs2 .seat-name { font-weight: 700; color: #fff; }
+html.gs2 .seat-meta { opacity: 1; font-weight: 500; color: var(--home-line); }
+html.gs2 .seat-threw-label { color: var(--home-line); }
+/* Whose turn: the gold of the app's main buttons, edge and all, with a soft
+   glow -- and the countdown ring still running round it. */
+html.gs2 .seat.active .seat-chip {
+  background: linear-gradient(180deg, #f8cf62 0%, var(--brand) 48%, #ebb43a 100%);
+  border-color: transparent; color: #261a03;
+  box-shadow: 0 3px 0 var(--gold-edge), 0 8px 18px rgba(0,0,0,0.30), 0 0 20px rgba(242,193,78,0.35);
+}
+html.gs2 .seat.active .seat-name { color: #261a03; }
+html.gs2 .seat.active .seat-meta,
+html.gs2 .seat.active .seat-threw-label { color: rgba(38,26,3,0.70); }
+html.gs2 .seat.active .seat-chip::after { border-radius: 14px; }
+/* Your own chair keeps its white ring, on top of the new edge. */
+html.gs2 .seat.own-seat .seat-chip {
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.50), 0 3px 0 rgba(3,12,9,0.55), 0 8px 16px rgba(0,0,0,0.28);
+}
+html.gs2 .seat.own-seat.active .seat-chip {
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.60), 0 3px 0 var(--gold-edge), 0 0 20px rgba(242,193,78,0.35);
+}
+html.gs2 .seat-threw-card { background: #fbf8f1; }
+
+/* ---- 4. The cards: a printed deck ---------------------------------------- */
+/* The drawn suits and emblems are in every card's markup (see cardEl in
+   app.js); without gs2 they stay hidden and the font characters show. */
+.card .sg, .card .court-emblem, .card .joker-hat { display: none; }
+
+/* Card stock: warm white, a hairline edge, and a little thickness under it.
+   :where() keeps this at the weight of the plain .card rule, so every state
+   that draws its own edge (picked, joker, +2, a pile, the hint) still wins. */
+html.gs2 .card:not(.back) {
+  background: linear-gradient(180deg, #ffffff 0%, #fcf9f2 55%, #f3eee2 100%);
+  border-radius: 7px;
+}
+:where(html.gs2) .card:where(:not(.back)) {
+  box-shadow: inset 0 0 0 1px rgba(60,45,20,0.10), 0 1px 0 #ddd5c2, 0 2px 0 #c7bea7, 0 5px 10px rgba(0,0,0,0.32);
+}
+/* Inks: a deep crimson and a soft black, the numbers in the card's serif. */
+html.gs2 .card.red .corner-rank, html.gs2 .card.red .center-rank,
+html.gs2 .seat-threw-card.red { color: #c0102b; }
+html.gs2 .card.black .corner-rank, html.gs2 .card.black .center-rank,
+html.gs2 .seat-threw-card.black { color: #17181d; }
+html.gs2 .card .corner-rank { font-weight: 800; letter-spacing: -0.04em; }
+html.gs2 .card .center-rank { letter-spacing: -0.03em; }
+/* The suits: drawn, with a little light falling on them. */
+html.gs2 .card .st { display: none; }
+html.gs2 .card .sg { display: block; width: 1em; height: 1em; }
+html.gs2 .card.red .sg { fill: url(#lcRed); }
+html.gs2 .card.black .sg { fill: url(#lcInk); }
+html.gs2 .card .corner-suit { display: block; line-height: 0; }
+html.gs2 .card .corner-suit .sg { width: 1.05em; height: 1.05em; }
+html.gs2 .card .center-suit { display: block; line-height: 0; }
+html.gs2 .card .center-suit .sg { width: 0.92em; height: 0.92em; }
+
+/* The ace: one big suit in the middle, the classic way. The ace of spades
+   gets the gold ring every printed deck gives it. */
+html.gs2 .card.ace:not(.mini) .center-rank { display: none; }
+html.gs2 .card.ace:not(.mini) .center-suit { transform: scale(1.75); margin-top: 0; }
+html.gs2 .card.ace.s-S:not(.mini) .card-center::before {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 62%; aspect-ratio: 1; transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid rgba(184,134,15,0.65);
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.9), inset 0 0 0 3px rgba(184,134,15,0.35);
+  background: radial-gradient(circle, rgba(242,193,78,0.16) 0%, rgba(242,193,78,0.03) 70%);
+}
+html.gs2 .card.ace.s-S:not(.mini) .card-center > * { position: relative; }
+
+/* J, Q, K: a gold frame, a gold crown (or coronet, or shield) and the
+   letter -- the suit is in the corners. Not on the tiny cards in a chair's
+   reveal: no room there, so those keep the letter and suit. */
+html.gs2 .card.court:not(.mini) .card-center::before {
+  content: ''; position: absolute; inset: 19% 22%;
+  border: 1px solid rgba(184,134,15,0.60); border-radius: 4px;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.85), inset 0 0 0 3px rgba(184,134,15,0.22);
+  background: linear-gradient(180deg, rgba(242,193,78,0.18) 0%, rgba(242,193,78,0.05) 100%);
+}
+html.gs2 .card.court:not(.mini) .card-center > * { position: relative; }
+html.gs2 .card.court:not(.mini) .center-suit { display: none; }
+html.gs2 .card.court:not(.mini) .court-emblem {
+  display: block; width: 14px; height: 14px; margin-bottom: 1px;
+  fill: url(#lcGold); filter: drop-shadow(0 1px 0 rgba(120,80,5,0.35));
+}
+html.gs2 #hand .card.court .court-emblem {
+  width: calc(clamp(32px, 11.5vw, 44px) * 0.36); height: calc(clamp(32px, 11.5vw, 44px) * 0.36);
+}
+html.gs2 .table-center .card.court .court-emblem {
+  width: calc(var(--centre-card-w, 58px) * 0.36); height: calc(var(--centre-card-w, 58px) * 0.36);
+}
+html.gs2 .draw-reveal-cards .card.court .court-emblem,
+html.gs2 .start-seq-reveal-row .card.court .court-emblem { width: 28px; height: 28px; }
+
+/* The joker: a jester's hat in crimson with gold bells. */
+html.gs2 .card.joker .joker-cap { display: none; }
+html.gs2 .card.joker .joker-hat {
+  display: block; width: 26px; height: 26px;
+  fill: url(#lcRed); filter: drop-shadow(0 1px 0 rgba(90,10,20,0.25));
+}
+html.gs2 #hand .card.joker .joker-hat {
+  width: calc(clamp(32px, 11.5vw, 44px) * 0.58); height: calc(clamp(32px, 11.5vw, 44px) * 0.58);
+}
+html.gs2 .draw-reveal-cards .card.joker .joker-hat,
+html.gs2 .table-center .card.joker .joker-hat { width: 32px; height: 32px; }
+html.gs2 .card.joker .joker-letters { color: #c0102b; }
+html.gs2 .card.mini.joker .joker-hat { width: 13px; height: 13px; }
+
+/* The edges of a pile, in the same card stock. */
+html.gs2 #hand .card.stacked-2 { --stack: 3px -3px 0 -1px #f6f2e8, 3px -3px 0 0 rgba(0,0,0,0.3); }
+html.gs2 #hand .card.stacked-3 {
+  --stack: 3px -3px 0 -1px #f6f2e8, 3px -3px 0 0 rgba(0,0,0,0.3),
+           6px -6px 0 -1px #ebe5d6, 6px -6px 0 0 rgba(0,0,0,0.26);
+}
+
+/* ---- 5. Your side: the value box, and a tray your cards sit in ------------- */
+html.gs2 .hand-value-pill {
+  background: var(--home-field); border: 0;
+  box-shadow: 0 2px 0 var(--home-edge); color: var(--home-line);
+}
+html.gs2 .hand-value-pill b { color: #fff; }
+html.gs2 .hand-value-pill.can-call {
+  background: linear-gradient(180deg, #f8cf62 0%, var(--brand) 48%, #ebb43a 100%);
+  box-shadow: 0 2px 0 var(--gold-edge); color: #261a03;
+}
+html.gs2 .hand-value-pill.can-call b { color: #261a03; }
+html.gs2 .hand-stats { color: var(--home-line); font-weight: 500; }
+/* Light enough that a short hand doesn't leave a dark empty box. */
+html.gs2 #hand {
+  background: rgba(0,0,0,0.09);
+  border-radius: 14px;
+  box-shadow: inset 0 2px 6px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.04);
+}
+
+/* ---- 6. The two buttons, when they can't be pressed yet -------------------- */
+/* Least Count! waits in gold outline -- "not yet", not "broken" -- and lights
+   up (with its glow) the moment you may call. */
+html.gs2 #btn-declare:disabled {
+  opacity: 1; filter: none;
+  background: rgba(242,193,78,0.08); color: rgba(242,193,78,0.70);
+  box-shadow: inset 0 0 0 1px rgba(242,193,78,0.28);
+}
+html.gs2 #btn-discard:disabled {
+  opacity: 1; filter: none;
+  background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.34);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07);
+}
+
+/* ---- 7. A little more light where the table is ----------------------------- */
+html.gs2 #screen-game.active {
+  background: radial-gradient(120% 75% at 50% 36%, #17392f 0%, #0f241d 58%, #0a1914 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.gs2 .turn-strip-text::before { animation: none; }
+  html.gs2 .turn-strip.timed::after { transition: none; }
+}
+
+/* ==========================================================================
+   A CORRECT CALL (Oct 2026) -- gold light instead of confetti
+   ==========================================================================
+   Confetti fired on every correct LEAST COUNT call, which in most games is
+   most rounds, and it felt cheap that often. Now the words catch the light,
+   a ring of gold opens out from them and a few gold sparkles twinkle round
+   them -- about a second, and only on the table. Confetti stays for the end
+   of a game. (celebrateCall in app.js adds the ring and the sparkles.) */
+.call-flair { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.cf-ring {
+  position: absolute; left: 50%; top: 50%;
+  width: 70px; height: 46px; margin: -23px 0 0 -35px;
+  border-radius: 50%; border: 2px solid rgba(242,193,78,0.85);
+  box-shadow: 0 0 14px rgba(242,193,78,0.55), inset 0 0 10px rgba(242,193,78,0.35);
+  animation: cfRing 0.95s cubic-bezier(.2,.7,.3,1) both;
+}
+@keyframes cfRing {
+  0%   { transform: scale(0.3); opacity: 0.95; }
+  100% { transform: scale(4.2); opacity: 0; }
+}
+.cf-spark {
+  position: absolute; overflow: visible;
+  fill: url(#lcGold); filter: drop-shadow(0 0 4px rgba(242,193,78,0.85));
+  transform: translate(-50%, -50%) scale(0);
+  animation: cfTwinkle 0.95s ease-out both;
+}
+@keyframes cfTwinkle {
+  0%   { transform: translate(-50%, -50%) scale(0) rotate(0deg); opacity: 0; }
+  35%  { transform: translate(-50%, -50%) scale(1.15) rotate(40deg); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(0) rotate(100deg); opacity: 0; }
+}
+/* LEAST COUNT catches the light: a shine runs across the letters. */
+.declare-callout.correct .declare-callout-call span {
+  background: linear-gradient(100deg, var(--brand-line) 0%, var(--brand-line) 40%, #fff7da 50%, var(--brand-line) 60%, var(--brand-line) 100%);
+  background-size: 300% 100%; background-position: 100% 0;
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent; text-shadow: none;
+  filter: drop-shadow(0 3px 10px rgba(0,0,0,0.75));
+  animation: cfShine 1s ease-out 0.1s both;
+}
+@keyframes cfShine { to { background-position: 0% 0; } }
+/* ...and a warm glow comes up behind them, over the dark pool. */
+.declare-callout.correct::after {
+  content: ''; position: absolute; inset: -34px -48px; z-index: -1;
+  background: radial-gradient(ellipse at center, rgba(242,193,78,0.30) 0%, rgba(242,193,78,0) 70%);
+  animation: cfGlow 1.3s ease-out both;
+}
+@keyframes cfGlow { 0% { opacity: 0; } 25% { opacity: 1; } 100% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .cf-ring, .cf-spark { display: none; }
+  .declare-callout.correct .declare-callout-call span { animation: none; background-position: 50% 0; }
+  .declare-callout.correct::after { animation: none; opacity: 0.6; }
+}
+
+/* ==========================================================================
+   THE LINE ABOVE YOUR CARDS v2 (Oct 2026) -- Score and Hand, told apart
+   ==========================================================================
+   "Value 4 · 2 cards · Score 0", with the value in gold, put the light on
+   the wrong number and left players unsure which was which. Now two boxes
+   with their own names: SCORE (your total in this game, against the max
+   score) outlined in gold, and HAND (what your cards are worth this round)
+   plain -- green at 5 or less, when you may call. */
+.hand-title { gap: 6px; }
+.hand-score-pill,
+.hand-value-pill,
+html.gs2 .hand-value-pill {
+  flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 4px;
+  padding: 3px 9px; border-radius: 14px; border: 0;
+  font-size: 10.5px; font-weight: 600; line-height: 1.2; white-space: nowrap;
+}
+.hand-score-pill b,
+.hand-value-pill b { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Score: outlined in gold -- the number the game is decided on. */
+.hand-score-pill {
+  background: rgba(242,193,78,0.12); color: var(--gold-bright);
+  box-shadow: inset 0 0 0 1.5px rgba(242,193,78,0.75);
+}
+.hand-score-pill b { color: var(--gold-bright); }
+.hsp-max { margin-left: -3px; font-size: 10.5px; font-weight: 600; opacity: 0.75; }
+.hsp-max:empty { display: none; }
+/* Hand: a plain box -- what your cards are worth right now. */
+.hand-value-pill,
+html.gs2 .hand-value-pill {
+  background: var(--home-field); color: var(--home-line);
+  box-shadow: 0 2px 0 var(--home-edge);
+}
+.hand-value-pill b,
+html.gs2 .hand-value-pill b { color: #fff; }
+.hvp-unit { margin-left: -1px; font-size: 10px; font-weight: 500; opacity: 0.85; }
+/* "12 cards = 69 pts": the count and the worth in one box. */
+.hvp-count { font-size: 10.5px; font-weight: 600; }
+.hvp-eq { font-size: 10.5px; font-weight: 600; opacity: 0.7; }
+.hvp-count:empty, .hvp-count:empty + .hvp-eq { display: none; }
+/* 5 or less: green -- you may call. (Gold belongs to the score and to the
+   Least Count! button.) */
+.hand-value-pill.can-call,
+html.gs2 .hand-value-pill.can-call {
+  background: rgba(74,222,128,0.12); color: var(--good-text);
+  box-shadow: inset 0 0 0 1.5px rgba(74,222,128,0.75);
+}
+.hand-value-pill.can-call b,
+html.gs2 .hand-value-pill.can-call b { color: var(--good); }
+/* The card count: small, and the first thing to give way. */
+.hand-stats,
+html.gs2 .hand-stats { font-size: 11px; font-weight: 500; color: var(--home-line); }
+/* Narrow phones: the unit and the max score go before anything wraps. */
+@media (max-width: 359px) { .hvp-unit { display: none; } }
+@media (max-width: 339px) { .hsp-max, .hint-btn-label { display: none; } }
