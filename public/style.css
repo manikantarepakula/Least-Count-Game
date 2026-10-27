@@ -6505,3 +6505,82 @@ FdvZDraJKaE+2k6Xlo52wJZ/yo5vpbj9RxnQg6Atnr6DRhTIymBpc3oCdde6B3/dDyW/RRfgSpQivsVa
 DKKIsYkYXw9yDK1YWUbeR4rX8xw3I5sEE2Wy/aoRJxQ8JokxFzy3Fa982tHyQn4NIkacinz6CN2iWC5OalYw5K+ODOQH+Djh\
 f11f/abQjEveriwaBG03CuhbPLFR+ajI0MyIssQ2Kwrka5u7p5UGKMvjVhXZQ7zAy40lhBxZLPOc+2igPlmoOdCTr3XpCPji\
 /edFkGhhk/ZmrAAAAAA="); }
+
+/* ==========================================================================
+   THE LINE ABOVE YOUR CARDS v3 (Oct 2026) -- even type, room for the notes
+   ==========================================================================
+   1. Numbers the same size as their labels, picked out by weight and colour
+      rather than size: the 15px bold numbers beside 10.5px labels looked
+      lumpy ("Score 9/200", "10 cards = 26 pts").
+   2. The note ("You drew 5♥", "+2 trump card -- use it wisely!") now takes
+      the whole line for its two or three seconds. Squeezed into the gap
+      between the two boxes and the Hint button it wrapped into four or five
+      lines of two letters each. (It must not float above the line instead:
+      that is exactly where your own chair sits -- tried first, it covered
+      it.) The boxes are back the moment it goes. */
+.hand-score-pill,
+.hand-value-pill,
+html.gs2 .hand-value-pill {
+  align-items: baseline; gap: 4px; padding: 4px 10px;
+  font-size: 12px; font-weight: 500; letter-spacing: 0.01em;
+}
+.hand-score-pill b,
+.hand-value-pill b,
+html.gs2 .hand-value-pill b {
+  font-size: 12.5px; font-weight: 700; font-variant-numeric: normal; letter-spacing: 0.01em;
+}
+.hsp-max { margin-left: -2px; font-size: 12px; font-weight: 500; opacity: 0.7; }
+.hvp-count, .hvp-eq, .hvp-unit { font-size: 12px; font-weight: 500; }
+.hvp-unit { margin-left: 0; opacity: 0.8; }
+.hvp-eq { opacity: 0.6; }
+/* The note, across the whole line. */
+.hand-header { position: relative; }
+.hand-header .hand-title,
+.hand-header .hand-stats-wrap { position: static; }
+.hand-header .draw-toast {
+  left: 0; right: 0; top: 50%; width: auto; max-width: none;
+  transform: translateY(-50%);
+  display: flex; align-items: center; justify-content: center;
+  min-height: 30px; padding: 4px 14px; box-sizing: border-box;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 12.5px; line-height: 1.2; text-align: center;
+  background: var(--home-sheet); border: 1.5px solid var(--gold); color: #fff;
+  border-radius: 15px; box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+  z-index: 9;
+}
+/* The +2 note keeps its red-to-gold. */
+.hand-header .draw-toast.trump {
+  border-color: transparent;
+  background: linear-gradient(90deg, #c0392b, var(--gold)); color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
+/* Above everything else on the line, the buttons included, and exactly the
+   line's height, so nothing peeks out above or below it. */
+.hand-header .draw-toast {
+  z-index: 30; top: 0; bottom: 0; min-height: 0; transform: none;
+  animation-name: lcToastLine, lcToastOut;
+}
+@keyframes lcToastLine {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ==========================================================================
+   CARD EDGES, PLAIN (Oct 2026)
+   ==========================================================================
+   A fine, even edge and a soft shadow, like a real card -- in place of the
+   stacked "thickness" lines under each card, the gold box inside J, Q and K
+   and the ring on the ace of spades, which looked unfinished at hand size.
+   The crowns, the shield, the big ace and the joker's hat stay. */
+:where(html.gs2) .card:where(:not(.back)) {
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12), 0 2px 5px rgba(0,0,0,0.30);
+}
+html.gs2 .card.court:not(.mini) .card-center::before,
+html.gs2 .card.ace.s-S:not(.mini) .card-center::before { content: none; display: none; }
+/* The face itself: a clean white, warmed only slightly towards the foot. */
+html.gs2 .card:not(.back) { background: linear-gradient(180deg, #ffffff 0%, #fdfbf6 100%); }
+html.gs2 #hand .card.stacked-2 { --stack: 3px -3px 0 -1px #fbf9f3, 3px -3px 0 0 rgba(0,0,0,0.22); }
+html.gs2 #hand .card.stacked-3 {
+  --stack: 3px -3px 0 -1px #fbf9f3, 3px -3px 0 0 rgba(0,0,0,0.22),
+           6px -6px 0 -1px #f3f0e8, 6px -6px 0 0 rgba(0,0,0,0.18);
+}
