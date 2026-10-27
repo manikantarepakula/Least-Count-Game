@@ -2629,6 +2629,8 @@
     document.getElementById('hand-jokers').innerHTML = '';
     document.getElementById('hand-divider').classList.add('hidden');
     document.getElementById('hand-value').textContent = '0';
+    const countReset = document.getElementById('hand-count');
+    if (countReset) countReset.textContent = '';
     const statsReset = document.getElementById('hand-stats');
     if (statsReset) statsReset.textContent = '';
     const pillReset = document.getElementById('hand-value-pill');
@@ -5996,6 +5998,14 @@
     return (letter ? letter[0] : n[0]).toUpperCase();
   }
 
+  // The drawn suits and emblems (Oct 2026): <use> of the sprite at the top of
+  // index.html. Every card carries both the old font character (.st) and the
+  // drawing (.sg); style.css shows one or the other -- the drawings only with
+  // the premium game screen (html.gs2), so without it nothing changes.
+  function cardGlyph(id, cls) {
+    return `<svg class="${cls}" aria-hidden="true" focusable="false"><use href="#lc-${id}"></use></svg>`;
+  }
+
   function cardEl(card, opts) {
     opts = opts || {};
     const el = document.createElement('div');
@@ -6007,17 +6017,30 @@
         '</span>';
       el.innerHTML =
         `<div class="card-corner corner-tl">${stacked}</div>` +
-        '<div class="card-center"><div class="joker-cap"></div></div>' +
+        `<div class="card-center"><div class="joker-cap"></div>${cardGlyph('jester', 'joker-hat')}</div>` +
         `<div class="card-corner corner-br">${stacked}</div>`;
     } else {
       const isRed = RED_SUITS.has(card.suit);
       el.classList.add(isRed ? 'red' : 'black');
-      const suit = SUIT_SYMBOL[card.suit] || '';
+      if (SUIT_SYMBOL[card.suit]) el.classList.add('s-' + card.suit);
+      // Only with a suit: the ace's face is its one big suit, so the round's
+      // joker card (a rank with no suit -- "A = 0") keeps its letter.
+      if (card.rank === 'A' && SUIT_SYMBOL[card.suit]) el.classList.add('ace');
+      const suitChar = SUIT_SYMBOL[card.suit] || '';
+      const suit = SUIT_SYMBOL[card.suit]
+        ? `<span class="st">${suitChar}</span>${cardGlyph(card.suit, 'sg')}`
+        : suitChar;
+      const court = (card.rank === 'J' || card.rank === 'Q' || card.rank === 'K')
+        ? cardGlyph(card.rank, 'court-emblem') : '';
       el.innerHTML =
         `<div class="card-corner corner-tl"><span class="corner-rank">${card.rank}</span><span class="corner-suit">${suit}</span></div>` +
-        `<div class="card-center"><span class="center-rank">${card.rank}</span><span class="center-suit">${suit}</span></div>` +
+        `<div class="card-center">${court}<span class="center-rank">${card.rank}</span><span class="center-suit">${suit}</span></div>` +
         `<div class="card-corner corner-br"><span class="corner-rank">${card.rank}</span><span class="corner-suit">${suit}</span></div>`;
     }
+    // Court cards get a class of their own: the premium game screen (gs2 in
+    // style.css) draws them a thin gold frame, the way a printed court card
+    // frames its figure. Without gs2 it does nothing.
+    if (card.rank === 'J' || card.rank === 'Q' || card.rank === 'K') el.classList.add('court');
     if (opts.selectable) el.classList.add('selectable');
     if (opts.selected) el.classList.add('selected');
     if (opts.wild) el.classList.add('wild-zero');
@@ -6721,6 +6744,9 @@
     if (mine && cmDocked && cmShowing) { try { cmEndLine(); } catch (e) { /* cosmetic */ } }
     const cur = latestRoom && (latestRoom.players || []).find((p) => p && p.playerId === game.currentPlayer);
     turnStripShowsSeconds = !(cur && cur.isBot);
+    // A running clock: the premium game screen (gs2) draws it as a bar that
+    // drains along the strip's bottom edge, from --turn-pct (set by the tick).
+    strip.classList.toggle('timed', !!game.turnDeadline && turnStripShowsSeconds);
     if (!game.turnDeadline || !turnStripShowsSeconds) {
       document.getElementById('turn-strip-time').textContent = '';
       strip.classList.remove('low');
@@ -6763,6 +6789,8 @@
       const mineNow = !!(latestGame && !latestGame.roundOver && latestGame.currentPlayer === myPlayerId);
       if (stripTime) stripTime.textContent = turnStripShowsSeconds ? remaining + 's' : '';
       if (strip) strip.classList.toggle('low', turnStripShowsSeconds && mineNow && remaining <= 5);
+      // The same share of the turn left, for the strip's draining bar.
+      if (strip) strip.style.setProperty('--turn-pct', Math.max(0, Math.min(100, ((deadline - Date.now()) / span) * 100)).toFixed(1));
       // The second of the two things that vibrate. Guarded to YOUR turn --
       // buzzing while a bot's clock runs down would mean nothing, and this
       // tick runs for every player's timer, not just yours.
@@ -6979,17 +7007,25 @@
 
     const handValue = game.yourHandValue ?? 0;
     document.getElementById('hand-value').textContent = handValue;
-    // The line above your cards (Oct 2026): the value box turns gold at 5 or
-    // less -- when you're allowed to call -- then your card count and score,
-    // which used to sit on your chair.
+    // The line above your cards (Oct 2026): SCORE (your total, against the
+    // max score) in the gold box, then HAND (what your cards are worth this
+    // round), which turns green at 5 or less -- when you're allowed to call.
+    // See the markup comment in index.html. The card count sits in the same
+    // box as the value now, so the two read as one thing; #hand-stats stays,
+    // empty, as the place the "You drew…" note appears.
     const myCardCount = (game.yourHand || []).length;
     const valuePill = document.getElementById('hand-value-pill');
     if (valuePill) valuePill.classList.toggle('can-call', myCardCount > 0 && handValue <= 5 && !game.roundOver);
+    const myTotal = game.scores ? (game.scores[myPlayerId] ?? 0) : 0;
+    const scoreEl = document.getElementById('hand-score');
+    if (scoreEl) scoreEl.textContent = String(myTotal);
+    const scoreMaxEl = document.getElementById('hand-score-max');
+    if (scoreMaxEl) scoreMaxEl.textContent = game.eliminationScore ? '/' + game.eliminationScore : '';
+    // Your cards and their worth, together: "12 cards = 69 pts".
+    const handCount = document.getElementById('hand-count');
+    if (handCount) handCount.textContent = myCardCount > 0 ? cardsLabel(myCardCount) : '';
     const handStats = document.getElementById('hand-stats');
-    if (handStats) {
-      const myTotal = game.scores ? (game.scores[myPlayerId] ?? 0) : 0;
-      handStats.textContent = (myCardCount > 0 ? cardsLabel(myCardCount) + ' \u00b7 ' : '') + 'Score ' + myTotal;
-    }
+    if (handStats) handStats.textContent = '';
     const hand = sortHand(game.yourHand || []);
     const groups = groupHand(hand);
 
@@ -7378,6 +7414,47 @@
     releaseTransient('declare-callout');
   }
 
+  // A correct call (Oct 2026): LEAST COUNT catches the light, a ring of gold
+  // light opens out from it and a few gold sparkles twinkle round it. This
+  // replaced a burst of confetti, which fired on every correct call -- most
+  // rounds -- and felt cheap that often. Confetti is kept for the end of a
+  // game. The shine and glow are CSS (.declare-callout.correct); this adds
+  // the ring and the sparkles, and takes them away again.
+  const CALL_SPARKS = 9;
+  function celebrateCall(el) {
+    if (!el) return;
+    const old = el.querySelector('.call-flair');
+    if (old) old.remove();
+    const flair = document.createElement('div');
+    flair.className = 'call-flair';
+    flair.setAttribute('aria-hidden', 'true');
+    const ring = document.createElement('span');
+    ring.className = 'cf-ring';
+    flair.appendChild(ring);
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    for (let i = 0; i < CALL_SPARKS; i++) {
+      // Spread round an oval just outside the words, a little uneven.
+      const a = (i / CALL_SPARKS) * Math.PI * 2 + (Math.random() - 0.5) * 0.45;
+      const rx = 74 + Math.random() * 30;
+      const ry = 46 + Math.random() * 22;
+      const size = 9 + Math.round(Math.random() * 9);
+      const s = document.createElementNS(SVG_NS, 'svg');
+      s.setAttribute('class', 'cf-spark');
+      s.setAttribute('width', String(size));
+      s.setAttribute('height', String(size));
+      s.setAttribute('viewBox', '0 0 24 24');
+      const use = document.createElementNS(SVG_NS, 'use');
+      use.setAttribute('href', '#lc-spark');
+      s.appendChild(use);
+      s.style.left = 'calc(50% + ' + Math.round(Math.cos(a) * rx) + 'px)';
+      s.style.top = 'calc(50% + ' + Math.round(Math.sin(a) * ry) + 'px)';
+      s.style.animationDelay = Math.round(80 + Math.random() * 420) + 'ms';
+      flair.appendChild(s);
+    }
+    el.appendChild(flair);
+    setTimeout(() => { if (flair.parentNode) flair.parentNode.removeChild(flair); }, 1700);
+  }
+
   function announceDeclare(game, done) {
     const r = game && game.lastRoundResult;
     const el = document.getElementById('declare-callout');
@@ -7409,7 +7486,7 @@
       verdict.className = 'declare-callout-verdict ' + (r.correct ? 'ok' : 'bad');
       el.classList.add(r.correct ? 'correct' : 'wrong');
       try { if (r.correct) Sound.declareCorrect(); else Sound.declareWrong(); } catch (e) { /* never block */ }
-      if (r.correct) { try { launchConfetti({ pieces: 70, durationMs: 1900 }); } catch (e) { /* decoration */ } }
+      if (r.correct) { try { celebrateCall(el); } catch (e) { /* decoration */ } }
     }, DECLARE_CALL_MS));
 
     declareCalloutTimers.push(setTimeout(() => {
