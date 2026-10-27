@@ -1,5 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- class="gs2" switches on the premium game screen (Oct 2026): the card
+     faces, the chairs, the top bar, the turn strip and the rest of the
+     "GAME SCREEN v2" section of style.css. Take the class off and the game
+     screen goes back to how it was before it. -->
+<html lang="en" class="gs2">
 <head>
 <meta charset="UTF-8" />
 <!-- interactive-widget=overlays-content is the actual fix for the on-screen
@@ -83,13 +87,37 @@
      server.js) can never pair the new markup with the old styles or code.
      The same ?v= is on app.js at the bottom of this file. -->
 
-<link rel="stylesheet" href="style.css?v=screens2-2026-10-26" />
+<link rel="stylesheet" href="style.css?v=game2-2026-10-27" />
 <!-- The Home screen's 3D icons, written into a stylesheet of their own
      (Microsoft's Fluent Emoji, MIT licence -- the notice is inside the file).
      They never change, hence the fixed ?v=. -->
 <link rel="stylesheet" href="home-art.css?v=3" />
 </head>
 <body>
+
+<!-- The card faces' drawings (Oct 2026): the four suits, the court emblems
+     (crown for K, coronet for Q, shield for J), the joker's hat and a gold
+     sparkle, drawn once here and used by every card with <use href="#lc-S">.
+     Vector, so crisp at every size, and the same on every phone -- the
+     suits used to be font characters, which each phone draws its own way.
+     Sized to nothing rather than display:none: gradients inside a hidden SVG
+     stop working in some browsers. -->
+<svg class="lc-sprite" aria-hidden="true" focusable="false" width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden">
+  <defs>
+    <linearGradient id="lcRed" gradientUnits="userSpaceOnUse" x1="0" y1="1" x2="0" y2="23"><stop offset="0" stop-color="#ec4357"/><stop offset="1" stop-color="#a50c25"/></linearGradient>
+    <linearGradient id="lcInk" gradientUnits="userSpaceOnUse" x1="0" y1="1" x2="0" y2="23"><stop offset="0" stop-color="#454a55"/><stop offset="1" stop-color="#0d0e11"/></linearGradient>
+    <linearGradient id="lcGold" gradientUnits="userSpaceOnUse" x1="0" y1="2" x2="0" y2="22"><stop offset="0" stop-color="#fbe08a"/><stop offset="0.5" stop-color="#dcaa2a"/><stop offset="1" stop-color="#9a6b0a"/></linearGradient>
+    <symbol id="lc-H" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></symbol>
+    <symbol id="lc-D" viewBox="0 0 24 24"><path d="M12 1.5C13.9 5.2 16.6 8.6 19.6 12 16.6 15.4 13.9 18.8 12 22.5 10.1 18.8 7.4 15.4 4.4 12 7.4 8.6 10.1 5.2 12 1.5z"/></symbol>
+    <symbol id="lc-S" viewBox="0 0 24 24"><path d="M12 1.6C9.6 5.6 3 9.4 3 13.9 3 16.6 5.1 18.6 7.6 18.6c1.5 0 2.8-.7 3.6-1.8-.2 2.2-1 4.1-2.8 5.6h7.2c-1.8-1.5-2.6-3.4-2.8-5.6.8 1.1 2.1 1.8 3.6 1.8 2.5 0 4.6-2 4.6-4.7 0-4.5-6.6-8.3-9-12.3z"/></symbol>
+    <symbol id="lc-C" viewBox="0 0 24 24"><circle cx="12" cy="6.9" r="4.4"/><circle cx="7" cy="13.5" r="4.4"/><circle cx="17" cy="13.5" r="4.4"/><circle cx="12" cy="12.4" r="2.8"/><path d="M12 10.5c.2 4.6 1 9.2 3.8 11.9H8.2c2.8-2.7 3.6-7.3 3.8-11.9z"/></symbol>
+    <symbol id="lc-K" viewBox="0 0 24 24"><path d="M3.2 8.6 7.6 12.4 12 5.2l4.4 7.2 4.4-3.8-1.6 9.4H4.8z"/><rect x="4.8" y="18.9" width="14.4" height="2.6" rx=".9"/><circle cx="3.1" cy="7.7" r="1.5"/><circle cx="12" cy="4.2" r="1.6"/><circle cx="20.9" cy="7.7" r="1.5"/></symbol>
+    <symbol id="lc-Q" viewBox="0 0 24 24"><path d="M4.4 18.2 3.6 10c2 1.9 3.6 2.3 5 1.3L12 7l3.4 4.3c1.4 1 3 .6 5-1.3l-.8 8.2z"/><rect x="4.4" y="19" width="15.2" height="2.5" rx=".9"/><circle cx="3.4" cy="9.2" r="1.3"/><circle cx="12" cy="5.4" r="1.6"/><circle cx="20.6" cy="9.2" r="1.3"/></symbol>
+    <symbol id="lc-J" viewBox="0 0 24 24"><path d="M12 2.4l7.6 2.8V11c0 4.7-3.2 8.7-7.6 10.6C7.6 19.7 4.4 15.7 4.4 11V5.2z"/><path fill="#fff7e0" fill-opacity=".55" d="M12 5.3l4.9 1.8V11c0 3.2-2 6-4.9 7.5z"/></symbol>
+    <symbol id="lc-jester" viewBox="0 0 24 24"><path fill="url(#lcInk)" d="M10 12.6c.1-3.5.8-6.9 2-9.4 1.2 2.5 1.9 5.9 2 9.4z"/><path d="M14 12.6c1-2.2 3.4-4.3 6.4-3.6 2.8.7 3.5 4.1 2.3 6-.1-1-.5-1.9-1.5-2.1-1.6-.3-2.4 1.7-2.1 4.5H4.5C4.8 14.6 4 12.6 2.4 12.9 1.4 13.1 1 14 1.3 15 .1 13.1.8 9.7 3.6 9c3-.7 5.4 1.4 6.4 3.6z"/><path fill="url(#lcGold)" d="M4 17.2h16v3.4H4z"/><circle fill="url(#lcGold)" cx="1.4" cy="15.3" r="1.6"/><circle fill="url(#lcGold)" cx="12" cy="3" r="1.8"/><circle fill="url(#lcGold)" cx="22.6" cy="15.3" r="1.6"/></symbol>
+    <symbol id="lc-spark" viewBox="0 0 24 24"><path d="M12 0c.9 7.2 4.8 11.1 12 12-7.2.9-11.1 4.8-12 12-.9-7.2-4.8-11.1-12-12C7.2 11.1 11.1 7.2 12 0z"/></symbol>
+  </defs>
+</svg>
 
 <!-- Scattered-card backdrop. Populated once by app.js from the SAME cardEl()
      the game uses, so these are literally the app's own cards rather than a
@@ -1010,9 +1038,16 @@
          chair. "You drew 5♥" and the +2 trump-card note show over the count
          and score for a moment (#draw-toast): above this line is your own
          chair, so a note there landed on top of it. -->
-    <span class="hand-title"><span id="hand-value-pill" class="hand-value-pill">Value <b id="hand-value">0</b></span><span class="hand-stats-wrap"><span id="draw-toast" class="draw-toast hidden" aria-live="polite"></span><span id="hand-stats" class="hand-stats"></span></span></span>
+    <!-- Two numbers, two names, two looks (Oct 2026). "Value 4 · Score 0",
+         with the value in gold, had players asking which was which. Now:
+         SCORE first, outlined in gold -- your total in this game against the
+         max score ("12/200"); then your cards and what they are worth this
+         round, together in one plain box ("12 cards = 69 pts") that turns
+         green at 5 or less, when you may call. #hand-stats is kept, empty,
+         for the "You drew…" note. -->
+    <span class="hand-title"><span id="hand-score-pill" class="hand-score-pill"><span class="hsp-label">Score</span><b id="hand-score">0</b><span id="hand-score-max" class="hsp-max"></span></span><span id="hand-value-pill" class="hand-value-pill"><span id="hand-count" class="hvp-count"></span><span class="hvp-eq">=</span><b id="hand-value">0</b><span class="hvp-unit">pts</span></span><span class="hand-stats-wrap"><span id="draw-toast" class="draw-toast hidden" aria-live="polite"></span><span id="hand-stats" class="hand-stats"></span></span></span>
     <div class="hand-header-actions">
-      <button id="btn-show-hint" class="hint-btn hidden" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 21h6v-1.5H9V21ZM12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2v.3h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg> Show hint</button>
+      <button id="btn-show-hint" class="hint-btn hidden" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 21h6v-1.5H9V21ZM12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2v.3h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg> <span class="hint-btn-label">Hint</span></button>
       <button id="chat-fab" class="chat-fab hidden" type="button" aria-label="Open chat">
         <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg><span id="chat-badge" class="badge hidden">0</span>
       </button>
@@ -1441,7 +1476,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js?v=screens2-2026-10-26" defer></script>
+<script src="app.js?v=game2-2026-10-27" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
