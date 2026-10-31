@@ -503,6 +503,7 @@
     let idx = 0;
     let savedGame = null;
     let savedRoom = null;
+    let savedPlayerId = null;
 
     // A full, plausible public state. Every field renderGame() and
     // renderOvalTable() read is present, because a missing one shows up as
@@ -657,8 +658,9 @@
       // hand stays on screen and the next real game renders on top of it.
       latestGame = savedGame;
       latestRoom = savedRoom;
+      myPlayerId = savedPlayerId;   // see start(): the lesson's seat was yours
       selectedIds = new Set();
-      savedGame = null; savedRoom = null;
+      savedGame = null; savedRoom = null; savedPlayerId = null;
       showScreen('screen-landing');
       if (completed) el('tutorial-finished').classList.remove('hidden');
     }
@@ -671,6 +673,17 @@
       start() {
         savedGame = latestGame;
         savedRoom = latestRoom;
+        // THE LESSON'S SEAT IS YOUR SEAT (Oct 2026). renderGame() decides
+        // "your turn" by comparing the state's current player with
+        // myPlayerId, and only on your turn are cards tappable and Discard
+        // and Least Count! pressable. The lesson's states name you 'tut-me',
+        // but myPlayerId stayed null (or an old game's id) -- so every card
+        // was dead and Discard stayed grey, and the lesson stopped at step 2
+        // for everyone (GA4, Oct 2026: 23 started, 0 finished). The test
+        // drove the Tutorial object directly, so it never saw the screen.
+        // Restored in finish().
+        savedPlayerId = myPlayerId;
+        myPlayerId = ME;
         active = true;
         idx = 0;
         showScreen('screen-game');
@@ -8643,6 +8656,11 @@
   }
 
   document.getElementById('btn-leave-game').onclick = () => {
+    // In the tutorial there is no game to leave -- the leave button just ends
+    // the lesson, the same as Skip (logged as tutorial_skipped, with the step
+    // reached). Before, it asked "forfeit the game?", logged a game_left for a
+    // game that never existed, and sent a leave to the server for no room.
+    if (Tutorial.isActive()) { Tutorial.skip(); return; }
     const t = document.getElementById('leave-game-title');
     const p = document.getElementById('leave-game-text');
     const cancel = document.getElementById('btn-leave-game-cancel');
