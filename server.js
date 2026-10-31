@@ -3363,13 +3363,21 @@ io.on('connection', (socket) => {
   // countdown -> deal -> reveal sequence, exactly like a real multiplayer
   // game starting -- bots are just regular players to the game engine, the
   // only special handling is how quickly they act (see scheduleTurnTimer).
-  socket.on('create_solo_room', async ({ name, botCount, botDifficulty, firebaseIdToken, platform }, ack) => {
+  socket.on('create_solo_room', async ({ name, botCount, botDifficulty, eliminationScore, firebaseIdToken, platform }, ack) => {
     try {
       if (isRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
       if (isIpRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
       const n = Math.max(1, Math.min(MAX_BOTS, Math.round(Number(botCount)) || 3));
+      // How long the game runs (Oct 2026), picked on the Play vs Bots sheet
+      // (100 / 150 / 200; the sheet starts at 100). Every bot game used to be
+      // 200 with no choice, and most were abandoned part-way (GA4, Oct 2026:
+      // left 161 times, finished 55). Not one of the usual options -- or an
+      // older app sending nothing at all -- gets the old 200 rather than a
+      // refused game.
+      const soloMaxScore = MAX_SCORE_OPTIONS.includes(Number(eliminationScore))
+        ? Number(eliminationScore) : DEFAULT_ELIMINATION_SCORE;
       // Set BEFORE the bots are created: addBotToRoom reads room.botDifficulty
       // to pick each archetype, so assigning it afterwards would seat everyone
       // from the default tier and silently ignore the player's choice.
@@ -3406,7 +3414,7 @@ io.on('connection', (socket) => {
       socket.join(code);
 
       clearAllRejoinRequests(room);
-      room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
+      room.game = new LeastCountGame(room.order.slice(), soloMaxScore);
       room.game.startRound();
       // Per-round counters for the bots' anti-stall overrides (see
       // botDeclareThreshold). Reset with the deal, or a patient bot would
