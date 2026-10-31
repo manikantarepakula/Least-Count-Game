@@ -4417,6 +4417,11 @@
     return name;
   }
 
+  // Set by "Play with friends" at the end of a bot game (see
+  // playWithFriendsFromBots): the table it makes opens with a line pointing at
+  // the WhatsApp button, since inviting is the whole reason they are there.
+  let inviteNudgePending = false;
+
   document.getElementById('btn-create').onclick = async () => {
     const name = getPlayerName();
     if (!name) return promptForName();
@@ -4428,6 +4433,10 @@
       loadChatHistory(res.chatHistory);
       showChatFab();
       showScreen('screen-lobby');
+      if (inviteNudgePending) {
+        inviteNudgePending = false;
+        showRoomcodeFeedback('Now invite your friends on WhatsApp ↓', 12000);
+      }
     });
   };
 
@@ -4500,11 +4509,11 @@
   // short on-screen "Copied!"/"Shared!" confirmation instead of relying on
   // the browser's own (easy-to-miss) clipboard toast.
   let roomcodeFeedbackTimer = null;
-  function showRoomcodeFeedback(text) {
+  function showRoomcodeFeedback(text, ms) {
     const el = document.getElementById('roomcode-action-feedback');
     el.textContent = text;
     if (roomcodeFeedbackTimer) clearTimeout(roomcodeFeedbackTimer);
-    roomcodeFeedbackTimer = setTimeout(() => { el.textContent = ''; }, 2500);
+    roomcodeFeedbackTimer = setTimeout(() => { el.textContent = ''; }, ms || 2500);
   }
   // Two link shapes, because there are two kinds of table:
   //   ?g=sharma-family-k2p  -- a permanent group. This link never expires,
@@ -5356,11 +5365,81 @@
     syncDropdown(sel);
   })();
 
+  // ---- How long a bot game runs (Oct 2026) ----
+  // A third row on the Play vs Bots sheet: Max score 100 / 150 / 200, and it
+  // starts at 100. Every bot game used to run to 200 with no choice, and most
+  // were abandoned part-way (GA4, Oct 2026: left 161 times, finished 55 -- in
+  // the app only 11 people ever finished one). Mani's reasoning for 100: a
+  // short game against bots, with energy left over for a real game with
+  // friends. Whatever a game starts with is remembered for the next one, so
+  // someone who prefers 200 picks it once. Friends' tables keep 200.
+  //
+  // Built here rather than written into index.html, so the change ships in
+  // app.js alone. It copies the sheet's own markup (sheet-field, sheet-label,
+  // chips, a hidden chip-source select), so it looks exactly like the Bots and
+  // Level rows above it.
+  const BOT_MAX_SCORE_KEY = 'leastcount_bot_maxscore';
+  const BOT_MAX_SCORES = [100, 150, 200];
+  const BOT_DEFAULT_MAX_SCORE = 100;
+  (function addBotMaxScoreRow() {
+    const sheet = document.getElementById('sheet-bots');
+    const go = document.getElementById('btn-solo-start');
+    if (!sheet || !go || go.parentNode !== sheet || document.getElementById('input-bot-maxscore')) return;
+    const field = document.createElement('div');
+    field.className = 'sheet-field';
+    const label = document.createElement('span');
+    label.className = 'sheet-label';
+    label.id = 'label-bot-maxscore';
+    label.textContent = 'Max score';
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    chips.setAttribute('data-for', 'input-bot-maxscore');
+    chips.setAttribute('role', 'group');
+    chips.setAttribute('aria-labelledby', 'label-bot-maxscore');
+    field.appendChild(label);
+    field.appendChild(chips);
+    const select = document.createElement('select');
+    select.id = 'input-bot-maxscore';
+    select.className = 'chip-source';
+    select.hidden = true;
+    select.setAttribute('aria-hidden', 'true');
+    select.tabIndex = -1;
+    BOT_MAX_SCORES.forEach((v) => {
+      const opt = document.createElement('option');
+      opt.value = String(v);
+      opt.textContent = String(v);
+      select.appendChild(opt);
+    });
+    // Under the Level row; the hidden select goes with the other two.
+    const level = sheet.querySelector('.chips[data-for="input-bot-difficulty"]');
+    const levelField = level && level.parentNode;
+    if (levelField && levelField.parentNode === sheet) sheet.insertBefore(field, levelField.nextSibling);
+    else sheet.insertBefore(field, go);
+    sheet.insertBefore(select, go);
+    // Set once the options are attached -- see populateMaxScoreSelect on why.
+    select.value = String(defaultBotMaxScore());
+    select.addEventListener('change', () => rememberBotMaxScore(select.value));
+  })();
+  function rememberBotMaxScore(v) {
+    try { localStorage.setItem(BOT_MAX_SCORE_KEY, String(v)); } catch (e) { /* session only */ }
+  }
+  function defaultBotMaxScore() {
+    let saved = NaN;
+    try { saved = Number(localStorage.getItem(BOT_MAX_SCORE_KEY)); } catch (e) { /* fine */ }
+    return BOT_MAX_SCORES.indexOf(saved) !== -1 ? saved : BOT_DEFAULT_MAX_SCORE;
+  }
+  function botMaxScore() {
+    const el = document.getElementById('input-bot-maxscore');
+    const v = Number(el && el.value);
+    return BOT_MAX_SCORES.indexOf(v) !== -1 ? v : BOT_DEFAULT_MAX_SCORE;
+  }
+
   // Home's choices are one-tap buttons (Oct 2026) -- see initChips below.
   // The saved difficulty is restored first so the right button lights up.
   restoreBotDifficulty();
   initChips('input-bot-count', (opt) => opt.value);
   initChips('input-bot-difficulty');
+  initChips('input-bot-maxscore');
   initChips('input-online-playercount');
   initDropdown('input-maxscore');
   initDropdown('round-maxscore-select');
@@ -5472,10 +5551,14 @@
     // only stores what was actually typed.
     const name = getPlayerName() || 'You';
     const botCount = Number(document.getElementById('input-bot-count').value) || 3;
+    // Remembered as the next game's starting point too, so a player who likes
+    // short games doesn't have to pick 100 every time.
+    const maxScore = botMaxScore();
+    rememberBotMaxScore(maxScore);
     const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_solo_room', { name, botCount, botDifficulty: botDifficulty(), firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+    socket.emit('create_solo_room', { name, botCount, botDifficulty: botDifficulty(), eliminationScore: maxScore, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
       if (!res.ok) return setLandingError(res.error);
-      logAnalytics('solo_game_started', { bot_count: botCount });
+      logAnalytics('solo_game_started', { bot_count: botCount, max_score: maxScore });
       saveSession(res.roomCode, res.playerId, res.sessionToken);
       loadChatHistory(res.chatHistory);
       showChatFab();
@@ -8439,6 +8522,63 @@
     container.appendChild(buildInstallCard());
   }
 
+  // ---- After a bot game: play with friends (Oct 2026) ----
+  // GA4, Oct 2026: people at a friend's table finished games about twice as
+  // often as people playing bots (14 of 22 against 11 of 33). So the end of a
+  // bot game -- the moment someone has just enjoyed one -- points them at a
+  // table of their own. One tap leaves this game, makes a table (asking for a
+  // name first if there isn't one: other people will see it) and opens the
+  // lobby, where Invite on WhatsApp is the big button.
+  //
+  // Opening WhatsApp by itself after all that would need window.open from
+  // inside a server reply, which browsers block as a popup -- and the fallback
+  // navigates away from the game. So the last tap stays the player's own.
+  //
+  // A button of its own above Play Again, not a card in the results: the
+  // results list scrolls when space is short, and a card at its foot was cut
+  // off on a normal phone. Made once, from existing classes (a green
+  // secondary button with Home's handshake picture), so it needs no new styles
+  // and ships in app.js alone.
+  // The line over the button (Mani's idea): a nudge with a grin, not a sales
+  // pitch. Which one depends on how the game went. Both short enough for one
+  // line on a 360px phone -- a word left alone on a second line looked broken.
+  const FRIENDS_LINE_WON = 'You beat the bots. Your friends are next!';
+  const FRIENDS_LINE_LOST = 'Bots this fun? Imagine your friends!';
+
+  function friendsButton() {
+    let btn = document.getElementById('btn-gameover-friends');
+    if (btn) return btn;
+    const again = document.getElementById('btn-new-game');
+    if (!again || !again.parentNode) return null;
+    const line = document.createElement('p');
+    line.id = 'gameover-friends-line';
+    line.className = 'hint hidden';
+    line.style.cssText = 'margin:12px 4px 0;font-size:14px;font-weight:600;line-height:1.35;color:#fff;text-wrap:balance;';
+    again.parentNode.insertBefore(line, again);
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'btn-gameover-friends';
+    btn.className = 'secondary hidden';
+    // The words in a span of their own: an .icon that is its button's only
+    // element loses its right margin (button .icon:only-child).
+    btn.innerHTML = '<span class="icon art art-friends" aria-hidden="true"></span><span>Play with Friends</span>';
+    // Space from the results above and from Play Again below. Inline, so no
+    // style.css change is needed for one button.
+    btn.style.margin = '8px 0 10px';
+    btn.addEventListener('click', playWithFriendsFromBots);
+    again.parentNode.insertBefore(btn, again);
+    return btn;
+  }
+
+  function playWithFriendsFromBots() {
+    logAnalytics('friends_card_tapped');
+    inviteNudgePending = true;
+    // Through the Create Room button itself, so a missing name is asked for
+    // and the table is made straight after, exactly as on Home (promptForName
+    // resumes the last button tapped). No interstitial on this way out.
+    leaveRoom({ noAd: true, then: () => document.getElementById('btn-create').click() });
+  }
+
   function showGameOver(game) {
     logAnalytics('game_completed', {
       player_count: latestRoom ? latestRoom.players.length : undefined,
@@ -8482,7 +8622,23 @@
       row.innerHTML = rank + `<span class="go-name">${escapeHtml(playerName(pid))}</span><span class="go-score">${deltaHtml}${Number(score) || 0} pts total</span>`;
       body.appendChild(row);
     });
-    maybeShowInstallCard(body);
+    // A bot game ends with "Play with friends"; any other game with the
+    // install card (web only). Never both -- one ask at a time.
+    const soloGame = amSoloVsBots();
+    const friendsBtn = friendsButton();
+    if (friendsBtn) friendsBtn.classList.toggle('hidden', !soloGame);
+    const friendsLine = document.getElementById('gameover-friends-line');
+    if (friendsLine) {
+      friendsLine.textContent = game.winner === myPlayerId ? FRIENDS_LINE_WON : FRIENDS_LINE_LOST;
+      friendsLine.classList.toggle('hidden', !soloGame);
+    }
+    if (soloGame) logAnalytics('friends_card_shown');
+    else maybeShowInstallCard(body);
+    // "(same room)" only means something when other people are at the table:
+    // it says the same friends play again. Against bots it is just Play Again,
+    // and it starts the next game straight away (see soloRestartPending).
+    const againBtn = document.getElementById('btn-new-game');
+    if (againBtn) againBtn.textContent = soloGame ? 'Play Again' : 'Play Again (same room)';
     const isHost = latestRoom && latestRoom.hostPlayerId === myPlayerId;
     document.getElementById('btn-new-game').classList.toggle('hidden', !isHost);
     document.getElementById('gameover-hint').textContent = isHost ? '' : 'Waiting for host to start a new game...';
@@ -8490,9 +8646,16 @@
     launchConfetti();
   }
 
+  // Play Again against bots goes straight into the next game (Oct 2026): with
+  // nobody to wait for, the lobby in between was only one more tap. The flag
+  // is read by room_update's lobby branch, and is set BEFORE the emit because
+  // the server sends that lobby update ahead of its reply.
+  let soloRestartPending = false;
   document.getElementById('btn-new-game').onclick = () => {
+    soloRestartPending = amSoloVsBots();
+    logAnalytics('play_again', { mode: soloRestartPending ? 'bots' : 'friends' });
     socket.emit('new_game', { roomCode: myRoomCode }, (res) => {
-      if (!res.ok) setGameError(res.error);
+      if (!res.ok) { soloRestartPending = false; setGameError(res.error); }
     });
   };
 
@@ -8521,7 +8684,13 @@
   }
 
   // ---------------- leave room ----------------
-  function leaveRoom() {
+  // opts (optional): { then: fn } runs once the leave has gone through and
+  // Home is showing; { noAd: true } skips the interstitial. Used by "Play with
+  // friends" after a bot game, which goes straight on to making a table. The
+  // buttons that call this directly pass a click event, which has neither.
+  function leaveRoom(opts) {
+    const after = opts && typeof opts.then === 'function' ? opts.then : null;
+    const noAd = !!(opts && opts.noAd === true);
     try {
       if (latestGame && !latestGame.gameOver && latestGame.roundNumber) {
         logAnalytics('game_left', Object.assign({ rounds_played: latestGame.roundNumber }, analyticsGameInfo(latestGame)));
@@ -8574,7 +8743,10 @@
       // admob-init.js), so repeatedly hopping in and out of rooms won't
       // produce an ad every time. adsRemoved covers the paid Remove Ads
       // purchase -- those players must never see this.
-      if (window.LCAds && !adsRemoved) window.LCAds.showInterstitial();
+      if (window.LCAds && !adsRemoved && !noAd) window.LCAds.showInterstitial();
+      if (after) {
+        try { after(); } catch (e) { console.warn('[leave] follow-on step failed:', e && e.message); }
+      }
     });
   }
   // Leaving from the TABLE. Until now the only exits were the lobby, the
@@ -10536,11 +10708,41 @@
     // knownPlayerNames/playerName() above. Cheap no-op for names already known.
     room.players.forEach((p) => { knownPlayerNames[p.playerId] = p.name; });
     if (room.phase === 'lobby') {
+      // Back from a finished game (Play Again): the next one starts at the
+      // max score this one was played to, not the lobby's default of 200 --
+      // so a 100-point bot game is followed by another 100-point game. Only on
+      // the way in (latestGame is cleared just below), so a pick made in the
+      // lobby is never overwritten by the next room_update.
+      if (latestGame && latestGame.gameOver && MAX_SCORE_OPTIONS.indexOf(latestGame.eliminationScore) !== -1) {
+        const maxSel = document.getElementById('input-maxscore');
+        if (maxSel) { maxSel.value = String(latestGame.eliminationScore); syncDropdown(maxSel); }
+      }
       latestGame = null;
       window.__lastRoundResultShownFor = null;
       document.getElementById('overlay-round-result').classList.add('hidden');
       document.getElementById('overlay-gameover').classList.add('hidden');
       renderLobby(room);
+      // Play Again against bots: start the next game now, at the max score
+      // just carried over above, and stay on the game screen -- the countdown
+      // and deal follow as usual. Only if that fails does the lobby show,
+      // with the reason.
+      if (soloRestartPending) {
+        soloRestartPending = false;
+        // Staying on the game screen, so nothing from the last game's ending
+        // may still be on a timer -- the same reset leaveRoom() does.
+        revealPhaseActive = false;
+        if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+        revealPendingGame = null;
+        document.getElementById('screen-game').classList.remove('reveal-phase');
+        clearDeclareCallout();
+        const eliminationScore = Number(document.getElementById('input-maxscore').value) || undefined;
+        socket.emit('start_game', { roomCode: myRoomCode, eliminationScore }, (res) => {
+          if (res && res.ok) return;
+          showScreen('screen-lobby');
+          document.getElementById('lobby-error').textContent = (res && res.error) || 'Could not start the game.';
+        });
+        return;
+      }
       showScreen('screen-lobby');
     } else if (room.phase === 'starting') {
       // The countdown/dealing sequence (driven entirely by the separate
