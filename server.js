@@ -1301,8 +1301,15 @@ function introMsForRound(roundNumber) {
 // counts both.
 const DECLARE_CALLOUT_MS = 2400;    // keep in sync with app.js
 const ROUND_REVEAL_HOLD_MS = DECLARE_CALLOUT_MS + 4000;  // 4000 = REVEAL_HOLD_MS (public/app.js)
-const SCORECARD_HOLD_MS = 10000;
+// 5s, was 10s (Nov 2026): "after the round ends it keeps us waiting for 10
+// seconds". Start Now still skips it, for anyone at the table.
+const SCORECARD_HOLD_MS = 5000;
 const AUTO_NEXT_ROUND_MS = ROUND_REVEAL_HOLD_MS + SCORECARD_HOLD_MS;
+// When the countdown is re-armed after something held the table between rounds
+// (a rejoin request, a rewarded ad, a player leaving), it carries on from the
+// round's own schedule rather than starting the whole wait again -- but never
+// with less than this left, so nobody is dealt in without seeing it coming.
+const REARM_MIN_MS = 3000;
 
 // Every 4th completed round (4, 8, 12...) the client plays an interstitial as
 // the NEXT round starts, so the ad overlaps the countdown/deal/reveal
@@ -2165,6 +2172,16 @@ function awaitingSeatInfo(room) {
   return null;
 }
 
+// The same idea for a rejoin request the host has not answered yet. The
+// countdown stops for it (see request_rejoin), and only the host was ever told
+// why -- everyone else saw the countdown vanish and a Start Now that did
+// nothing. Named, so their screens can say who the table is waiting on.
+function awaitingRejoinInfo(room) {
+  if (!room || !room.pendingRejoins || !room.pendingRejoins.size) return null;
+  const [playerId, r] = room.pendingRejoins.entries().next().value;
+  return { playerId, name: (r && r.name) || 'A player' };
+}
+
 function publicRoomInfo(room) {
   return {
     roomCode: room.code,
@@ -2186,6 +2203,7 @@ function publicRoomInfo(room) {
     // already dismissed the scorecard, leaving them on a dead game screen.
     // Named rather than a bare boolean so the wait can say who it is waiting on.
     awaitingSeat: awaitingSeatInfo(room),
+    awaitingRejoin: awaitingRejoinInfo(room),
     players: room.order.map((pid) => ({
       playerId: pid,
       name: room.players.get(pid).name,
@@ -2639,9 +2657,11 @@ function seatRejoiner(room, playerId) {
   if (p && p.socketId) {
     io.to(p.socketId).emit('rejoin_result', { ok: true, score: room.game.scores[playerId] });
   }
+  // Armed BEFORE the broadcast, so the state everyone receives carries the
+  // countdown. The other way round, screens showed no countdown at all.
+  if (!rejoinRequestsPending(room) && !adGrantsPending(room)) scheduleAutoNextRound(room);
   broadcastRoom(room);
   broadcastGameState(room);
-  if (!rejoinRequestsPending(room) && !adGrantsPending(room)) scheduleAutoNextRound(room);
   return true;
 }
 
@@ -2735,7 +2755,11 @@ function denyRejoin(room, playerId, reason) {
   // Held only while SOMETHING is pending -- with several eliminated in one
   // round, the table waits for the last of them, not the first. Includes
   // anyone part-way through a rewarded ad, for the same reason.
-  if (!rejoinRequestsPending(room) && !adGrantsPending(room)) scheduleAutoNextRound(room);
+  // broadcastRoom so everyone's "waiting for the host" line clears; the
+  // re-arm sends the restarted countdown. Neither was sent before, so after a
+  // "no" the table sat with no countdown on screen.
+  broadcastRoom(room);
+  if (!rejoinRequestsPending(room) && !adGrantsPending(room)) rearmAutoNextRound(room);
 }
 
 function broadcastGameState(room) {
@@ -2981,6 +3005,7 @@ function startNextRound(room, eliminationScore) {
   if (!room || !room.game) return false;
   if (!room.game.roundOver || room.game.gameOver) return false;
   clearAutoNextRoundTimer(room);
+  room.autoNextDueAt = null;   // belonged to the round that just ended
 
   // The host may optionally change the max score before the next round (to
   // extend or shorten the game). Only touch it if a different value was
@@ -3059,7 +3084,18 @@ function scheduleAutoNextRound(room) {
   expireAdGrants(room);
   if (adGrantsPending(room)) return;
 
-  room.autoNextRoundAt = Date.now() + AUTO_NEXT_ROUND_MS;
+  // From the round's own deadline, fixed when it ended (onRoundEnded). Every
+  // re-arm used to start the full wait again from scratch -- so a player
+  // leaving the scorecard pushed the next round back 16 seconds while every
+  // screen kept counting down to the old time and then sat on "Starting next
+  // round..." with nothing happening.
+  const now = Date.now();
+  const due = room.autoNextDueAt || (now + AUTO_NEXT_ROUND_MS);
+  const delay = Math.max(REARM_MIN_MS, due - now);
+  // expireAdGrants() above can seat someone, and seating re-arms this same
+  // timer from inside this call. Drop that one rather than leave two running.
+  if (room.autoNextTimer) { clearTimeout(room.autoNextTimer); room.autoNextTimer = null; }
+  room.autoNextRoundAt = now + delay;
   room.autoNextTimer = setTimeout(() => {
     room.autoNextTimer = null;
     room.autoNextRoundAt = null;
@@ -3081,7 +3117,16 @@ function scheduleAutoNextRound(room) {
     } catch (e) {
       console.error(`Auto next round failed for room ${room.code}:`, e.message);
     }
-  }, AUTO_NEXT_ROUND_MS);
+  }, delay);
+}
+
+// For every re-arm between rounds (anything other than the round ending).
+// The countdown only reaches players inside game_state, so a re-arm nobody is
+// told about leaves their screens counting to a deadline that no longer exists.
+function rearmAutoNextRound(room) {
+  if (!room || !room.game || !room.game.roundOver || room.game.gameOver) return;
+  scheduleAutoNextRound(room);
+  if (room.autoNextRoundAt) broadcastGameState(room);
 }
 
 // Called from every path that can end a round (human declare, turn-timeout
@@ -3129,6 +3174,9 @@ function onRoundEnded(room) {
     recordGameResult(room);
     clearAutoNextRoundTimer(room);
   } else {
+    // The round's deadline, set once here. Re-arms later carry on from it
+    // (see scheduleAutoNextRound).
+    room.autoNextDueAt = Date.now() + AUTO_NEXT_ROUND_MS;
     scheduleAutoNextRound(room);
   }
 }
@@ -4260,7 +4308,7 @@ io.on('connection', (socket) => {
         : seatAdmittedPlayer(room, entry.playerId, grant.payload);
 
       // The table has been held up waiting for this ad; let it move again.
-      if (!rejoinRequestsPending(room) && !adGrantsPending(room)) scheduleAutoNextRound(room);
+      if (!rejoinRequestsPending(room) && !adGrantsPending(room)) rearmAutoNextRound(room);
       ack && ack({ ok: !!seated });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -4571,6 +4619,10 @@ io.on('connection', (socket) => {
       // start", which tells the tapper nothing and looks like a glitch.
       expireAdGrants(room);
       if (adGrantsPending(room)) throw new Error('Waiting for a player to take their seat.');
+      // Same for an unanswered rejoin request: it used to fall through to
+      // "Round is no longer waiting to start", which the app read as "the
+      // round is starting anyway" and closed the scorecard on a dead table.
+      if (rejoinRequestsPending(room)) throw new Error('Waiting for the host to answer a rejoin request.');
 
       // This is now the host's "Start now" override, not the only way a round
       // can begin -- the auto-advance countdown (scheduleAutoNextRound) starts
@@ -4728,15 +4780,18 @@ io.on('connection', (socket) => {
         if (nextHost) room.hostPlayerId = nextHost;
       }
 
-      broadcastRoom(room);
-      if (room.game) broadcastGameState(room);
       // Refresh the host's pending-request list (the leaver's row has to
       // disappear from it) and re-arm the countdown if theirs was the last
       // decision the table was waiting on. scheduleAutoNextRound() no-ops
       // unless the round is genuinely over, so this is safe on both the
       // mid-round spectator exit and the ordinary between-rounds one.
+      // Armed BEFORE the broadcasts below so they carry the countdown, and it
+      // keeps the round's own deadline: someone leaving the scorecard no
+      // longer pushes everyone else's next round back.
       notifyHostOfRejoinRequests(room);
       if (!rejoinRequestsPending(room) && !adGrantsPending(room)) scheduleAutoNextRound(room);
+      broadcastRoom(room);
+      if (room.game) broadcastGameState(room);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
@@ -5037,7 +5092,7 @@ setInterval(() => {
   // round hostage, and expireAdGrants also tells that player their window
   // closed rather than leaving them staring at a dead "watch to rejoin" sheet.
   for (const room of rooms.values()) {
-    if (expireAdGrants(room) > 0 && !rejoinRequestsPending(room)) scheduleAutoNextRound(room);
+    if (expireAdGrants(room) > 0 && !rejoinRequestsPending(room)) rearmAutoNextRound(room);
   }
   // Same sweep also prunes expired IP rate-limit buckets -- otherwise every
   // distinct visitor IP the server has ever seen stays in memory forever.
