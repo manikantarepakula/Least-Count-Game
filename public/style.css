@@ -5700,6 +5700,11 @@ html.gs2 .card.ace.s-S:not(.mini) .card-center::before {
   background: radial-gradient(circle, rgba(242,193,78,0.16) 0%, rgba(242,193,78,0.03) 70%);
 }
 html.gs2 .card.ace.s-S:not(.mini) .card-center > * { position: relative; }
+/* ...except the open card and the joker on the table, which have no corners
+   (see .table-center above): there the big-suit ace had no "A" anywhere on
+   it, only the suit (Nov 2026). Letter and suit, like every other card. */
+html.gs2 .table-center .card.ace .center-rank { display: block; }
+html.gs2 .table-center .card.ace .center-suit { transform: none; }
 
 /* J, Q, K: a gold frame, a gold crown (or coronet, or shield) and the
    letter -- the suit is in the corners. Not on the tiny cards in a chair's
