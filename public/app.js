@@ -2580,6 +2580,15 @@
     // ended -- and its timer must not start that round's reveal on top of
     // this one.
     clearDeclareCallout();
+    // Same for last round's cards still face-up on this screen: someone else
+    // tapped through and hit Start Now first. Left running, the reveal's own
+    // timer opened LAST round's scorecard over the new deal.
+    if (revealPhaseActive) {
+      revealPhaseActive = false;
+      if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+      revealPendingGame = null;
+      document.getElementById('screen-game').classList.remove('reveal-phase');
+    }
     // No commentary over the deal; the new round's stakes wait for the table.
     commentaryHush();
 
@@ -6850,6 +6859,8 @@
   }
 
   // ---------------- turn timer ----------------
+  let turnTimerSpanFor = null;
+  let turnTimerSpan = 1;
   function updateTurnTimerDisplay(deadline) {
     const el = document.getElementById('turn-timer');
     if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
@@ -6863,8 +6874,14 @@
     // How long this turn was given, measured rather than hardcoded: the server
     // uses TURN_SECONDS for people and a shorter, per-character delay for bots,
     // and a ring drawn against the wrong span would drain at the wrong rate.
-    // Captured once, when the deadline changes, not on every tick.
-    const span = Math.max(1, deadline - Date.now());
+    // Measured once PER DEADLINE (Nov 2026). renderGame calls this on every
+    // update -- someone's reaction, a chat line, a room change -- and measuring
+    // again each time made the bar jump back to full every few seconds.
+    if (deadline !== turnTimerSpanFor) {
+      turnTimerSpanFor = deadline;
+      turnTimerSpan = Math.max(1, deadline - Date.now());
+    }
+    const span = turnTimerSpan;
     function tick() {
       const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
       // The ring on the active chair. One style write per tick on one element.
@@ -7946,8 +7963,13 @@
     // frozen screen above was reached in the first place. Disable it and say
     // who we are waiting for.
     const waitingFor = latestRoom && latestRoom.awaitingSeat;
-    nextBtn.disabled = !!waitingFor;
-    nextBtn.classList.toggle('waiting-seat', !!waitingFor);
+    // An eliminated player has asked to come back and the host hasn't answered
+    // yet (Nov 2026). The server holds the round for that too, and only the
+    // host was ever told: everyone else saw the countdown disappear and a
+    // Start Now that did nothing. Same treatment as a seat being taken.
+    const rejoinAsk = !waitingFor && latestRoom && latestRoom.awaitingRejoin;
+    nextBtn.disabled = !!(waitingFor || rejoinAsk);
+    nextBtn.classList.toggle('waiting-seat', !!(waitingFor || rejoinAsk));
     // On the final round there's no next round to start -- instead everyone
     // (not just the host) gets a "See Final Result" button that leads into
     // the separate celebratory trophy screen, at their own pace rather than
@@ -7965,6 +7987,13 @@
       // "Next round in 3s..." sitting there while nothing happens is precisely
       // the thing that reads as a freeze.
       hintEl.textContent = waitingFor.name + ' is taking their seat\u2026';
+    } else if (rejoinAsk) {
+      const iAmHost = latestRoom.hostPlayerId === myPlayerId;
+      hintEl.textContent = rejoinAsk.playerId === myPlayerId
+        ? 'Waiting for the host to answer\u2026'
+        : iAmHost
+          ? rejoinAsk.name + ' wants to rejoin. Answer at the top.'
+          : 'Waiting for the host to answer ' + rejoinAsk.name + '\u2026';
     } else if (game.gameOver) {
       hintEl.textContent = ''; // final scorecard is read at each player's own pace
     } else if (secs !== null) {
@@ -8084,6 +8113,8 @@
     document.getElementById('round-result-maxscore').textContent = `Playing to ${game.eliminationScore} pts`;
     const maxStatus = document.getElementById('round-maxscore-status');
     if (maxStatus) maxStatus.textContent = '';   // a refusal from last round is stale
+    // ...and so is a Start Now tap from last round still waiting on a reply.
+    document.getElementById('overlay-round-result').classList.remove('busy');
     // Fresh list for every new result screen (this runs once per round, see
     // __lastRoundResultShownFor), so nothing from a previous game can linger.
     const maxSelEl = document.getElementById('round-maxscore-select');
@@ -8128,6 +8159,7 @@
     updateRoundResultHostControls();
   }
 
+  let nextRoundBusyGuard = null;
   document.getElementById('btn-next-round').onclick = () => {
     const overlay = document.getElementById('overlay-round-result');
     const maxScoreRow = document.getElementById('round-maxscore-row');
@@ -8144,19 +8176,25 @@
     // arrives on its own (game_starting) and hides this overlay anyway, so
     // nothing is lost on the success path.
     overlay.classList.add('busy');
+    const status = document.getElementById('round-maxscore-status');
+    if (status) status.textContent = '';
+    // A reply that never comes (the connection dropped mid-tap) used to leave
+    // the button dimmed and untappable for the rest of the game. The countdown
+    // still starts the round, so just give the button back.
+    clearTimeout(nextRoundBusyGuard);
+    nextRoundBusyGuard = setTimeout(() => overlay.classList.remove('busy'), 5000);
     socket.emit('next_round', { roomCode: myRoomCode, eliminationScore }, (res) => {
+      clearTimeout(nextRoundBusyGuard);
       overlay.classList.remove('busy');
       if (res && res.ok) { overlay.classList.add('hidden'); return; }
-      // Losing the race with the auto-advance countdown is a normal outcome,
-      // not an error worth showing: the tap landed at the same instant the
-      // timer fired, and the round is starting either way. Hide, because it
-      // really is starting.
-      if (res && res.error === 'Round is no longer waiting to start.') {
-        overlay.classList.add('hidden');
-        return;
-      }
-      // Anything else: stay exactly where we are and say why.
-      setGameError((res && res.error) || 'Could not start the next round.');
+      // Lost the race with the countdown: the round is already starting, and
+      // the start sequence has closed this panel by itself. Nothing to say.
+      if (overlay.classList.contains('hidden')) return;
+      // Anything else: stay, and say why ON this panel. It used to go to
+      // #game-error, which sits on the table underneath -- so the tap looked
+      // like it did nothing at all. (It also used to close the panel for one
+      // refusal, leaving a dead table; see next_round in server.js.)
+      if (status) status.textContent = friendlyError((res && res.error) || 'Could not start the next round.');
     });
   };
 
