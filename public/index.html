@@ -19,6 +19,20 @@
      browser to shrink the page to reveal it. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=overlays-content" />
 <title>Least Count</title>
+<!-- Diwali (7-9 Nov 2026): the theme class goes on before the first paint,
+     so the opening screen is festive from its very first frame. app.js sets
+     the same class (isDiwali) -- this is only the early copy. Same dates,
+     India time; ?theme=diwali previews it on any day. -->
+<script>
+  (function () {
+    try {
+      var q = new URLSearchParams(location.search).get('theme');
+      var preview = q === 'diwali' || (q !== 'off' && sessionStorage.getItem('lc_theme_preview') === 'diwali');
+      var ist = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+      if (preview || (ist >= '2026-11-07' && ist <= '2026-11-09')) document.documentElement.classList.add('diwali');
+    } catch (e) { /* app.js decides, a moment later */ }
+  })();
+</script>
 
 <!-- ------------------------------------------------------------------
      Link preview (Open Graph) -- added Sept 2026.
@@ -87,7 +101,7 @@
      server.js) can never pair the new markup with the old styles or code.
      The same ?v= is on app.js at the bottom of this file. -->
 
-<link rel="stylesheet" href="style.css?v=game2d-2026-10-27" />
+<link rel="stylesheet" href="style.css?v=diwali2-2026-11-07" />
 <!-- The 3D icons are inside style.css now (Oct 2026), at the end, broken into
      short lines: as a stylesheet of their own (home-art.css) their very long
      lines did not survive copy-and-paste into GitHub. home-art.css is no
@@ -248,6 +262,19 @@
     <div class="landing-card landing-card-1">K<span>♣</span></div>
     <div class="landing-card landing-card-2">Q<span>♠</span></div>
     <div class="landing-card landing-card-3">2<span>♥</span></div>
+  </div>
+  <!-- Diwali (7-9 Nov 2026): shown only under html.diwali (style.css) --
+       a thoranam across the top, fireworks opening in the dark, "Happy
+       Diwali" and three diyas under the cards. -->
+  <div class="intro-diwali" aria-hidden="true">
+    <div class="intro-toran"></div>
+    <div class="intro-bursts"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="intro-dw-title">Happy Diwali</div>
+    <div class="intro-dw-diyas">
+      <span class="hd-diya"><span class="hd-flame"></span></span>
+      <span class="hd-diya hd-mid"><span class="hd-flame"></span></span>
+      <span class="hd-diya"><span class="hd-flame"></span></span>
+    </div>
   </div>
 </div>
 
@@ -1476,7 +1503,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js?v=game2-2026-10-27" defer></script>
+<script src="app.js?v=diwali2-2026-11-07" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
