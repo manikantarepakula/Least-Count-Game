@@ -6611,16 +6611,25 @@ html.gs2 #hand .card.stacked-3 {
      - Fireworks (app.js) where the confetti was.
    ========================================================================== */
 
-/* ---- Marigold garland, hanging under the Home top bar ---- */
-html.diwali #screen-landing .landing-topbar { position: relative; }
-html.diwali #screen-landing .landing-topbar::after {
-  content: ''; position: absolute; left: 0; right: 0; bottom: -11px; height: 13px;
+/* ---- Thoranam, hanging under the Home top bar ----
+   A string of marigolds, with a drop of two more hanging every 36px and
+   mango leaves between them. The panes below move down to make room for it
+   -- on Groups, the first card used to sit right on top of it. */
+html.diwali #screen-landing .landing-topbar,
+html.diwali .thoranam-host { position: relative; }
+html.diwali #screen-landing .landing-topbar::after,
+html.diwali .intro-toran {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -25px; height: 26px;
   pointer-events: none; z-index: 2;
   background:
-    radial-gradient(4px 2.2px at 12px 10px, #2f9e44 0 92%, transparent 100%) 0 0 / 24px 13px repeat-x,
-    radial-gradient(circle at 6px 6px, #ffe066 0 1.8px, #ffb01f 2.4px 4.2px, #e8650c 4.6px 5.5px, transparent 5.9px) 0 0 / 12px 13px repeat-x;
+    radial-gradient(5px 2.6px at 9px 12px, #2f9e44 0 90%, transparent 100%) 0 0 / 36px 26px repeat-x,
+    radial-gradient(5px 2.6px at 27px 12px, #2b8a3e 0 90%, transparent 100%) 0 0 / 36px 26px repeat-x,
+    radial-gradient(circle at 18px 15px, #ffe066 0 1.5px, #ffb01f 2px 3.6px, #e8650c 4px 4.6px, transparent 5px) 0 0 / 36px 26px repeat-x,
+    radial-gradient(circle at 18px 21.5px, #ffe066 0 1.3px, #ffb01f 1.8px 3.2px, #e8650c 3.5px 4.1px, transparent 4.5px) 0 0 / 36px 26px repeat-x,
+    radial-gradient(circle at 6px 6px, #ffe066 0 1.8px, #ffb01f 2.4px 4.2px, #e8650c 4.6px 5.5px, transparent 5.9px) 0 0 / 12px 26px repeat-x;
   filter: drop-shadow(0 2px 2px rgba(0,0,0,0.45));
 }
+html.diwali #screen-landing .mode-blocks { margin-top: 20px; }
 
 /* ---- The Diwali panel, in the space under the three ways to play ---- */
 .home-diwali { display: none; }
@@ -6699,13 +6708,35 @@ html.diwali .hd-sparks i:nth-child(6) { left: 93%; top: 70%; animation-delay: 1.
 @media (max-height: 700px) { html.diwali .hd-line { display: none; } }
 @media (max-height: 600px) { html.diwali .hd-diyas, html.diwali .hd-sparks { display: none; } }
 
-/* ---- The table: a diya glow in the middle of the felt ---- */
+/* ---- The table, dressed for Diwali ----
+   A marigold garland all the way round the rim, a rangoli of fine gold
+   rings in the middle under the open card and the joker, and the warm glow
+   of a diya. The felt stays green underneath: the cards must read as well
+   as on any other night. */
 html.diwali .table-felt {
   background:
-    radial-gradient(circle at 50% 44%, rgba(255,190,80,0.17) 0%, rgba(255,150,40,0.07) 34%, rgba(255,150,40,0) 60%),
+    radial-gradient(circle at 50% 50%,
+      transparent 0 27%, rgba(242,193,78,0.22) 27.4% 28%, transparent 28.4% 33%,
+      rgba(242,193,78,0.14) 33.3% 33.8%, transparent 34.2% 39%,
+      rgba(242,193,78,0.09) 39.3% 39.7%, transparent 40%),
+    radial-gradient(circle at 50% 50%, rgba(255,190,80,0.20) 0%, rgba(255,150,40,0.08) 34%, rgba(255,150,40,0) 60%),
     radial-gradient(circle at 50% 38%, #1c5540 0%, var(--jade-bg) 42%, var(--jade-bg-dark) 78%, #041009 100%);
+  border-color: #3a1a08;
 }
-html.diwali .table-felt::after { border: 1px dashed rgba(242,193,78,0.22); }
+/* The rangoli's petals: fine gold rays, faded out before the rings end so
+   they stay a pattern in the middle and never stripe the whole felt. */
+html.diwali .table-felt::after {
+  inset: 0; border: 0; border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg at 50% 50%, rgba(242,193,78,0.10) 0deg 4deg, transparent 4deg 15deg);
+  -webkit-mask: radial-gradient(circle at 50% 50%, #000 0 22%, transparent 33%);
+  mask: radial-gradient(circle at 50% 50%, #000 0 22%, transparent 33%);
+}
+/* The marigold garland round the rim: a dotted ring of flowers. */
+html.diwali .table-felt::before {
+  content: ''; position: absolute; inset: -9px; border-radius: 50%;
+  border: 7px dotted #ff9f1c; pointer-events: none;
+  box-shadow: 0 0 14px rgba(255,150,40,0.25);
+}
 
 /* ---- Card backs: maroon and gold, with a rangoli star ---- */
 html.diwali {
@@ -6730,7 +6761,13 @@ html.diwali {
   z-index: 9; pointer-events: none;
 }
 /* 1. The sutli bomb, under LEAST COUNT while the fuse burns. */
-.dw-bomb { position: relative; width: 92px; height: 92px; margin: 10px auto 16px; pointer-events: none; }
+.dw-bomb {
+  position: relative; pointer-events: none;
+  /* Sized from the table, like LEAST COUNT above it (--centre-card-w):
+     75px on a 47px-card table, smaller on a smaller one. */
+  width: calc(var(--centre-card-w, 58px) * 1.6); height: calc(var(--centre-card-w, 58px) * 1.6);
+  margin: 6px auto 14px;
+}
 .dw-bomb svg { width: 100%; height: 100%; display: block; overflow: visible; }
 .dw-bomb.lit { animation: dwWobble 0.5s ease-in-out infinite alternate; transform-origin: 50% 80%; }
 .dw-bomb.tense { animation-duration: 0.16s; }
@@ -6760,7 +6797,10 @@ html.diwali {
 /* On a Diwali call the verdict sits over the bomb's place rather than
    below it, and waits for the bang (or the fizzle) to have its moment. */
 .declare-callout.dw-call .declare-callout-verdict {
-  position: absolute; left: 0; right: 0; bottom: 40px; width: max-content; margin: 0 auto;
+  /* Over the middle of the bomb's place, centred on the table by app.js
+     (left: 50% and a margin of half its own width -- auto margins could not
+     centre a pill wider than the call, and pushed it off towards a chair). */
+  position: absolute; left: 50%; bottom: calc(var(--centre-card-w, 58px) * 0.62); width: max-content; margin: 0;
   white-space: nowrap; z-index: 2; animation-delay: 0.45s;
 }
 .dw-bomb.dud .dw-ask { opacity: 0; transition: opacity 0.2s; }
@@ -6808,7 +6848,7 @@ html.diwali {
   color: #ffd166; text-shadow: 0 0 10px rgba(255,150,40,0.85), 0 2px 0 #7a2a0d;
   animation: dwPop 1.4s ease-out forwards;
 }
-.dw-pop.boom { font-size: 44px; letter-spacing: 0.04em; color: #fff3c4; }
+.dw-pop.boom { font-size: 38px; letter-spacing: 0.04em; color: #fff3c4; }
 .dw-pop.dud {
   font-family: Poppins, system-ui, sans-serif; font-style: italic; font-weight: 700; font-size: 20px;
   color: #d6d6d6; text-shadow: 0 2px 6px rgba(0,0,0,0.7);
@@ -6825,4 +6865,61 @@ html.diwali {
 }
 @media (prefers-reduced-motion: reduce) {
   .dw-bomb.lit, .dw-shake, .dw-sparkler .dw-tip { animation: none; }
+}
+
+/* 2b. The +2 penalty lands: the chair that picks the cards up takes the hit. */
+.seat.dw-hit .seat-chip { animation: dwSeatHit 0.6s ease-out; }
+@keyframes dwSeatHit {
+  0%   { transform: translate(0, 0); box-shadow: 0 0 0 0 rgba(255,77,109,0); }
+  12%  { transform: translate(-6px, 2px); box-shadow: 0 0 0 4px rgba(255,77,109,0.75), 0 0 24px rgba(255,120,40,0.8); }
+  28%  { transform: translate(6px, -2px); }
+  44%  { transform: translate(-4px, 1px); }
+  60%  { transform: translate(3px, 0); box-shadow: 0 0 0 3px rgba(255,77,109,0.45), 0 0 16px rgba(255,120,40,0.5); }
+  100% { transform: translate(0, 0); box-shadow: 0 0 0 0 rgba(255,77,109,0); }
+}
+.dw-pop.ouch { font-family: Poppins, system-ui, sans-serif; font-size: 22px; color: #ffffff;
+  text-shadow: 0 0 10px #ff4d6d, 0 0 22px #ff6b35, 0 2px 0 #7a0a1a; }
+.dw-pop.ouch small { display: block; font-size: 12px; font-weight: 700; color: #ffe8b0; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+
+/* ---- The opening screen, for Diwali ----
+   index.html sets html.diwali before the first paint, so this is there from
+   the first frame: a night sky, a thoranam, fireworks opening, and Happy
+   Diwali with three diyas under the cards. */
+.intro-diwali { display: none; }
+html.diwali #screen-intro {
+  background: radial-gradient(120% 80% at 50% 45%, #2b0c15 0%, #13060a 62%, #0a0306 100%);
+}
+html.diwali .intro-glow { background: radial-gradient(circle, rgba(255,160,40,0.40), rgba(255,160,40,0) 68%); }
+/* No position of its own: the thoranam and the fireworks inside it are placed
+   against the whole screen (#screen-intro), not against this column. */
+html.diwali .intro-diwali { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+html.diwali .intro-toran { top: 0; bottom: auto; height: 26px; }
+html.diwali .intro-dw-title {
+  position: relative; z-index: 1;
+  font-family: Georgia, 'Times New Roman', serif; font-weight: 800; font-size: 30px; letter-spacing: 1px;
+  color: #f2c14e; text-shadow: 0 0 18px rgba(255,190,80,0.55);
+  opacity: 0; animation: introWordmarkIn 0.6s ease forwards; animation-delay: 0.45s;
+}
+html.diwali .intro-dw-diyas {
+  position: relative; z-index: 1; display: flex; align-items: flex-end; justify-content: center; gap: 24px; height: 46px;
+  opacity: 0; animation: introWordmarkIn 0.6s ease forwards; animation-delay: 0.7s;
+}
+/* Fireworks: rings of gold, pink and blue sparks opening in the dark. */
+html.diwali .intro-bursts i {
+  position: absolute; width: 140px; height: 140px; margin: -70px 0 0 -70px; border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, var(--burst, #ffd166) 0deg 3deg, transparent 3deg 14deg);
+  -webkit-mask: radial-gradient(circle, transparent 0 40%, #000 42% 50%, transparent 54%);
+  mask: radial-gradient(circle, transparent 0 40%, #000 42% 50%, transparent 54%);
+  opacity: 0; transform: scale(0.1);
+  animation: introBurst 1.3s cubic-bezier(.2,.8,.3,1) forwards;
+}
+html.diwali .intro-bursts i:nth-child(1) { left: 20%; top: 18%; animation-delay: 0.2s; }
+html.diwali .intro-bursts i:nth-child(2) { left: 78%; top: 14%; animation-delay: 0.55s; --burst: #ff6fa5; }
+html.diwali .intro-bursts i:nth-child(3) { left: 50%; top: 82%; animation-delay: 0.85s; --burst: #7bdff2; width: 110px; height: 110px; margin: -55px 0 0 -55px; }
+html.diwali .intro-bursts i:nth-child(4) { left: 16%; top: 70%; animation-delay: 1.15s; --burst: #ff9f1c; }
+html.diwali .intro-bursts i:nth-child(5) { left: 84%; top: 62%; animation-delay: 1.45s; --burst: #fff3c4; }
+@keyframes introBurst {
+  0%   { opacity: 0; transform: scale(0.1); }
+  14%  { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.3); }
 }
