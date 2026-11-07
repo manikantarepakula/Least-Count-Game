@@ -6721,3 +6721,108 @@ html.diwali {
   html.diwali .hd-flame, html.diwali .hd-sparks i { animation: none; }
   html.diwali .hd-sparks i { opacity: 0.8; }
 }
+
+/* ---- Diwali patakas in the game (see DIWALI PATAKAS in app.js) ----
+   These elements are only ever created while the theme is on, so they need
+   no html.diwali prefix. Nothing here takes a tap. */
+.diwali-fx {
+  position: fixed; inset: 0; width: 100vw; height: 100vh;
+  z-index: 9; pointer-events: none;
+}
+/* 1. The sutli bomb, under LEAST COUNT while the fuse burns. */
+.dw-bomb { position: relative; width: 92px; height: 92px; margin: 10px auto 16px; pointer-events: none; }
+.dw-bomb svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.dw-bomb.lit { animation: dwWobble 0.5s ease-in-out infinite alternate; transform-origin: 50% 80%; }
+.dw-bomb.tense { animation-duration: 0.16s; }
+@keyframes dwWobble { from { transform: rotate(-3deg); } to { transform: rotate(3deg); } }
+.dw-bomb .dw-spark {
+  position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, #fff1b8 35%, #ffb02e 60%, rgba(255,140,0,0) 74%);
+  box-shadow: 0 0 16px 7px rgba(255,170,40,0.8), 0 0 34px 14px rgba(255,120,20,0.3);
+  transition: opacity 0.3s;
+}
+.dw-bomb .dw-ask {
+  position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+  white-space: nowrap; font-size: 12.5px; font-weight: 700; color: #ffe8b0; letter-spacing: 0.02em; margin-top: 4px;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+  opacity: 0; animation: dwAsk 0.4s 0.6s ease-out forwards;
+}
+@keyframes dwAsk { to { opacity: 1; } }
+.dw-bomb.gone { animation: none; }
+.dw-bomb.gone svg, .dw-bomb.gone .dw-spark, .dw-bomb.gone .dw-ask {
+  opacity: 0; transform: scale(1.7); transition: opacity 0.12s, transform 0.12s;
+}
+.dw-bomb.dud { animation: none; }
+.dw-bomb.dud svg {
+  transform: rotate(16deg) translateY(4px); filter: grayscale(0.7) brightness(0.65); opacity: 0.35;
+  transition: transform 0.45s cubic-bezier(.3,1.5,.5,1), filter 0.45s, opacity 0.4s 0.55s;
+}
+/* On a Diwali call the verdict sits over the bomb's place rather than
+   below it, and waits for the bang (or the fizzle) to have its moment. */
+.declare-callout.dw-call .declare-callout-verdict {
+  position: absolute; left: 0; right: 0; bottom: 40px; width: max-content; margin: 0 auto;
+  white-space: nowrap; z-index: 2; animation-delay: 0.45s;
+}
+.dw-bomb.dud .dw-ask { opacity: 0; transition: opacity 0.2s; }
+/* The table jolts when the bomb goes off. */
+.dw-shake { animation: dwShake 0.42s ease-out; }
+@keyframes dwShake {
+  0%, 100% { transform: translate(0, 0); }
+  15% { transform: translate(-5px, 2px); }
+  30% { transform: translate(5px, -2px); }
+  45% { transform: translate(-4px, 1px); }
+  60% { transform: translate(3px, -1px); }
+  80% { transform: translate(-1px, 0); }
+}
+/* 2. The +2 rocket. Its position and angle are set every frame. */
+.dw-rocket {
+  position: fixed; left: 0; top: 0; width: 18px; height: 36px; margin: -18px 0 0 -9px;
+  z-index: 9; pointer-events: none; will-change: transform;
+  filter: drop-shadow(0 0 6px rgba(255,180,60,0.7));
+}
+.dw-rocket.big { width: 24px; height: 48px; margin: -24px 0 0 -12px; }
+.dw-rocket svg { width: 100%; height: 100%; display: block; }
+/* 3. The phuljhadi on a chair: a grey wire with a white-hot tip. */
+.dw-sparkler {
+  position: fixed; width: 0; height: 0; z-index: 9; pointer-events: none;
+  animation: dwSparkOut 2.4s linear forwards;
+}
+.dw-sparkler .dw-stick {
+  position: absolute; left: -1px; top: 0; width: 2px; height: 30px; border-radius: 1px;
+  background: linear-gradient(180deg, #9a9a9a 0%, #5f5f5f 100%);
+  transform: rotate(-28deg); transform-origin: 50% 0;
+}
+.dw-sparkler .dw-tip {
+  position: absolute; left: -6px; top: -6px; width: 12px; height: 12px; border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, #fff3c4 45%, rgba(255,210,120,0) 72%);
+  box-shadow: 0 0 14px 6px rgba(255,240,200,0.8);
+  animation: dwTip 0.12s ease-in-out infinite alternate;
+}
+@keyframes dwTip { from { transform: scale(0.85); } to { transform: scale(1.15); } }
+@keyframes dwSparkOut { 0%, 85% { opacity: 1; } 100% { opacity: 0; } }
+/* Words that jump out of a pataka. */
+.dw-pop {
+  position: fixed; z-index: 9; pointer-events: none; white-space: nowrap;
+  transform: translate(-50%, -50%);
+  font-family: Georgia, 'Times New Roman', serif; font-weight: 900; font-size: 22px;
+  color: #ffd166; text-shadow: 0 0 10px rgba(255,150,40,0.85), 0 2px 0 #7a2a0d;
+  animation: dwPop 1.4s ease-out forwards;
+}
+.dw-pop.boom { font-size: 44px; letter-spacing: 0.04em; color: #fff3c4; }
+.dw-pop.dud {
+  font-family: Poppins, system-ui, sans-serif; font-style: italic; font-weight: 700; font-size: 20px;
+  color: #d6d6d6; text-shadow: 0 2px 6px rgba(0,0,0,0.7);
+}
+.dw-pop.hit { font-family: Poppins, system-ui, sans-serif; font-size: 24px; color: #ffffff;
+  text-shadow: 0 0 10px #ff4d6d, 0 0 22px #ff9f1c, 0 2px 0 #7a0a1a; }
+.dw-pop.last { font-family: Poppins, system-ui, sans-serif; font-size: 14px; color: #fff3c4; }
+@keyframes dwPop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.4); }
+  16%  { opacity: 1; transform: translate(-50%, -50%) scale(1.18); }
+  28%  { transform: translate(-50%, -50%) scale(1); }
+  75%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -130%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dw-bomb.lit, .dw-shake, .dw-sparkler .dw-tip { animation: none; }
+}
