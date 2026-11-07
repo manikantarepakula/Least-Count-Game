@@ -9974,13 +9974,20 @@
     // A note on the line above your cards saying what it was -- and when
     // it was a 2, that it's a +2 trump card.
     const twos = cards.filter((c) => c.rank === '2').length;
+    // With the count now (Nov 2026): "You got a 2! Now 2 of the 8 are yours."
+    // The state carrying the new cards may not be here yet, so the drawn 2s
+    // are added to the ones already in hand rather than read from it.
+    const drawnIds = new Set(cards.map((c) => c.id));
+    const heldTwos = ((latestGame && latestGame.yourHand) || [])
+      .filter((c) => c.rank === '2' && !drawnIds.has(c.id)).length + twos;
+    const twoNote = twos ? (cbTwosNote(latestGame, heldTwos, twos) || (twos > 1 ? TRUMP_MANY_TEXT : TRUMP_ONE_TEXT)) : '';
     if (cards.length === 1 && twos === 1) {
-      showHandToast(TRUMP_ONE_TEXT, { trump: true, ms: TRUMP_TOAST_MS });
+      showHandToast(twoNote, { trump: true, ms: TRUMP_TOAST_MS });
     } else {
       showHandToast(cards.length > 1
         ? `You drew ${cards.length} cards`
         : 'You drew ' + cardShortLabel(cards[0]), { ms: DRAW_TOAST_MS });
-      if (twos > 0) showHandToast(twos > 1 ? TRUMP_MANY_TEXT : TRUMP_ONE_TEXT, { trump: true, ms: TRUMP_TOAST_MS });
+      if (twos > 0) showHandToast(twoNote, { trump: true, ms: TRUMP_TOAST_MS });
     }
   }
 
@@ -10010,12 +10017,24 @@
     const ms = opts.ms || DRAW_TOAST_MS;
     toast.textContent = text;
     toast.classList.toggle('trump', !!opts.trump);
+    // Your turn briefing (Nov 2026) -- see YOUR TURN BRIEFING below.
+    toast.classList.toggle('coach', !!opts.coach);
+    toast.style.fontSize = '';
     // The fade-out runs off this (see .draw-toast), so a longer note fades
     // at its own end rather than at 1.7s.
     toast.style.setProperty('--toast-ms', ms + 'ms');
     toast.classList.add('hidden');
     void toast.offsetWidth;   // restart the pop-in if one is already up
     toast.classList.remove('hidden');
+    // A briefing is a sentence, not a two-word note: a little smaller type
+    // before any of it is cut off.
+    if (opts.coach || opts.trump) {
+      let size = 12.5;
+      while (toast.scrollWidth > toast.clientWidth + 1 && size > 10.5) {
+        size -= 0.5;
+        toast.style.fontSize = size + 'px';
+      }
+    }
     handToastBusyUntil = Date.now() + ms;
     if (handToastTimer) clearTimeout(handToastTimer);
     // Same wall-clock guard as every other timer-dismissed element here, so
@@ -10031,6 +10050,20 @@
     }, ms);
   }
 
+  // Your turn is over: a turn briefing still up (or waiting) is about a turn
+  // that has gone. Other notes ("You drew 5♥") are left alone.
+  function dropCoachToast() {
+    handToastQueue = handToastQueue.filter((q) => !(q[1] && q[1].coach));
+    const toast = document.getElementById('draw-toast');
+    if (!toast || toast.classList.contains('hidden') || !toast.classList.contains('coach')) return;
+    if (handToastTimer) { clearTimeout(handToastTimer); handToastTimer = null; }
+    toast.classList.add('hidden');
+    releaseTransient('draw-toast');
+    handToastBusyUntil = 0;
+    const next = handToastQueue.shift();
+    if (next) showHandToast(next[0], next[1]);
+  }
+
   // Dealt a 2 this round? Tell them once, after the reveal (see
   // showStartReveal). Never in the tutorial, which stages its own hands.
   var trumpNoteRound = null;
@@ -10043,7 +10076,7 @@
       const twos = (g.yourHand || []).filter((c) => c.rank === '2').length;
       if (!twos) return;
       trumpNoteRound = game.roundNumber;
-      showHandToast(twos > 1 ? TRUMP_MANY_TEXT : TRUMP_ONE_TEXT, { trump: true, ms: TRUMP_TOAST_MS });
+      showHandToast(cbTwosNote(g, twos, 0) || (twos > 1 ? TRUMP_MANY_TEXT : TRUMP_ONE_TEXT), { trump: true, ms: TRUMP_TOAST_MS });
     } catch (e) { /* a note, never a reason to stop */ }
   }
 
@@ -10152,8 +10185,11 @@
     leaderLowMe: ['You lead, and you are down to {N} cards!'],
     chainHitsLow: ['That hurts! {A} goes from {X} cards to {Y}', 'Big setback for {A}: {X} cards to {Y}'],
     chainHitsLowMe: ['That hurts! You go from {X} cards to {Y}'],
-    long10: ['Ten turns and still no call. Who blinks first?'],
-    long20: ['Twenty turns! This round is a real battle'],
+    // Turns EACH (Nov 2026): everyone still in the round has played 10 times.
+    // It used to count single turns, so at a 4-player table "ten turns" came
+    // after two and a half trips round the table -- in almost every round.
+    long10: ['10 turns each and still no call. Who blinks first?'],
+    long20: ['20 turns each! This round is a real battle'],
     myLow: ['You\u2019re on {V}. Call it now, or risk one more turn?', '{V} points in hand! Call LEAST COUNT or play on?'],
     // Runs across rounds (Oct 2026). A round is "won" with a round score of 0;
     // a "rough round" is the round's single biggest score. The rough side is
@@ -10167,7 +10203,18 @@
   };
   var CM_MIC = '<svg class="cm-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>';
 
+  // Who hears what (Nov 2026). Players still in the round hear only the
+  // moments the whole table shares -- the +2 chain, someone down to their
+  // last card, the final two. Everything else is now said privately, on your
+  // own turn (YOUR TURN BRIEFING, below). Players who are out and watching
+  // still hear all of it, as before.
+  var CM_PUBLIC = {
+    chainStart: 1, chainStartByMe: 1, chainStartAtMe: 1, chainStack: 1, chainStackByMe: 1, chainStackAtMe: 1,
+    chainTake: 1, chainTakeBig: 1, chainTakeMe: 1, chainHitsLow: 1, chainHitsLowMe: 1,
+    oneLeft: 1, oneLeftMe: 1, finalTwo: 1,
+  };
   function cmLine(key, vals) {
+    if (!CM_PUBLIC[key] && !cbWatching()) return '';
     const list = CM_LINES[key] || [];
     if (!list.length) return '';
     let i = Math.floor(Math.random() * list.length);
@@ -10297,12 +10344,20 @@
       if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
       if (cmRound.number !== next.roundNumber) {
         cmRound = { number: next.roundNumber, streak: {}, low: {}, said: {}, turns: 0 };
+        cbNewRound(next);
         if (!next.roundOver) cmRoundStakes(next);
+        // Your turn first in the new round: brief you once the joker and the
+        // open card have turned over.
+        if (!next.roundOver && next.currentPlayer === myPlayerId) cbBriefLater(next.roundNumber, CB_FIRST_TURN_DELAY_MS);
         return;
       }
       if (!prev || prev.roundNumber !== next.roundNumber || prev.roundOver || next.roundOver) return;
       cmTurn(prev, next);
-      if (next.currentPlayer !== prev.currentPlayer) cmNewTurn(next);
+      if (next.currentPlayer !== prev.currentPlayer) {
+        cmNewTurn(next);
+        if (prev.currentPlayer === myPlayerId) cbTurnOver();
+        if (next.currentPlayer === myPlayerId) cbBrief(next);
+      }
     } catch (e) { /* commentary never gets in the way of the game */ }
   }
 
@@ -10391,8 +10446,20 @@
   function cmTurn(prev, next) {
     const actor = prev.currentPlayer, target = next.currentPlayer;
     if (!actor || actor === target) return;
+    // Every turn counts here, +2 chain turns included -- for "turns each"
+    // at the end of this function.
+    const turnsBy = cmRound.turnsBy || (cmRound.turnsBy = {});
+    turnsBy[actor] = (turnsBy[actor] || 0) + 1;
     const before = (prev.handCounts || {})[actor], after = (next.handCounts || {})[actor];
     if (typeof before !== 'number' || typeof after !== 'number') return;
+    // For your turn briefing: what each of the others did since your last
+    // turn (their card counts only -- never their cards), and whether a +2
+    // chain has just finished.
+    if (actor !== myPlayerId) {
+      const s = cbState.since[actor] || (cbState.since[actor] = { from: before });
+      s.to = after;
+    }
+    if (prev.chainCount > 0 && next.chainCount === 0) cbState.chainEnded = true;
     const delta = after - before;
     const me = actor === myPlayerId, atMe = target === myPlayerId;
     const names = { A: cmName(actor), T: cmName(target) };
@@ -10440,9 +10507,19 @@
     if (streak[actor] === 3) cmSay(cmLine(me ? 'streakMe' : 'streak', names), 1);
     cmLowCards(actor, after, next);
 
-    // A long round with nobody calling.
-    cmRound.turns += 1;
-    if (cmRound.turns === 10 || cmRound.turns === 20) cmSay(cmLine('long' + cmRound.turns), 2, { ask: true });
+    // A long round with nobody calling, in turns EACH: the fewest turns any
+    // player still in this round has had. At 4 players, 1 each = 4 turns.
+    const gone = (next.eliminated || []).concat(next.quit || []);
+    const inRound = (next.turnOrder || []).filter((id) => gone.indexOf(id) === -1);
+    const each = inRound.length ? Math.min(...inRound.map((id) => turnsBy[id] || 0)) : 0;
+    const said = cmRound.said;
+    if (each >= 20 && !said.long20) {
+      said.long20 = said.long10 = true;
+      cmSay(cmLine('long20'), 2, { ask: true });
+    } else if (each >= 10 && !said.long10) {
+      said.long10 = true;
+      cmSay(cmLine('long10'), 2, { ask: true });
+    }
   }
 
   // Down to the last cards (once each, per round):
@@ -10550,6 +10627,296 @@
       if (!playerId) return;
       cmSay(cmLine(playerId === myPlayerId ? 'timeoutMe' : 'timeout', { A: cmName(playerId) }), 2);
     } catch (e) { /* never in the way */ }
+  }
+
+  // ====================================================================
+  // YOUR TURN BRIEFING (Nov 2026)
+  //
+  // Private commentary. As YOUR turn begins, one line on your phone only,
+  // just above your cards, about your own game: call now or wait, your 2s,
+  // what the others did since your last turn, where you stand. Every player
+  // gets their own; nobody else sees yours.
+  //
+  // THE RULE STILL HOLDS: nobody's cards are ever revealed to anyone else.
+  // About the other players it reads only what the whole table can see --
+  // how many cards each holds, the scores, the cards thrown, and the count of
+  // 2s face-up on the pile (which the server adds). Your own hand is read
+  // only on your own phone.
+  //
+  // Two voices:
+  //   coach -- against bots, and in a player's first 3 games: plain advice
+  //            ("Good time to call!").
+  //   table -- every other game: the facts and a question ("Call or wait?"),
+  //            so the decision stays the player's own.
+  //
+  // One line a turn at most, and nothing when there is nothing worth saying.
+  // Each kind of line is said once a round (once per player, where it names
+  // one). Off with the rest of the commentary (the mic button), never in the
+  // tutorial, never to a player who is out and watching.
+  // ====================================================================
+  var CB_WRONG_CALL = 75;              // WRONG_DECLARE_PENALTY, game/gameLogic.js
+  var CB_CALL_AT = 5;                  // DECLARE_MAX_VALUE, game/gameLogic.js
+  var CB_SHOW_MS = 4200;
+  var CB_FIRST_TURN_DELAY_MS = 2800;   // the joker and the open card turning over
+  var CB_GAMES_KEY = 'leastcount_games_dealt';
+  var CB_COACH_GAMES = 3;
+  // Players who were playing before this existed are not new: only someone
+  // who has never played gets the coach voice for their first games.
+  (function () {
+    try {
+      if (localStorage.getItem(CB_GAMES_KEY) === null) {
+        localStorage.setItem(CB_GAMES_KEY,
+          localStorage.getItem('leastcount_has_played') === '1' ? String(CB_COACH_GAMES + 1) : '0');
+      }
+    } catch (e) { /* no storage: the table voice */ }
+  })();
+  var cbState = { said: {}, since: {}, chainEnded: false, firstTurnDone: false };
+  var cbCountedRound1 = false;
+  var cbTimer = null;
+
+  // T = table voice (a question), C = coach voice (advice). {Nc} = "2 cards".
+  // One line on the strip above your cards, so every line is kept to about
+  // 45 characters with a typical name: at the smallest size that is what a
+  // 360px phone fits without cutting the end off.
+  var CB_LINES = {
+    callOutT: '{V} points. A wrong call puts you out. Call?',
+    callOutC: 'A wrong call puts you out. Call only if sure.',
+    callThreatT: '{V} points, but {A} has {Nc}. Call or wait?',
+    callThreatC: '{V} points, but {A} has {Nc}. Safer to wait.',
+    callThreatLeadT: 'You lead. {A} has {Nc}. Risk +75 or wait?',
+    callThreatLeadC: 'You lead. {A} has {Nc}. Wait, skip the risk.',
+    callKoT: '{A} is on {S}. Call right to knock them out?',
+    callKoC: '{A} is on {S}. Call now to knock them out!',
+    callClearT: '{V} points, others have {K}+ cards. Call now?',
+    callClearC: '{V} points, others have {K}+ cards. Call now!',
+    chainOver: 'Chain over. 2s: {P} played, {Mi} yours, {U} unseen.',
+    threat: '{A} has {Nc}. If they call, you pay {V}.',
+    hitT: '{L} is next, on {Nc}. Throw your 2?',
+    hitC: '{L} is next, on {Nc}. Hit them with a 2!',
+    hitSure: 'No 2s unseen: {L} can’t answer your +2!',
+    bounce: 'If {L} answers your 2, +4 comes to you.',
+    defendT: '{U} twos unseen. Keep your 2 to answer a +2?',
+    defendC: '{U} twos unseen. Keep your 2 to answer a +2.',
+    noTwo: 'No 2 yet. {U} unseen: any pick-up may be one.',
+    allTwos: 'All {T} twos are played. No +2s left for now.',
+    since: 'Since your turn, {A}: {X} cards to {Y}.',
+    nearOut: '{S}/{M}: a wrong call puts you out. Careful!',
+    leadT: 'You lead by {D}. A wrong call (+75) loses it.',
+    leadC: 'You lead by {D}. Play safe: no risky calls.',
+    behind: '{D} behind {A}. A right call closes the gap.',
+    joker: '{R} are jokers this round. They count 0.',
+    manyCards: 'You have {N} cards. Others have {K} or fewer.',
+    matchC: 'Match the open {R}: no pick-up!',
+  };
+
+  function cbFill(key, vals) {
+    return CB_LINES[key].replace(/\{(\w+)\}/g, (m, k) => (vals && vals[k] !== undefined ? vals[k] : m));
+  }
+  function cbCards(n) { return n === 1 ? '1 card' : n + ' cards'; }
+  // First name only, so a long one cannot push the end of the line off the
+  // screen ("Venkata Subramanyam" -> "Venkata").
+  function cbShort(n) {
+    const first = String(n || '').trim().split(/\s+/)[0] || '?';
+    return first.length > 10 ? first.slice(0, 9) + '…' : first;
+  }
+
+  // Out of this game (eliminated, or quit) and watching: the full public
+  // commentary, and no briefing -- there is no turn to brief.
+  function cbWatching(g) {
+    g = g || latestGame;
+    if (!g || !myPlayerId) return false;
+    if ((g.eliminated || []).indexOf(myPlayerId) !== -1 || (g.quit || []).indexOf(myPlayerId) !== -1) return true;
+    return Array.isArray(g.turnOrder) && g.turnOrder.length > 0 && g.turnOrder.indexOf(myPlayerId) === -1;
+  }
+
+  function cbCoach() {
+    try { if (amSoloVsBots()) return true; } catch (e) { /* not at a table */ }
+    try {
+      const n = Number(localStorage.getItem(CB_GAMES_KEY));
+      return Number.isFinite(n) && n <= CB_COACH_GAMES;
+    } catch (e) { return false; }
+  }
+
+  // A game counts the moment you are dealt into its first round.
+  function cbCountGame(g) {
+    if (g.roundNumber !== 1) { cbCountedRound1 = false; return; }
+    if (cbCountedRound1 || g.roundOver || (g.turnOrder || []).indexOf(myPlayerId) === -1) return;
+    cbCountedRound1 = true;
+    try { localStorage.setItem(CB_GAMES_KEY, String((Number(localStorage.getItem(CB_GAMES_KEY)) || 0) + 1)); } catch (e) { /* this game only */ }
+  }
+
+  function cbNewRound(g) {
+    cbState = { said: {}, since: {}, chainEnded: false, firstTurnDone: false };
+    if (cbTimer) { clearTimeout(cbTimer); cbTimer = null; }
+    cbCountGame(g);
+  }
+
+  function cbBriefLater(round, ms) {
+    if (cbTimer) clearTimeout(cbTimer);
+    cbTimer = setTimeout(() => {
+      cbTimer = null;
+      const g = latestGame;
+      if (g && g.roundNumber === round && !g.roundOver && g.currentPlayer === myPlayerId) cbBrief(g);
+    }, ms);
+  }
+
+  // Your turn is over: a briefing still up is about a turn that has gone.
+  function cbTurnOver() {
+    if (cbTimer) { clearTimeout(cbTimer); cbTimer = null; }
+    try { if (typeof dropCoachToast === 'function') dropCoachToast(); } catch (e) { /* a note */ }
+  }
+
+  // The 2s: how many this round's decks hold (T), how many are face-up on the
+  // pile (P), how many are yours (M), and the rest, unseen (U) -- in other
+  // hands, in the stock, or burned at the deal. Nobody's hand but yours.
+  function cbTwos(g) {
+    const T = g && g.totalTwos, P = g && g.twosPlayed;
+    if (typeof T !== 'number' || typeof P !== 'number' || !T) return null;
+    const M = ((g && g.yourHand) || []).filter((c) => c.rank === '2').length;
+    return { T, P, M, U: Math.max(0, T - P - M) };
+  }
+
+  // The +2 note when you are dealt 2s or pick one up, with the count (Nov
+  // 2026). null on a server that doesn't send the count; the old note stands.
+  function cbTwosNote(g, mine, got) {
+    const T = g && g.totalTwos;
+    if (typeof T !== 'number' || !T || !mine) return null;
+    if (got) {
+      return '🔥 ' + (got > 1 ? 'You got ' + got + ' twos!' : 'You got a 2!')
+        + ' Now ' + mine + ' of the ' + T + ' are yours.';
+    }
+    if (mine >= 3) return '🔥 You hold ' + mine + ' of the ' + T + ' twos. You control the +2s!';
+    if (mine === 2) return '🔥 You hold 2 of the ' + T + ' twos. Use them well!';
+    return '🔥 You have a 2 (1 of ' + T + ' this round). Use it well!';
+  }
+
+  // The one line for this turn, or null. Most important first.
+  function cbPick(g) {
+    const me = myPlayerId;
+    const said = cbState.said;
+    const once = (key) => (said[key] ? false : (said[key] = true));
+    const voice = cbCoach() ? 'C' : 'T';
+    const name = (id) => cbShort(playerName(id));
+    const counts = g.handCounts || {};
+    const totals = g.scores || {};
+    const max = g.eliminationScore || 0;
+    const out = (g.eliminated || []).concat(g.quit || []);
+    const alive = (g.turnOrder || []).filter((id) => out.indexOf(id) === -1);
+    const others = alive.filter((id) => id !== me);
+    if (!others.length) return null;
+    const myS = totals[me] || 0;
+    const myV = g.yourHandValue;
+    const myN = (g.yourHand || []).length;
+    const low = others.filter((id) => typeof counts[id] === 'number' && counts[id] >= 1 && counts[id] <= 2)
+      .sort((a, b) => counts[a] - counts[b]);
+    const byScore = alive.slice().sort((a, b) => (totals[a] || 0) - (totals[b] || 0));
+    const leading = byScore[0] === me && (totals[byScore[1]] || 0) > myS;
+    const lead = leading ? (totals[byScore[1]] || 0) - myS : 0;
+    const twos = cbTwos(g);
+    const nxt = cmNextPlayer(g, me);
+    const nN = nxt ? counts[nxt] : undefined;
+
+    // 1. Call or wait. The biggest decision there is, so it comes first.
+    if (typeof myV === 'number' && myV <= CB_CALL_AT && myN > 0) {
+      if (max && myS + CB_WRONG_CALL >= max && once('call:out')) return cbFill('callOut' + voice, { V: myV });
+      if (low.length) {
+        const a = low[0];
+        if (once('call:threat:' + a + ':' + counts[a])) {
+          return cbFill((leading ? 'callThreatLead' : 'callThreat') + voice, { V: myV, A: name(a), Nc: cbCards(counts[a]) });
+        }
+      } else {
+        // Someone near the max score, still holding a few cards: a right call
+        // makes them pay their hand, which is likely enough to put them out.
+        const ko = others.filter((id) => max && (totals[id] || 0) >= max - 10 && (totals[id] || 0) < max
+          && (counts[id] || 0) >= 3).sort((a, b) => (totals[b] || 0) - (totals[a] || 0))[0];
+        if (ko && once('call:ko:' + ko)) return cbFill('callKo' + voice, { A: name(ko), S: totals[ko] || 0, M: max });
+        const k = Math.min(...others.map((id) => counts[id] || 0));
+        if (k >= 3 && once('call:clear')) return cbFill('callClear' + voice, { V: myV, K: k });
+      }
+    }
+
+    // 2. A +2 chain has just finished: where the 2s are now.
+    if (cbState.chainEnded && twos) return cbFill('chainOver', { P: twos.P, Mi: twos.M, U: twos.U });
+
+    // 3. You hold a 2 and the next player is nearly out of cards. Ahead of
+    // "they may call" below: this is what you can do about it.
+    const holdTwo = !!(twos && twos.M > 0 && !(g.chainCount > 0));
+    if (holdTwo && nxt && nxt !== me && typeof nN === 'number' && nN >= 1 && nN <= 3 && once('hit:' + nxt + ':' + nN)) {
+      if (twos.U === 0) return cbFill('hitSure', { L: name(nxt) });
+      return cbFill('hit' + voice, { L: name(nxt), Nc: cbCards(nN) });
+    }
+
+    // 4. Someone else is close to calling -- and what that would cost you.
+    if (typeof myV === 'number' && myV > CB_CALL_AT && low.length) {
+      const a = low[0];
+      if (once('threat:' + a + ':' + counts[a])) return cbFill('threat', { A: name(a), Nc: cbCards(counts[a]), V: myV });
+    }
+
+    // 4b. Your 2s, the rest of it.
+    if (holdTwo) {
+      if (alive.length === 2 && twos.U > 0 && nxt && once('bounce')) return cbFill('bounce', { L: name(nxt) });
+      if (twos.M === 1 && twos.U >= 3 && once('defend')) return cbFill('defend' + voice, { U: twos.U });
+    }
+
+    // 5. Since your last turn: the biggest drop in anyone's cards.
+    let best = null;
+    Object.keys(cbState.since).forEach((id) => {
+      const s = cbState.since[id];
+      if (id === me || alive.indexOf(id) === -1 || typeof s.from !== 'number' || typeof s.to !== 'number') return;
+      const drop = s.from - s.to;
+      if (drop >= 2 && (!best || drop > best.drop)) best = { id, drop, from: s.from, to: s.to };
+    });
+    if (best && once('since:' + best.id + ':' + best.to)) return cbFill('since', { A: name(best.id), X: best.from, Y: best.to });
+
+    // 6. Where you stand, on your first turn of the round. New players hear
+    // about the jokers instead.
+    if (!cbState.firstTurnDone) {
+      cbState.firstTurnDone = true;
+      if (voice === 'C' && g.roundJokerRank) return cbFill('joker', { R: cmRankWord(g.roundJokerRank, true) });
+      if (g.roundNumber > 1) {
+        if (max && myS >= max * 0.85 && myS < max) return cbFill('nearOut', { S: myS, M: max });
+        if (leading && lead >= 10 && lead < CB_WRONG_CALL) return cbFill('lead' + voice, { D: lead });
+        const top = byScore[0];
+        if (top !== me && myS - (totals[top] || 0) >= 20) return cbFill('behind', { D: myS - (totals[top] || 0), A: name(top) });
+      }
+    }
+
+    // 7. The 2s, when nothing is more pressing.
+    if (twos) {
+      if (twos.P >= twos.T && once('allTwos')) return cbFill('allTwos', { T: twos.T });
+      if (twos.M === 0 && twos.U > 0 && once('noTwo')) return cbFill('noTwo', { U: twos.U });
+    }
+
+    // 8. You hold far more cards than anyone else.
+    const maxOther = Math.max(...others.map((id) => counts[id] || 0));
+    if (myN >= maxOther + 3 && once('manyCards')) return cbFill('manyCards', { N: myN, K: maxOther });
+
+    // 9. Coach only: a match is there for the taking (twice a round at most).
+    if (voice === 'C' && g.openCard && !(g.chainCount > 0)) {
+      const r = g.openCard.rank;
+      const wild = r === 'JOKER' || r === g.roundJokerRank;
+      if (!wild && r !== '2' && (g.yourHand || []).some((c) => c.rank === r) && (said.matchTips || 0) < 2) {
+        said.matchTips = (said.matchTips || 0) + 1;
+        return cbFill('matchC', { R: cmRankWord(r) });
+      }
+    }
+    return null;
+  }
+
+  // Your turn has begun: brief you, if there is anything worth saying.
+  function cbBrief(g) {
+    try {
+      const quiet = !commentaryOn || !g || g.roundOver || g.currentPlayer !== myPlayerId
+        || (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive())
+        || cbWatching(g) || g.chainCount > 0 || startSeqActive || revealPhaseActive;
+      const text = quiet ? null : cbPick(g);
+      // A new "since your last turn" starts now, said or not.
+      cbState.since = {};
+      cbState.chainEnded = false;
+      if (text && typeof showHandToast === 'function') {
+        showHandToast('💡 ' + text, { coach: true, ms: CB_SHOW_MS });
+      }
+    } catch (e) { /* never in the way of the turn */ }
   }
 
   // The lane sits under the open card and joker and stops above the first
