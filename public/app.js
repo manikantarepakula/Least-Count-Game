@@ -1850,6 +1850,65 @@
         }));
       },
 
+      // ---- Diwali patakas (Nov 2026) -- synthesized here, no files ----
+      // The fuse on a LEAST COUNT call: a dry, crackling sizzle for `ms`.
+      diwaliFuse(ms) {
+        safe(() => {
+          const n = Math.max(6, Math.round((ms || 2600) / 85));
+          for (let i = 0; i < n; i++) {
+            noiseBurst({ duration: rnd(0.025, 0.05), filterType: 'highpass', freqStart: rnd(4200, 7600),
+              gain: rnd(0.035, 0.085), delay: i * 0.085 + rnd(0, 0.04), wet: 0.04 });
+          }
+        });
+      },
+      // A right call: the bomb goes off -- a deep boom, then a crackle.
+      diwaliBoom() {
+        safe(() => {
+          noiseBurst({ duration: 1.2, filterType: 'lowpass', freqStart: 2600, freqEnd: 70, q: 0.7, gain: 0.9, wet: 0.55 });
+          thump(72, 0.7, 0.55, 0);
+          for (let i = 0; i < 9; i++) {
+            noiseBurst({ duration: rnd(0.02, 0.05), filterType: 'highpass', freqStart: rnd(3000, 6500),
+              gain: rnd(0.06, 0.14), delay: 0.22 + i * rnd(0.05, 0.1), wet: 0.3 });
+          }
+        });
+      },
+      // A wrong call: a dud. "Phusss..." and a sad little drop.
+      diwaliDud() {
+        safe(() => {
+          noiseBurst({ duration: 0.85, filterType: 'bandpass', freqStart: 3200, freqEnd: 600, q: 0.9, gain: 0.24, wet: 0.2 });
+          blip(440, 150, 0.55, { gain: 0.08, delay: 0.3, type: 'triangle', wet: 0.25 });
+        });
+      },
+      // A +2 rocket: a rising whoosh, then a pop where it lands.
+      diwaliRocket(flightMs) {
+        safe(() => {
+          const f = (flightMs || 900) / 1000;
+          noiseBurst({ duration: f, filterType: 'bandpass', freqStart: 600, freqEnd: 4800, q: 2.2, gain: 0.28, wet: 0.2 });
+          noiseBurst({ duration: 0.3, filterType: 'lowpass', freqStart: 3200, freqEnd: 160, gain: 0.55, delay: f, wet: 0.4 });
+          thump(110, 0.25, 0.25, f);
+        });
+      },
+      // A phuljhadi: a bright, busy crackle for `ms`.
+      diwaliSparkler(ms) {
+        safe(() => {
+          const n = Math.max(8, Math.round((ms || 2200) / 55));
+          for (let i = 0; i < n; i++) {
+            noiseBurst({ duration: rnd(0.012, 0.03), filterType: 'highpass', freqStart: rnd(5500, 9000),
+              gain: rnd(0.03, 0.07), delay: i * 0.055 + rnd(0, 0.03), wet: 0.08 });
+          }
+        });
+      },
+      // One sky shot opening up.
+      diwaliSkyShot() {
+        safe(() => {
+          noiseBurst({ duration: 0.6, filterType: 'lowpass', freqStart: 2000, freqEnd: 120, gain: 0.45, wet: 0.5 });
+          for (let i = 0; i < 5; i++) {
+            noiseBurst({ duration: 0.03, filterType: 'highpass', freqStart: rnd(3500, 7000), gain: rnd(0.04, 0.09),
+              delay: 0.15 + i * rnd(0.05, 0.09), wet: 0.3 });
+          }
+        });
+      },
+
       win() {
         safe(() => play('win', () => {
           warmSeq([[523, 0.17, 0, 0.2], [659, 0.17, 0.12, 0.2], [784, 0.17, 0.24, 0.21], [1046, 0.45, 0.36, 0.23]]);
@@ -7545,7 +7604,9 @@
     renderGame(game);
 
     const finish = () => endRevealPhase();
-    revealTimer = setTimeout(finish, REVEAL_HOLD_MS);
+    // Diwali: the bomb's longer fuse comes out of this hold (DIWALI PATAKAS).
+    revealTimer = setTimeout(finish, isDiwali()
+      ? Math.max(1200, REVEAL_HOLD_MS - DIWALI_EXTRA_CALL_MS) : REVEAL_HOLD_MS);
     // Captured on the game screen only, and removed the moment it fires, so
     // it can never leak into the scorecard's own taps underneath.
     document.getElementById('screen-game').addEventListener('click', finish, { once: true });
@@ -7594,6 +7655,8 @@
     declareSpotlightId = null;
     const el = document.getElementById('declare-callout');
     if (el) el.classList.add('hidden');
+    // A Diwali bomb still burning belongs to the call that is going.
+    try { DiwaliPatakas.stopBomb(); } catch (e) { /* not built yet, or nothing lit */ }
     releaseTransient('declare-callout');
   }
 
@@ -7636,8 +7699,6 @@
     }
     el.appendChild(flair);
     setTimeout(() => { if (flair.parentNode) flair.parentNode.removeChild(flair); }, 1700);
-    // Diwali: a right call gets two quick fireworks over the table too.
-    if (isDiwali()) { try { launchFireworks({ bursts: 2, durationMs: 1500 }); } catch (e) { /* decoration */ } }
   }
 
   function announceDeclare(game, done) {
@@ -7661,27 +7722,39 @@
     renderOvalTable(game);   // light up the caller's chair
     // The declarer already heard their own tap; everyone else hears the call.
     if (!mine) { try { Sound.declareTap(); } catch (e) { /* sound never blocks */ } }
-    holdTransient('declare-callout', DECLARE_CALL_MS + DECLARE_VERDICT_MS);
+    // Diwali: a sutli bomb is lit under LEAST COUNT, and the verdict waits
+    // for the fuse (see DIWALI PATAKAS). Longer, so the cards stay face-up
+    // that much less afterwards -- the scorecard opens at the same moment.
+    const festive = isDiwali();
+    const callMs = festive ? DIWALI_FUSE_MS : DECLARE_CALL_MS;
+    const verdictMs = festive ? DIWALI_VERDICT_MS : DECLARE_VERDICT_MS;
+    if (festive) { try { DiwaliPatakas.lightBomb(el, callMs); } catch (e) { /* decoration */ } }
+    holdTransient('declare-callout', callMs + verdictMs);
 
     declareCalloutTimers.push(setTimeout(() => {
       const penalty = (r.roundScores || {})[r.declaredBy];
       verdict.textContent = r.correct
-        ? '\u2713 Correct'
-        : '\u2717 Wrong call' + (penalty !== undefined ? ' \u00b7 +' + penalty : '');
+        ? (festive ? '\ud83d\udca5 Right call!' : '\u2713 Correct')
+        : (festive ? 'Dud call' : '\u2717 Wrong call') + (penalty !== undefined ? ' \u00b7 +' + penalty : '');
       verdict.className = 'declare-callout-verdict ' + (r.correct ? 'ok' : 'bad');
       el.classList.add(r.correct ? 'correct' : 'wrong');
-      try { if (r.correct) Sound.declareCorrect(); else Sound.declareWrong(); } catch (e) { /* never block */ }
-      if (r.correct) { try { celebrateCall(el); } catch (e) { /* decoration */ } }
-    }, DECLARE_CALL_MS));
+      if (festive) {
+        try { DiwaliPatakas.bombResult(r.correct); } catch (e) { /* decoration */ }
+      } else {
+        try { if (r.correct) Sound.declareCorrect(); else Sound.declareWrong(); } catch (e) { /* never block */ }
+        if (r.correct) { try { celebrateCall(el); } catch (e) { /* decoration */ } }
+      }
+    }, callMs));
 
     declareCalloutTimers.push(setTimeout(() => {
       el.classList.add('hidden');
       el.classList.remove('calling', 'correct', 'wrong');
+      try { DiwaliPatakas.stopBomb(); } catch (e) { /* nothing lit */ }
       releaseTransient('declare-callout');
       declareSpotlightId = null;
       declareCalloutTimers = [];
       done();
-    }, DECLARE_CALL_MS + DECLARE_VERDICT_MS));
+    }, callMs + verdictMs));
   }
 
   // Selecting a grouped tile selects/deselects every card in that rank-group
@@ -8490,6 +8563,7 @@
       plan.forEach((b) => {
         if (b.done || t < b.at) return;
         b.done = true;
+        try { Sound.diwaliSkyShot(); } catch (e) { /* sound never blocks */ }
         const n = 44 + Math.floor(Math.random() * 18);
         for (let i = 0; i < n; i++) {
           const a = (i / n) * Math.PI * 2 + Math.random() * 0.1;
@@ -8517,6 +8591,387 @@
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
+  }
+
+  // ====================================================================
+  // DIWALI PATAKAS (Nov 2026)
+  //
+  // Four moments of a game, each with its own firecracker, while the Diwali
+  // theme is on (isDiwali):
+  //   1. LEAST COUNT call -> a sutli bomb. Its fuse burns while the whole
+  //      table waits; a right call goes BOOM, a wrong one fizzles: "Phusss".
+  //   2. A 2 thrown       -> a rocket from the thrower's chair to the
+  //      target's, bursting into "+2" (a bigger one for a stacked "+4").
+  //   3. A last card      -> a phuljhadi sparkling on that player's chair.
+  //   4. Game won         -> sky shots (launchFireworks) and the title.
+  // One canvas over the screen carries every spark, flash and puff of smoke;
+  // the bomb, rocket and sparkler themselves are small SVGs. None of it can
+  // take a tap (pointer-events: none), and all of it is decoration: every
+  // entry point is wrapped, so a failure only ever costs the effect.
+  // ====================================================================
+  const DIWALI_FUSE_MS = 2600;      // the call, while the fuse burns
+  const DIWALI_VERDICT_MS = 1300;   // BOOM (or the dud) and the verdict
+  // A Diwali call takes this much longer than the usual 1100 + 1300ms, and
+  // the cards stay face-up this much less (startRevealPhase), so the
+  // scorecard still opens when the server's countdown expects it.
+  const DIWALI_EXTRA_CALL_MS = (DIWALI_FUSE_MS + DIWALI_VERDICT_MS) - (1100 + 1300);
+  const DIWALI_CALM = (() => {
+    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
+  })();
+
+  // The particle layer: sparks (bright streaks with gravity), smoke puffs,
+  // flashes and shock rings, all on one canvas, one animation loop that runs
+  // only while something is alive.
+  const DiwaliFX = (() => {
+    let canvas = null;
+    let ctx = null;
+    let parts = [];
+    let raf = 0;
+    let W = 0;
+    let H = 0;
+    function size() {
+      if (!canvas || !ctx) return;
+      const d = Math.min(2, window.devicePixelRatio || 1);
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas.width = Math.round(W * d);
+      canvas.height = Math.round(H * d);
+      ctx.setTransform(d, 0, 0, d, 0, 0);
+    }
+    function ensure() {
+      if (canvas && canvas.isConnected && ctx) return true;
+      try {
+        canvas = document.createElement('canvas');
+        canvas.className = 'diwali-fx';
+        canvas.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(canvas);
+        ctx = canvas.getContext('2d');
+        size();
+        window.addEventListener('resize', size);
+        return !!ctx;
+      } catch (e) { return false; }
+    }
+    function frame() {
+      raf = 0;
+      if (!ctx) return;
+      ctx.clearRect(0, 0, W, H);
+      for (let i = parts.length - 1; i >= 0; i--) {
+        const p = parts[i];
+        p.life -= p.decay;
+        if (p.life <= 0) { parts.splice(i, 1); continue; }
+        if (p.kind === 'smoke') {
+          p.x += p.vx; p.y += p.vy; p.r += p.grow;
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = p.life * 0.5;
+          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
+          g.addColorStop(0, 'rgba(205,205,205,0.9)');
+          g.addColorStop(1, 'rgba(120,120,120,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+          continue;
+        }
+        ctx.globalCompositeOperation = 'lighter';
+        if (p.kind === 'flash') {
+          p.r *= 1.05;
+          ctx.globalAlpha = p.life;
+          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
+          g.addColorStop(0, 'rgba(255,250,225,1)');
+          g.addColorStop(0.35, 'rgba(255,200,90,0.75)');
+          g.addColorStop(1, 'rgba(255,120,20,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+          continue;
+        }
+        if (p.kind === 'ring') {
+          p.r += p.vr; p.vr *= 0.95;
+          ctx.globalAlpha = p.life * 0.9;
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 3 * p.life + 0.5;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.stroke();
+          continue;
+        }
+        // A spark: a short bright streak along the way it is travelling.
+        p.vx *= p.drag;
+        p.vy = p.vy * p.drag + p.g;
+        p.x += p.vx; p.y += p.vy;
+        ctx.globalAlpha = Math.min(1, p.life * 1.4);
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = p.r;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p.x - p.vx * p.tail, p.y - p.vy * p.tail);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      if (parts.length) raf = requestAnimationFrame(frame);
+      else ctx.clearRect(0, 0, W, H);
+    }
+    function push(p) {
+      if (DIWALI_CALM || !ensure()) return;
+      if (parts.length > 900) return;   // a busy table never piles up work
+      parts.push(p);
+      if (!raf) raf = requestAnimationFrame(frame);
+    }
+    const GOLD = ['#fff3c4', '#ffd166', '#f2c14e', '#ff9f1c', '#ff6b35'];
+    function sparks(x, y, n, o) {
+      o = o || {};
+      const colors = o.colors || GOLD;
+      for (let i = 0; i < n; i++) {
+        const a = o.angle !== undefined
+          ? o.angle + (Math.random() - 0.5) * (o.spread || Math.PI * 2)
+          : Math.random() * Math.PI * 2;
+        const sp = (o.speed || 4) * (0.35 + Math.random() * 0.75);
+        push({ kind: 'spark', x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+          g: o.g === undefined ? 0.12 : o.g, drag: o.drag || 0.96, life: 1,
+          decay: (o.decay || 0.022) * (0.7 + Math.random() * 0.6),
+          r: (o.size || 2) * (0.6 + Math.random() * 0.7), tail: o.tail || 2.2,
+          color: colors[Math.floor(Math.random() * colors.length)] });
+      }
+    }
+    function smoke(x, y, n) {
+      for (let i = 0; i < (n || 5); i++) {
+        push({ kind: 'smoke', x: x + (Math.random() - 0.5) * 18, y: y + (Math.random() - 0.5) * 10,
+          vx: (Math.random() - 0.5) * 0.6, vy: -0.45 - Math.random() * 0.7,
+          r: 8 + Math.random() * 7, grow: 0.5 + Math.random() * 0.35, life: 1, decay: 0.011 + Math.random() * 0.007 });
+      }
+    }
+    function flash(x, y, r) { push({ kind: 'flash', x, y, r: r || 60, life: 1, decay: 0.07 }); }
+    function ring(x, y, color) { push({ kind: 'ring', x, y, r: 10, vr: 9, life: 1, decay: 0.035, color: color || '#ffd166' }); }
+    return { sparks, smoke, flash, ring };
+  })();
+
+  const DiwaliPatakas = (() => {
+    function centreOf(el) {
+      const r = el && el.getBoundingClientRect();
+      return r && r.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+    }
+    function seatCentre(id) {
+      let seat = null;
+      try { seat = id && document.querySelector('.seat[data-player-id="' + CSS.escape(id) + '"] .seat-chip'); } catch (e) { /* no seat */ }
+      return centreOf(seat) || centreOf(document.querySelector('#oval-table .table-center'));
+    }
+    // Words that jump out of a pataka: "BOOM!", "Phusss...", "+2".
+    function pop(text, x, y, cls) {
+      const el = document.createElement('div');
+      el.className = 'dw-pop ' + (cls || '');
+      el.textContent = text;
+      el.style.left = Math.round(x) + 'px';
+      el.style.top = Math.round(y) + 'px';
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 1500);
+    }
+    function shake(el) {
+      if (!el || DIWALI_CALM) return;
+      el.classList.remove('dw-shake');
+      void el.offsetWidth;
+      el.classList.add('dw-shake');
+      setTimeout(() => el.classList.remove('dw-shake'), 450);
+    }
+
+    // ---- 1. The sutli bomb ----
+    const BOMB_SVG = '<svg viewBox="0 0 80 80" aria-hidden="true">'
+      + '<defs><radialGradient id="dwBombG" cx="38%" cy="35%" r="70%">'
+      + '<stop offset="0" stop-color="#e09a58"/><stop offset="0.55" stop-color="#8f4c22"/><stop offset="1" stop-color="#3d1d0b"/>'
+      + '</radialGradient></defs>'
+      // The fuse: a dark edge under a light jute wick, so it reads on the
+      // dark table. Both burn down together (lightBomb).
+      + '<path class="dw-fuse dw-fuse-edge" d="M40 30 C 36 20, 47 17, 50 11 S 58 0, 66 -4" fill="none" stroke="#2a1708" stroke-width="5" stroke-linecap="round"/>'
+      + '<path class="dw-fuse" d="M40 30 C 36 20, 47 17, 50 11 S 58 0, 66 -4" fill="none" stroke="#d9b07a" stroke-width="2.8" stroke-linecap="round"/>'
+      + '<circle cx="40" cy="52" r="22" fill="url(#dwBombG)"/>'
+      + '<path d="M21 45 Q40 37 59 45 M18 53 Q40 45 62 53 M20 61 Q40 53 60 61 M26 68 Q40 62 54 68" fill="none" stroke="#f0d4a0" stroke-width="1.5" opacity="0.5"/>'
+      + '<path d="M30 33 Q37 52 33 72 M50 33 Q43 52 47 72" fill="none" stroke="#f0d4a0" stroke-width="1.2" opacity="0.35"/>'
+      + '<rect x="35" y="28" width="10" height="6" rx="2" fill="#c9a227"/>'
+      + '</svg>';
+    let bomb = null;   // { el, raf, stopped }
+
+    function stopBomb() {
+      if (!bomb) return;
+      bomb.stopped = true;
+      if (bomb.raf) cancelAnimationFrame(bomb.raf);
+      if (bomb.el && bomb.el.parentNode) bomb.el.parentNode.removeChild(bomb.el);
+      if (bomb.callout) bomb.callout.classList.remove('dw-call');
+      bomb = null;
+    }
+
+    // Lights the fuse under LEAST COUNT. It burns down for `ms`, throwing
+    // sparks, and the bomb shakes harder as the fuse gets short.
+    function lightBomb(callout, ms) {
+      stopBomb();
+      const verdict = callout.querySelector('.declare-callout-verdict');
+      const el = document.createElement('div');
+      el.className = 'dw-bomb lit';
+      el.innerHTML = BOMB_SVG + '<span class="dw-spark"></span><span class="dw-ask">Right call… or dud?</span>';
+      callout.insertBefore(el, verdict || null);
+      const fuses = el.querySelectorAll('.dw-fuse');
+      const fuse = fuses[fuses.length - 1];
+      const spark = el.querySelector('.dw-spark');
+      const svg = el.querySelector('svg');
+      let len = 50;
+      try { len = fuse.getTotalLength(); } catch (e) { /* default */ }
+      // dw-call: the verdict is laid over the bomb's place instead of being
+      // added below it, so nothing on the table jumps when the bomb goes.
+      callout.classList.add('dw-call');
+      const h = { el, callout, raf: 0, stopped: false };
+      bomb = h;
+      const t0 = performance.now();
+      let lastEmit = 0;
+      function step(now) {
+        if (h.stopped) return;
+        const t = Math.min(1, (now - t0) / ms);
+        const left = len * (1 - t);
+        fuses.forEach((f) => { f.style.strokeDasharray = left + ' ' + (len + 10); });
+        let pt = { x: 40, y: 30 };
+        try { pt = fuse.getPointAtLength(left); } catch (e) { /* the bomb's neck */ }
+        const box = svg.getBoundingClientRect();
+        const k = box.width / 80;
+        spark.style.left = (pt.x * k) + 'px';
+        spark.style.top = (pt.y * k) + 'px';
+        if (now - lastEmit > 28) {
+          lastEmit = now;
+          DiwaliFX.sparks(box.left + pt.x * k, box.top + pt.y * k, 5,
+            { angle: -Math.PI / 2, spread: Math.PI * 1.6, speed: 2.9, g: 0.1, decay: 0.036, size: 2.1, tail: 2 });
+        }
+        if (t > 0.7) el.classList.add('tense');
+        if (t < 1) h.raf = requestAnimationFrame(step);
+      }
+      h.raf = requestAnimationFrame(step);
+      try { Sound.diwaliFuse(ms); } catch (e) { /* sound never blocks */ }
+    }
+
+    // The fuse reaches the bomb: BOOM for a right call, a dud for a wrong one.
+    function bombResult(correct) {
+      const h = bomb;
+      if (!h || h.stopped) return;
+      h.stopped = true;
+      if (h.raf) cancelAnimationFrame(h.raf);
+      const svg = h.el.querySelector('svg');
+      const c = centreOf(svg) || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+      if (correct) {
+        h.el.classList.add('gone');
+        DiwaliFX.flash(c.x, c.y, 95);
+        DiwaliFX.ring(c.x, c.y);
+        DiwaliFX.sparks(c.x, c.y, 120, { speed: 7.5, g: 0.1, decay: 0.017, size: 2.6 });
+        setTimeout(() => DiwaliFX.sparks(c.x, c.y, 50, { speed: 4.5, g: 0.08, decay: 0.02, size: 2,
+          colors: ['#ffffff', '#fff3c4', '#7bdff2', '#ff4d8d'] }), 140);
+        pop('BOOM!', c.x, c.y - 6, 'boom');
+        shake(document.getElementById('oval-table'));
+        try { Sound.diwaliBoom(); } catch (e) { /* sound never blocks */ }
+        try { buzz([30, 40, 70]); } catch (e) { /* no haptics */ }
+      } else {
+        h.el.classList.add('dud');
+        const spark = h.el.querySelector('.dw-spark');
+        const sc = centreOf(spark) || c;
+        if (spark) spark.style.opacity = '0';
+        DiwaliFX.smoke(sc.x, sc.y, 10);
+        pop('Phusss…', c.x + 26, c.y - 34, 'dud');
+        try { Sound.diwaliDud(); } catch (e) { /* sound never blocks */ }
+      }
+      // The bomb keeps its place (empty, or a sorry-looking dud) until the
+      // call is over, and the verdict appears over it (.dw-call in
+      // style.css); announceDeclare takes it away with the call.
+    }
+
+    // ---- 2. The +2 rocket ----
+    const ROCKET_SVG = '<svg viewBox="0 0 24 48" aria-hidden="true">'
+      + '<path d="M12 1 L17.5 12 L6.5 12 Z" fill="#ffd166"/>'
+      + '<rect x="6.5" y="12" width="11" height="20" rx="2" fill="#d62839"/>'
+      + '<rect x="6.5" y="17" width="11" height="3" fill="#ffd166"/>'
+      + '<rect x="6.5" y="25" width="11" height="3" fill="#ffd166"/>'
+      + '<path d="M6.5 27 L2 35 L6.5 32 Z M17.5 27 L22 35 L17.5 32 Z" fill="#9d0208"/>'
+      + '<rect x="11.2" y="32" width="1.6" height="15" fill="#c9a227"/>'
+      + '</svg>';
+    function rocket(fromId, toId, label, big) {
+      const a = seatCentre(fromId);
+      const b = seatCentre(toId);
+      if (!a || !b || DIWALI_CALM) return;
+      const el = document.createElement('div');
+      el.className = 'dw-rocket' + (big ? ' big' : '');
+      el.innerHTML = ROCKET_SVG;
+      document.body.appendChild(el);
+      const flight = big ? 1050 : 900;
+      // An arc up and over the table, never a flat line between chairs.
+      const mid = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) - 90 };
+      const t0 = performance.now();
+      let lastEmit = 0;
+      try { Sound.diwaliRocket(flight); } catch (e) { /* sound never blocks */ }
+      function step(now) {
+        const t = Math.min(1, (now - t0) / flight);
+        const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        const x = (1 - e) * (1 - e) * a.x + 2 * (1 - e) * e * mid.x + e * e * b.x;
+        const y = (1 - e) * (1 - e) * a.y + 2 * (1 - e) * e * mid.y + e * e * b.y;
+        const dx = 2 * (1 - e) * (mid.x - a.x) + 2 * e * (b.x - mid.x);
+        const dy = 2 * (1 - e) * (mid.y - a.y) + 2 * e * (b.y - mid.y);
+        const ang = Math.atan2(dy, dx);
+        el.style.transform = 'translate(' + x + 'px,' + y + 'px) rotate(' + (ang * 180 / Math.PI + 90) + 'deg)';
+        if (now - lastEmit > 16) {
+          lastEmit = now;
+          DiwaliFX.sparks(x - Math.cos(ang) * 14, y - Math.sin(ang) * 14, 3,
+            { angle: ang + Math.PI, spread: 0.8, speed: 2.4, g: 0.05, decay: 0.06, size: 1.8,
+              colors: ['#ffd166', '#ff9f1c', '#fff3c4'] });
+        }
+        if (t < 1) { requestAnimationFrame(step); return; }
+        el.remove();
+        DiwaliFX.flash(b.x, b.y, big ? 75 : 55);
+        DiwaliFX.sparks(b.x, b.y, big ? 95 : 65, { speed: big ? 6.2 : 5,
+          colors: ['#ff4d6d', '#ffd166', '#ff9f1c', '#ffffff', '#7bdff2'] });
+        pop(label, b.x, b.y - 28, 'hit');
+      }
+      requestAnimationFrame(step);
+    }
+
+    // ---- 3. The phuljhadi ----
+    function sparkler(id) {
+      const c = seatCentre(id);
+      if (!c || DIWALI_CALM) return;
+      const el = document.createElement('div');
+      el.className = 'dw-sparkler';
+      el.innerHTML = '<span class="dw-stick"></span><span class="dw-tip"></span>';
+      el.style.left = Math.round(c.x + 18) + 'px';
+      el.style.top = Math.round(c.y - 26) + 'px';
+      document.body.appendChild(el);
+      const tip = el.querySelector('.dw-tip');
+      const ms = 2400;
+      const t0 = performance.now();
+      let lastEmit = 0;
+      try { Sound.diwaliSparkler(ms); } catch (e) { /* sound never blocks */ }
+      pop('Last card!', c.x, c.y - 44, 'last');
+      function step(now) {
+        const t = (now - t0) / ms;
+        if (t >= 1 || !el.isConnected) { el.remove(); return; }
+        if (now - lastEmit > 24) {
+          lastEmit = now;
+          const p = centreOf(tip);
+          if (p) DiwaliFX.sparks(p.x, p.y, 5, { speed: 3, g: 0.06, decay: 0.07, size: 1.3, tail: 2.6,
+            colors: ['#ffffff', '#fff3c4', '#ffd166'] });
+        }
+        requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    }
+
+    return { lightBomb, bombResult, stopBomb, rocket, sparkler, pop };
+  })();
+
+  // Reads each game update for moments 2 and 3. Called next to
+  // checkChainFlash in the game_state handler.
+  function diwaliOnState(prev, next) {
+    if (!prev || !next || !isDiwali()) return;
+    try {
+      if (next.roundOver || prev.roundOver || prev.roundNumber !== next.roundNumber) return;
+      if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
+      // 2. A 2 thrown: a chain started, or grew.
+      if ((next.chainCount || 0) > (prev.chainCount || 0) && prev.currentPlayer && next.currentPlayer) {
+        DiwaliPatakas.rocket(prev.currentPlayer, next.currentPlayer, '+' + (next.chainCount * 2), next.chainCount > 1);
+      }
+      // 3. Somebody is down to their last card.
+      const pc = prev.handCounts || {};
+      const nc = next.handCounts || {};
+      Object.keys(nc).forEach((id) => {
+        if (nc[id] === 1 && (pc[id] || 0) > 1) DiwaliPatakas.sparkler(id);
+      });
+    } catch (e) { /* decoration only */ }
   }
 
   function launchConfetti(opts) {
@@ -8766,8 +9221,9 @@
     });
     document.getElementById('overlay-round-result').classList.add('hidden');
     // v2: the trophy is a 3D picture above the title now, so no 🏆 in it.
-    document.getElementById('gameover-title').textContent =
-      game.winner === myPlayerId ? 'You win!' : `${playerName(game.winner)} wins!`;
+    document.getElementById('gameover-title').textContent = isDiwali()
+      ? (game.winner === myPlayerId ? 'Diwali champion: You! 🪔' : `Diwali champion: ${playerName(game.winner)}! 🪔`)
+      : (game.winner === myPlayerId ? 'You win!' : `${playerName(game.winner)} wins!`);
     const body = document.getElementById('gameover-body');
     body.innerHTML = '';
     // The final round's score change is what actually ended the game --
@@ -11357,6 +11813,7 @@
     if (!pendingStartReveal) {
       playSoundsForTransition(prev, game);
       checkChainFlash(prev, game);
+      diwaliOnState(prev, game);   // Diwali: the +2 rocket and the last-card phuljhadi
     }
     updateMyTurnPulseTimer(prev, game);
     latestGame = game;
