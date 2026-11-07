@@ -3310,6 +3310,62 @@ a.install-card-btn:hover {
   .coach-target { animation: none; outline: 2px solid var(--gold); }
 }
 
+/* GUIDED LESSON (Nov 2026). Reading "tap Discard" was not enough: learners
+   did not know where Discard was. While the lesson runs, the coach floats
+   beside a spotlight on exactly what it talks about (the rest of the screen
+   dims), with a finger on what to tap. The coach is moved to <body> by
+   app.js, because .screen is its own layer and the dimming sits above it. */
+.coach.floating {
+  position: fixed; left: 12px; right: 12px; z-index: 62;
+  max-width: 460px; margin: 0 auto;
+  padding: 12px 13px;
+  background: linear-gradient(180deg, #1c3b2f, #11281e);
+  border: 1.5px solid var(--gold);
+  border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.55);
+  animation: coachIn 0.28s ease-out;
+}
+.coach.floating .coach-step { font-size: 11px; }
+.coach.floating .coach-text { font-size: 15px; line-height: 1.45; color: #fff; }
+.coach.floating .coach-btn { padding: 9px 14px; font-size: 14px; font-weight: 700; }
+@keyframes coachIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+.coach-spot {
+  position: fixed; z-index: 60; pointer-events: none;
+  border-radius: 14px;
+  box-shadow: 0 0 0 2px var(--gold-bright), 0 0 18px 3px rgba(255,200,80,0.45),
+              0 0 0 200vmax rgba(4,12,9,0.72);
+  transition: left 0.3s ease, top 0.3s ease, width 0.3s ease, height 0.3s ease;
+}
+.coach-spot::after {
+  content: ''; position: absolute; inset: -4px; border-radius: 17px;
+  border: 2px solid rgba(255,214,102,0.85);
+  animation: coachSpotPulse 1.5s ease-out infinite;
+}
+@keyframes coachSpotPulse {
+  0%   { opacity: 0.9; transform: scale(1); }
+  100% { opacity: 0;   transform: scale(1.12); }
+}
+.coach-finger {
+  position: fixed; z-index: 63; pointer-events: none;
+  font-size: 38px; line-height: 1;
+  transform: translate(-50%, 0);
+  filter: drop-shadow(0 3px 4px rgba(0,0,0,0.6));
+  animation: coachTapUp 0.9s ease-in-out infinite;
+}
+.coach-finger.down { transform: translate(-50%, -100%); animation-name: coachTapDown; }
+@keyframes coachTapUp {
+  0%, 100% { transform: translate(-50%, 8px); }
+  50%      { transform: translate(-50%, 0); }
+}
+@keyframes coachTapDown {
+  0%, 100% { transform: translate(-50%, calc(-100% - 8px)); }
+  50%      { transform: translate(-50%, -100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coach.floating, .coach-spot::after, .coach-finger { animation: none; }
+}
+
 /* Post-tutorial handoff strip on the landing screen. (The first-launch
    offer that also used these is a modal now -- see .tutorial-modal.) */
 .tutorial-offer {
