@@ -1,6 +1,33 @@
 (function () {
   const socket = io();
 
+  // ------------------------------------------------------------------
+  // DIWALI (Nov 2026). A festive theme on 7, 8 and 9 November -- Diwali is
+  // Sunday the 8th -- that switches itself on and off by the date in India,
+  // so taking it down needs no second upload. Everything it changes keys off
+  // the `diwali` class on <html> (the DIWALI section at the end of
+  // style.css) or isDiwali() here.
+  //
+  // Preview it on any day with ?theme=diwali in the address (remembered for
+  // that tab); ?theme=off clears the preview.
+  //
+  // A function declaration that reads only the URL, storage and the clock:
+  // showScreen() and the greeting can call it before the rest of this file
+  // has run.
+  // ------------------------------------------------------------------
+  function isDiwali() {
+    try {
+      const q = new URLSearchParams(window.location.search).get('theme');
+      if (q === 'diwali') sessionStorage.setItem('lc_theme_preview', 'diwali');
+      if (q === 'off') sessionStorage.removeItem('lc_theme_preview');
+      if (sessionStorage.getItem('lc_theme_preview') === 'diwali') return true;
+    } catch (e) { /* no storage: the dates alone decide */ }
+    // Today's date in India (UTC+5:30), whatever the phone's own time zone.
+    const ist = new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+    return ist >= '2026-11-07' && ist <= '2026-11-09';
+  }
+  if (isDiwali()) document.documentElement.classList.add('diwali');
+
   // Which build is this player actually on? The same server and the same
   // web code back both the website and the Capacitor-wrapped Android app,
   // so without this flag the two are indistinguishable server-side -- which
@@ -3175,9 +3202,46 @@
       const box = document.getElementById('input-name');
       name = ((box && box.value) || localStorage.getItem('leastcount_name') || '').trim();
     } catch (e) { /* storage blocked: no name */ }
+    // Diwali: "Happy Diwali, Mani 🪔" instead of the time of day.
+    if (isDiwali()) {
+      el.textContent = (name ? 'Happy Diwali, ' + name : 'Happy Diwali') + ' 🪔';
+      return;
+    }
     el.textContent = name ? part + ', ' + name : part;
   }
   updateHomeGreeting();
+
+  // Diwali: the space under the three ways to play (empty on most phones)
+  // becomes a lit-up greeting with one thing to do -- get the family on a
+  // table. Built here rather than in index.html so it exists only on the
+  // Diwali days and leaves no trace afterwards.
+  (function addDiwaliPanel() {
+    if (!isDiwali()) return;
+    const pane = document.getElementById('pane-quick');
+    const modes = pane && pane.querySelector('.home-modes');
+    if (!pane || !modes || document.getElementById('home-diwali')) return;
+    const box = document.createElement('div');
+    box.id = 'home-diwali';
+    box.className = 'home-diwali';
+    box.innerHTML =
+      '<div class="hd-sparks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>'
+      + '<div class="hd-diyas" aria-hidden="true">'
+      + '<span class="hd-diya"><span class="hd-flame"></span></span>'
+      + '<span class="hd-diya hd-mid"><span class="hd-flame"></span></span>'
+      + '<span class="hd-diya"><span class="hd-flame"></span></span>'
+      + '</div>'
+      + '<h3 class="hd-title">Happy Diwali!</h3>'
+      + '<p class="hd-line">Diwali night is cards night. Get the whole family on one table.</p>'
+      + '<button id="btn-diwali-invite" class="primary hd-btn" type="button">🪔 Invite family to play</button>';
+    modes.insertAdjacentElement('afterend', box);
+    // Straight to a new table, as Play with Friends -> Create Room does (a
+    // missing name is asked for first), then the WhatsApp nudge in the lobby.
+    box.querySelector('#btn-diwali-invite').addEventListener('click', () => {
+      try { logAnalytics('diwali_invite_tapped'); } catch (e) { /* never in the way */ }
+      inviteNudgePending = true;
+      document.getElementById('btn-create').click();
+    });
+  })();
   // Coming back to the app hours later: morning may have become evening.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') updateHomeGreeting();
@@ -4549,6 +4613,12 @@
     const who = (localStorage.getItem(NAME_STORAGE_KEY) || '').trim();
     const groupName = latestRoom && latestRoom.groupName;
     const lead = who ? `${who} invited you` : 'You are invited';
+    // Diwali: the invite reads as a festival message in the family group.
+    if (isDiwali()) {
+      return groupName
+        ? `🪔 Happy Diwali! ${lead} to play Least Count with "${groupName}".\n${link}`
+        : `🪔 Happy Diwali! ${lead} to a Diwali game of Least Count. Room code: ${myRoomCode}\n${link}`;
+    }
     return groupName
       ? `${lead} to play Least Count with "${groupName}".\n${link}`
       : `${lead} to a game of Least Count. Room code: ${myRoomCode}\n${link}`;
@@ -7566,6 +7636,8 @@
     }
     el.appendChild(flair);
     setTimeout(() => { if (flair.parentNode) flair.parentNode.removeChild(flair); }, 1700);
+    // Diwali: a right call gets two quick fireworks over the table too.
+    if (isDiwali()) { try { launchFireworks({ bursts: 2, durationMs: 1500 }); } catch (e) { /* decoration */ } }
   }
 
   function announceDeclare(game, done) {
@@ -8379,8 +8451,77 @@
   let confettiRunning = false;
   // opts (Oct 2026): { pieces, durationMs } -- a correct LEAST COUNT call
   // gets a shorter, lighter burst than winning the whole game.
+  // Diwali: fireworks instead of confetti -- bursts of gold, orange, red and
+  // white sparks that open, trail and fall away. Same canvas, same switch.
+  function launchFireworks(opts) {
+    opts = opts || {};
+    if (confettiRunning) return;
+    const canvas = document.getElementById('confetti-canvas');
+    const ctx = canvas && canvas.getContext('2d');
+    if (!ctx) return;
+    confettiRunning = true;
+    canvas.classList.remove('hidden');
+    const W = canvas.width = window.innerWidth;
+    const H = canvas.height = window.innerHeight;
+    const colors = ['#ffd166', '#f2c14e', '#ff9f1c', '#ff5d3a', '#ff4d8d', '#7bdff2'];
+    const durationMs = opts.durationMs || 4200;
+    const bursts = opts.bursts || 7;
+    const startedAt = Date.now();
+    const sparks = [];
+    const plan = Array.from({ length: bursts }, (_, i) => ({
+      at: (i * Math.max(400, durationMs - 1600)) / bursts + Math.random() * 200,
+      x: W * (0.15 + Math.random() * 0.7),
+      y: H * (0.14 + Math.random() * 0.38),
+      color: colors[Math.floor(Math.random() * colors.length)],
+      done: false,
+    }));
+    const stop = () => {
+      ctx.clearRect(0, 0, W, H);
+      canvas.classList.add('hidden');
+      confettiRunning = false;
+    };
+    function frame() {
+      const t = Date.now() - startedAt;
+      // Fade what is already drawn, so every spark leaves a short trail.
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'lighter';
+      plan.forEach((b) => {
+        if (b.done || t < b.at) return;
+        b.done = true;
+        const n = 44 + Math.floor(Math.random() * 18);
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2 + Math.random() * 0.1;
+          const sp = 2.2 + Math.random() * 2.6;
+          sparks.push({ x: b.x, y: b.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1,
+            decay: 0.012 + Math.random() * 0.01, r: 1.5 + Math.random() * 1.5,
+            color: Math.random() < 0.78 ? b.color : '#ffffff' });
+        }
+      });
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        const s = sparks[i];
+        s.x += s.vx; s.y += s.vy;
+        s.vx *= 0.985; s.vy = s.vy * 0.985 + 0.045;
+        s.life -= s.decay;
+        if (s.life <= 0) { sparks.splice(i, 1); continue; }
+        ctx.globalAlpha = s.life;
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      if ((t >= durationMs && !sparks.length) || t >= durationMs + 1500) { stop(); return; }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
   function launchConfetti(opts) {
     opts = opts || {};
+    if (isDiwali()) { launchFireworks(opts.pieces ? { bursts: 3, durationMs: 2000 } : {}); return; }
     if (confettiRunning) return;
     const canvas = document.getElementById('confetti-canvas');
     const ctx = canvas.getContext('2d');
@@ -10213,9 +10354,20 @@
     chainTake: 1, chainTakeBig: 1, chainTakeMe: 1, chainHitsLow: 1, chainHitsLowMe: 1,
     oneLeft: 1, oneLeftMe: 1, finalTwo: 1,
   };
+  // Diwali (7-9 Nov 2026): a +2 is a pataka. Used in place of the usual
+  // lines for these moments while the festival theme is on (see isDiwali).
+  var CM_LINES_DIWALI = {
+    chainStart: ['{A} bursts a pataka! {T} must answer', 'Pataka! +2 for {T}!'],
+    chainStartByMe: ['Your pataka goes off at {T}!'],
+    chainStartAtMe: ['{A} bursts a pataka at you!'],
+    chainStack: ['Double pataka! +{N} for {T}', 'Bigger bang! {T} now faces +{N}'],
+    chainTake: ['{A} picks up {N}. That pataka hurt!', 'Boom! {A} takes the +{N}'],
+    finalTwo: ['Final two! {A} vs {B}: a Diwali showdown'],
+  };
   function cmLine(key, vals) {
     if (!CM_PUBLIC[key] && !cbWatching()) return '';
-    const list = CM_LINES[key] || [];
+    const festive = typeof isDiwali === 'function' && isDiwali() && CM_LINES_DIWALI[key];
+    const list = festive || CM_LINES[key] || [];
     if (!list.length) return '';
     let i = Math.floor(Math.random() * list.length);
     if (list.length > 1 && i === cmLastPick[key]) i = (i + 1) % list.length;
