@@ -1888,6 +1888,17 @@
           thump(110, 0.25, 0.25, f);
         });
       },
+      // A +2 penalty landing on a chair: a short, heavy blast and a crackle.
+      diwaliHit() {
+        safe(() => {
+          noiseBurst({ duration: 0.55, filterType: 'lowpass', freqStart: 2200, freqEnd: 120, gain: 0.6, wet: 0.4 });
+          thump(90, 0.35, 0.4, 0);
+          for (let i = 0; i < 6; i++) {
+            noiseBurst({ duration: 0.025, filterType: 'highpass', freqStart: rnd(4000, 7500),
+              gain: rnd(0.05, 0.1), delay: 0.12 + i * rnd(0.06, 0.12), wet: 0.25 });
+          }
+        });
+      },
       // A phuljhadi: a bright, busy crackle for `ms`.
       diwaliSparkler(ms) {
         safe(() => {
@@ -7713,6 +7724,7 @@
     const verdict = document.getElementById('declare-callout-verdict');
     verdict.className = 'declare-callout-verdict hidden';
     verdict.textContent = '';
+    verdict.style.marginLeft = '';
     el.classList.remove('correct', 'wrong', 'hidden');
     // Restart the stamp animation even if the last call is still fading.
     el.classList.remove('calling');
@@ -7739,6 +7751,9 @@
       verdict.className = 'declare-callout-verdict ' + (r.correct ? 'ok' : 'bad');
       el.classList.add(r.correct ? 'correct' : 'wrong');
       if (festive) {
+        // Centred on the table over the bomb's place (.dw-call, style.css):
+        // left: 50% there, half its own width back here.
+        verdict.style.marginLeft = -Math.round(verdict.offsetWidth / 2) + 'px';
         try { DiwaliPatakas.bombResult(r.correct); } catch (e) { /* decoration */ }
       } else {
         try { if (r.correct) Sound.declareCorrect(); else Sound.declareWrong(); } catch (e) { /* never block */ }
@@ -8738,7 +8753,7 @@
       }
     }
     function flash(x, y, r) { push({ kind: 'flash', x, y, r: r || 60, life: 1, decay: 0.07 }); }
-    function ring(x, y, color) { push({ kind: 'ring', x, y, r: 10, vr: 9, life: 1, decay: 0.035, color: color || '#ffd166' }); }
+    function ring(x, y, color, speed) { push({ kind: 'ring', x, y, r: 10, vr: speed || 9, life: 1, decay: 0.035, color: color || '#ffd166' }); }
     return { sparks, smoke, flash, ring };
   })();
 
@@ -8752,11 +8767,17 @@
       try { seat = id && document.querySelector('.seat[data-player-id="' + CSS.escape(id) + '"] .seat-chip'); } catch (e) { /* no seat */ }
       return centreOf(seat) || centreOf(document.querySelector('#oval-table .table-center'));
     }
-    // Words that jump out of a pataka: "BOOM!", "Phusss...", "+2".
-    function pop(text, x, y, cls) {
+    // Words that jump out of a pataka: "BOOM!", "Phusss...", "+2", with an
+    // optional smaller line under them.
+    function pop(text, x, y, cls, sub) {
       const el = document.createElement('div');
       el.className = 'dw-pop ' + (cls || '');
       el.textContent = text;
+      if (sub) {
+        const s = document.createElement('small');
+        s.textContent = sub;
+        el.appendChild(s);
+      }
       el.style.left = Math.round(x) + 'px';
       el.style.top = Math.round(y) + 'px';
       document.body.appendChild(el);
@@ -8850,10 +8871,12 @@
       const c = centreOf(svg) || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
       if (correct) {
         h.el.classList.add('gone');
-        DiwaliFX.flash(c.x, c.y, 95);
-        DiwaliFX.ring(c.x, c.y);
-        DiwaliFX.sparks(c.x, c.y, 120, { speed: 7.5, g: 0.1, decay: 0.017, size: 2.6 });
-        setTimeout(() => DiwaliFX.sparks(c.x, c.y, 50, { speed: 4.5, g: 0.08, decay: 0.02, size: 2,
+        // Sized to stay on the table: the ring and the sparks open to about
+        // the rangoli, not out over the chairs.
+        DiwaliFX.flash(c.x, c.y, 80);
+        DiwaliFX.ring(c.x, c.y, '#ffd166', 6.5);
+        DiwaliFX.sparks(c.x, c.y, 110, { speed: 6, g: 0.1, decay: 0.019, size: 2.4 });
+        setTimeout(() => DiwaliFX.sparks(c.x, c.y, 45, { speed: 3.8, g: 0.08, decay: 0.022, size: 1.9,
           colors: ['#ffffff', '#fff3c4', '#7bdff2', '#ff4d8d'] }), 140);
         pop('BOOM!', c.x, c.y - 6, 'boom');
         shake(document.getElementById('oval-table'));
@@ -8921,6 +8944,45 @@
       requestAnimationFrame(step);
     }
 
+    // ---- 2b. The +2 lands: whoever picks the cards up takes the hit ----
+    // A blast on their chair, the chair jolts and glows red, a chakri spins
+    // round it for a moment, and "+4 cards!" with a line of banter.
+    const HIT_LINES = ['Direct hit!', 'Pataka landed!', 'Ouch, full blast!', 'Bomb delivered!'];
+    function hit(id, n) {
+      const c = seatCentre(id);
+      if (!c) return;
+      let seat = null;
+      try { seat = document.querySelector('.seat[data-player-id="' + CSS.escape(id) + '"]'); } catch (e) { /* no seat */ }
+      if (seat && !DIWALI_CALM) {
+        seat.classList.remove('dw-hit');
+        void seat.offsetWidth;
+        seat.classList.add('dw-hit');
+        setTimeout(() => seat.classList.remove('dw-hit'), 650);
+      }
+      DiwaliFX.flash(c.x, c.y, 70);
+      DiwaliFX.ring(c.x, c.y, '#ff4d6d', 5);
+      DiwaliFX.sparks(c.x, c.y, 80, { speed: 5.2, colors: ['#ff4d6d', '#ff6b35', '#ffd166', '#ffffff'] });
+      DiwaliFX.smoke(c.x, c.y - 4, 6);
+      if (!DIWALI_CALM) {
+        const t0 = performance.now();
+        let a = 0;
+        const spin = (now) => {
+          if (now - t0 > 1200) return;
+          a += 0.55;
+          for (let k = 0; k < 2; k++) {
+            const ang = a + k * Math.PI;
+            DiwaliFX.sparks(c.x + Math.cos(ang) * 17, c.y + Math.sin(ang) * 17, 2,
+              { angle: ang + Math.PI / 2, spread: 0.4, speed: 3.2, g: 0.04, decay: 0.06, size: 1.7,
+                colors: ['#ffd166', '#7bdff2', '#ff6fa5', '#ffffff'] });
+          }
+          requestAnimationFrame(spin);
+        };
+        requestAnimationFrame(spin);
+      }
+      pop('+' + n + ' cards!', c.x, c.y - 40, 'ouch', HIT_LINES[Math.floor(Math.random() * HIT_LINES.length)]);
+      try { Sound.diwaliHit(); } catch (e) { /* sound never blocks */ }
+    }
+
     // ---- 3. The phuljhadi ----
     function sparkler(id) {
       const c = seatCentre(id);
@@ -8951,7 +9013,7 @@
       requestAnimationFrame(step);
     }
 
-    return { lightBomb, bombResult, stopBomb, rocket, sparkler, pop };
+    return { lightBomb, bombResult, stopBomb, rocket, hit, sparkler, pop };
   })();
 
   // Reads each game update for moments 2 and 3. Called next to
@@ -8961,13 +9023,18 @@
     try {
       if (next.roundOver || prev.roundOver || prev.roundNumber !== next.roundNumber) return;
       if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
+      const pc = prev.handCounts || {};
+      const nc = next.handCounts || {};
       // 2. A 2 thrown: a chain started, or grew.
       if ((next.chainCount || 0) > (prev.chainCount || 0) && prev.currentPlayer && next.currentPlayer) {
         DiwaliPatakas.rocket(prev.currentPlayer, next.currentPlayer, '+' + (next.chainCount * 2), next.chainCount > 1);
       }
+      // 2b. The chain ends on someone with no 2 to answer: they pick up.
+      if ((prev.chainCount || 0) > 0 && (next.chainCount || 0) === 0 && prev.currentPlayer) {
+        const got = (nc[prev.currentPlayer] || 0) - (pc[prev.currentPlayer] || 0);
+        if (got > 0) DiwaliPatakas.hit(prev.currentPlayer, got);
+      }
       // 3. Somebody is down to their last card.
-      const pc = prev.handCounts || {};
-      const nc = next.handCounts || {};
       Object.keys(nc).forEach((id) => {
         if (nc[id] === 1 && (pc[id] || 0) > 1) DiwaliPatakas.sparkler(id);
       });
