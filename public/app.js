@@ -527,7 +527,11 @@
     const DONE_KEY = 'leastcount_tutorial_done';
     const ME = 'tut-me';
     let active = false;
-    let idx = 0;
+    let idx = 0;            // the position (step)
+    let beat = 0;           // where we are inside it
+    let doneShown = false;  // showing the step's result line, after its move
+    let nudgeText = null;   // a correction, in place of the beat's own words
+    let lastIds = null;     // the cards the learner just played
     let savedGame = null;
     let savedRoom = null;
     let savedPlayerId = null;
@@ -574,64 +578,148 @@
       };
     }
 
-    // ---- the seven positions ----
+    // The table straight after the learner's move, so the result line can
+    // point at what really happened: the played cards are on the open pile
+    // and out of the hand (or the penalty cards are in it), and it is the
+    // next player's turn.
+    function withHand(g, hand, extra) {
+      return Object.assign({}, g, {
+        yourHand: hand,
+        handCounts: Object.assign({}, g.handCounts, { [ME]: hand.length }),
+        yourHandValue: hand.reduce((s, c) => s + cardPoints(c, g.roundJokerRank), 0),
+        currentPlayer: 'tut-b1',
+      }, extra || {});
+    }
+    function afterMove(g, ids, extra) {
+      const mine = g.yourHand || [];
+      const thrown = mine.filter((c) => ids.indexOf(c.id) !== -1);
+      return withHand(g, mine.filter((c) => ids.indexOf(c.id) === -1),
+        Object.assign({ openCard: thrown.length ? thrown[thrown.length - 1] : g.openCard }, extra || {}));
+    }
+    function tookTwo(g) {
+      const extra = [{ id: 'tp0', rank: 'Q', suit: '♥' }, { id: 'tp1', rank: '6', suit: '♣' }];
+      return withHand(g, (g.yourHand || []).concat(extra), { chainCount: 0 });
+    }
+
+    // ---- where to look ----
+    // Each returns what is on screen right now: the table is redrawn between
+    // beats, so nothing here is ever kept.
+    function el(id) { return document.getElementById(id); }
+    // The open card and the joker with their labels ("Open Card", "Joker",
+    // "Every 8 = 0"), so the words in the spotlight match the words above.
+    function pile(id) {
+      const n = el(id);
+      return [n && n.closest ? (n.closest('.pile-group') || n) : n];
+    }
+    function tilesOfRank(r) {
+      return Array.prototype.filter.call(document.querySelectorAll('#hand .card'), (c) => {
+        const k = c.querySelector && c.querySelector('.corner-rank');
+        return !!k && k.textContent === r;
+      });
+    }
+    // The cards themselves, not the tray: the tray is taller than one row of
+    // cards, and a spotlight that is half empty space points at nothing.
+    function cards() { return Array.prototype.slice.call(document.querySelectorAll('#hand .card')); }
+    const AT = {
+      hand: () => (cards().length ? cards() : [el('hand')]),
+      value: () => [el('hand-value-pill')],
+      open: () => pile('open-card-slot'),
+      joker: () => pile('joker-indicator'),
+      discard: () => [el('btn-discard')],
+      declare: () => [el('btn-declare')],
+    };
+    const rank = (r) => () => tilesOfRank(r);
+    // The rank of the cards picked right now, or null for none or a mix.
+    function pickedRank(g) {
+      const ranks = [...selectedIds].map((id) => rankOf(g, id));
+      return ranks.length && ranks.every((r) => r === ranks[0]) ? ranks[0] : null;
+    }
+
+    // ---- the seven positions, each walked through in beats ----
+    // TELLING WAS NOT ENOUGH (Nov 2026). The old lesson was a line of text
+    // per step: learners read about "the open card" and "Discard" without
+    // knowing where on the screen those were, and few came back to play.
+    // Now every beat SHOWS: a spotlight on exactly the thing it talks about
+    // (the rest of the screen dims) and, when the learner has to act, a
+    // finger on what to tap. `wait: 'pick'` waits for the right cards to be
+    // picked, `wait: 'move'` for the move itself (Discard, a 2, Least
+    // Count!); a beat without `wait` has a Got it button. `done` is the
+    // line shown once the move is made, with the table showing the result.
     const STEPS = [
       {
-        label: 'Step 1 of 7',
-        // Reads the total off the state instead of repeating it in prose.
-        // The first version of this line said 34 about a hand worth 44 --
-        // a wrong number in the very first sentence of the tutorial is
-        // about the worst place to have one.
-        text: (g) => 'Lowest score wins. Every card left in your hand counts against you — picture cards are 10, aces are 1. This hand is worth '
-          + (g ? g.yourHandValue : 0) + '.',
         build: () => state({ hand: ['K', 'Q', '9', '4', 'A', '10'], open: '7' }),
-        tap: true,
+        beats: [
+          { at: AT.hand, text: 'These are your cards. Each card has points: J, Q, K are 10, A is 1, the others are their number.' },
+          // Read off the state, never typed out: an early version said 34
+          // about a hand worth 44, in the very first lesson.
+          { at: AT.value, text: (g) => 'Your cards add up to ' + g.yourHandValue + ' points. Fewest points wins, so you want this number small.' },
+        ],
       },
       {
-        label: 'Step 2 of 7',
-        text: 'The open card is a 7 and you hold one. Tap your 7, then Discard. Matching the open card costs you nothing.',
         build: () => state({ hand: ['7', 'K', '9', '4', 'A'], open: '7' }),
         want: (ids, g) => ids.length === 1 && rankOf(g, ids[0]) === '7',
-        nudge: 'Tap the 7 — it matches the open card.',
-        target: 'btn-discard',
+        beats: [
+          { at: AT.open, text: 'This is the open card: a 7. Every turn you throw cards here, then pick up one new card.' },
+          { at: rank('7'), point: rank('7'), wait: 'pick', ready: (g) => pickedRank(g) === '7', text: 'You also have a 7. Tap it.' },
+          { at: AT.discard, point: AT.discard, wait: 'move', text: 'Now tap Discard.' },
+        ],
+        after: (g, ids) => afterMove(g, ids),
+        done: { at: AT.open, text: 'Your 7 matched the open card, so you did not pick up a card. Matching is free!' },
+        nudge: 'Tap your 7 first (it matches the open card), then tap Discard.',
       },
       {
-        label: 'Step 3 of 7',
-        text: 'Now the useful move. You hold three 10s — tap one and all three select together. Throwing all three costs the same single penalty card as throwing one.',
         build: () => state({ hand: ['10', '10', '10', '4', 'A'], open: '7' }),
         want: (ids, g) => ids.length === 3 && rankOf(g, ids[0]) === '10',
-        nudge: 'Tap a 10 — they select as a group.',
-        target: 'btn-discard',
+        beats: [
+          { at: rank('10'), point: rank('10'), wait: 'pick', ready: (g) => pickedRank(g) === '10' && selectedIds.size === 3,
+            text: 'Same cards stack together: this pile is your three 10s. Tap it and all three are picked.' },
+          { at: AT.discard, point: AT.discard, wait: 'move', text: 'Tap Discard. Three cards go out, and you pick up only one.' },
+        ],
+        nudge: 'Tap the pile of 10s, then tap Discard.',
       },
       {
-        label: 'Step 4 of 7',
-        text: 'That did not match the open card, so you picked one up. Thirty points gone for one card — that is the trade, and it is usually worth it.',
         build: () => state({ hand: ['4', 'A', 'K'], open: '10' }),
-        tap: true,
+        beats: [
+          { at: rank('K'), text: 'Your 10s did not match the open card, so you picked up one card: this King.' },
+          { at: AT.value, text: 'Still a great trade: 35 points went down to 15.' },
+        ],
       },
       {
-        label: 'Step 5 of 7',
-        text: 'Each round picks a wild rank — this round it is 8. Your 8s are worth zero, so they are free to hold. Keep them.',
         build: () => state({ hand: ['8', '8', 'K', '4'], open: '10', wild: '8' }),
-        tap: true,
+        beats: [
+          { at: AT.joker, text: 'Every round has a joker. This round it is 8.' },
+          { at: rank('8'), text: 'So your 8s are worth 0 points. Keep them!' },
+        ],
       },
       {
-        label: 'Step 6 of 7',
-        text: 'Someone played a 2 at you. Play a 2 of your own to pass the penalty on to the next player — or take the cards and end it.',
         build: () => state({ hand: ['2', 'K', '9', '4'], open: '2', chain: 1 }),
-        // Either choice the text offers moves on: pass it with a 2, or take it.
+        // Either way through is fine: pass it on with a 2, or take the cards.
         want: (ids, g) => ids.length === 0 || (ids.length === 1 && rankOf(g, ids[0]) === '2'),
+        beats: [
+          { at: AT.open, text: 'Someone played a 2 at you! A 2 means: pick up 2 cards, unless you play a 2 back.' },
+          // No Discard here: during a +2 the button hides and tapping a 2
+          // plays it straight away (submitChainTwo).
+          { at: rank('2'), point: rank('2'), wait: 'move', text: 'You have a 2. Tap it to pass the attack to the next player.' },
+        ],
+        after: (g, ids) => (ids.length ? afterMove(g, ids, { chainCount: 2 }) : tookTwo(g)),
+        done: {
+          at: () => (lastIds && lastIds.length ? AT.open() : AT.hand()),
+          text: (g, ids) => (ids && ids.length
+            ? 'Passed! Now the next player must play a 2, or pick up 4 cards.'
+            : 'You picked up 2 cards. Next time, pass it on with your own 2!'),
+        },
         nudge: 'Tap your 2 to pass it on.',
-        // No target: during a chain the Discard button is hidden, so pointing
-        // at it highlighted nothing. The 2 is the only card you can tap anyway.
       },
       {
-        label: 'Step 7 of 7',
-        text: 'Your hand is down to 4 points. Least Count! is lit — call it. You score zero, as long as nobody at the table is lower.',
         build: () => state({ hand: ['A', '3'], open: '9' }),
         declare: true,
+        beats: [
+          { at: AT.value, text: 'Your cards add up to just 4 points. At 5 or less, you can call LEAST COUNT.' },
+          { at: AT.declare, point: AT.declare, wait: 'move',
+            text: 'Tap Least Count! Fewest points at the table: you score 0. Someone has fewer: you get 75.' },
+        ],
+        done: { at: AT.value, text: 'You had the fewest points: you score 0, the others add theirs. Lowest total wins. That is the whole game!' },
         nudge: 'Tap Least Count!',
-        target: 'btn-declare',
       },
     ];
 
@@ -639,36 +727,211 @@
       const c = (g.yourHand || []).find((x) => x.id === id);
       return c ? c.rank : null;
     }
-    function el(id) { return document.getElementById(id); }
     function clearTarget() {
       document.querySelectorAll('.coach-target').forEach((n) => n.classList.remove('coach-target'));
     }
 
-    function paint(msg) {
+    // ---- the spotlight, the finger, and the words beside them ----
+    // All decoration, all wrapped: a layout surprise can lose the pointing,
+    // never the lesson.
+    const raf = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16));
+    function overlayEls() {
+      let spot = el('coach-spot');
+      if (!spot) {
+        spot = document.createElement('div');
+        spot.id = 'coach-spot';
+        spot.className = 'coach-spot hidden';
+        spot.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(spot);
+      }
+      let finger = el('coach-finger');
+      if (!finger) {
+        finger = document.createElement('div');
+        finger.id = 'coach-finger';
+        finger.className = 'coach-finger hidden';
+        finger.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(finger);
+      }
+      return { spot, finger };
+    }
+    function visible(list) {
+      return (list || []).filter((n) => {
+        if (!n || !n.getBoundingClientRect) return false;
+        const r = n.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+    }
+    function find(f) { try { return visible(typeof f === 'function' ? f() : []); } catch (e) { return []; } }
+    function around(list) {
+      let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+      list.forEach((n) => {
+        const x = n.getBoundingClientRect();
+        l = Math.min(l, x.left); t = Math.min(t, x.top); r = Math.max(r, x.right); b = Math.max(b, x.bottom);
+      });
+      return { left: l, top: t, width: r - l, height: b - t };
+    }
+    // The words move out of the game screen while the lesson runs: inside
+    // it (.screen is its own layer) the dimming would cover them too.
+    function floatCoach() {
+      const box = el('coach');
+      try {
+        if (box && document.body && box.parentNode !== document.body) document.body.appendChild(box);
+      } catch (e) { /* stays where it is */ }
+      if (box) box.classList.add('floating');
+      return box;
+    }
+    function hideOverlay() {
+      ['coach-spot', 'coach-finger'].forEach((id) => { const n = el(id); if (n) n.classList.add('hidden'); });
+      clearTarget();
+    }
+    function place() {
+      if (!active) return;
+      const b = currentBeat();
+      if (!b) return;
+      try {
+        const { spot, finger } = overlayEls();
+        const coach = el('coach');
+        const H = window.innerHeight;
+        clearTarget();
+        const focus = find(b.at);
+        let area = null;
+        if (focus.length) {
+          const r = around(focus);
+          const pad = 7;
+          area = { left: r.left - pad, top: r.top - pad, width: r.width + pad * 2, height: r.height + pad * 2 };
+          spot.style.left = Math.round(area.left) + 'px';
+          spot.style.top = Math.round(area.top) + 'px';
+          spot.style.width = Math.round(area.width) + 'px';
+          spot.style.height = Math.round(area.height) + 'px';
+          spot.classList.remove('hidden');
+        } else {
+          spot.classList.add('hidden');
+        }
+        // The finger: under what to tap, pointing up -- or above it,
+        // pointing down, when it sits at the foot of the screen.
+        const pts = doneShown ? [] : find(b.point);
+        let fingerAbove = false, fingerBelow = false;
+        if (pts.length) {
+          const r = around(pts);
+          fingerBelow = r.top + r.height + 58 < H;
+          fingerAbove = !fingerBelow;
+          finger.textContent = fingerBelow ? '👆' : '👇';
+          finger.classList.toggle('down', fingerAbove);
+          finger.style.left = Math.round(r.left + r.width / 2) + 'px';
+          finger.style.top = Math.round(fingerBelow ? r.top + r.height + 4 : r.top - 4) + 'px';
+          finger.classList.remove('hidden');
+          // Buttons get the gold pulse too; cards have their own lift.
+          pts.forEach((p) => { if (!p.classList.contains('card')) p.classList.add('coach-target'); });
+        } else {
+          finger.classList.add('hidden');
+        }
+        // The words go on whichever side of the spotlight has more room,
+        // clear of the finger.
+        if (coach) {
+          coach.style.top = '';
+          coach.style.bottom = '';
+          if (area) {
+            const above = area.top;
+            const below = H - (area.top + area.height);
+            if (above >= below) {
+              let edge = area.top - 10 - (fingerAbove ? 48 : 0);
+              // Discard and Least Count! sit under the hand. Words placed
+              // straight above them covered the very cards just picked, so
+              // they go above the cards instead.
+              const held = find(cards);
+              if (held.length) {
+                const h = around(held);
+                if (area.top >= h.top + h.height) edge = Math.min(edge, h.top - 8);
+              }
+              coach.style.bottom = Math.round(H - edge) + 'px';
+            } else {
+              coach.style.top = Math.round(area.top + area.height + 10 + (fingerBelow ? 48 : 0)) + 'px';
+            }
+            // Never off the top of a short screen.
+            const c = coach.getBoundingClientRect();
+            if (c.top < 8) { coach.style.bottom = ''; coach.style.top = '8px'; }
+          } else {
+            coach.style.top = '28%';
+          }
+        }
+      } catch (e) { /* the words still show; only the pointing is lost */ }
+    }
+    // Twice more after the first frame: cards that are still sliding into
+    // place would otherwise be lit where they were, not where they land.
+    function placeSoon() {
+      raf(() => raf(place));
+      setTimeout(place, 350);
+      setTimeout(place, 800);
+    }
+    function onResize() { if (active) placeSoon(); }
+
+    function currentBeat() {
       const step = STEPS[idx];
-      if (!step) return;
+      if (!step) return null;
+      return doneShown ? step.done : step.beats[beat];
+    }
+
+    function showBeat() {
+      const step = STEPS[idx];
+      const b = currentBeat();
+      if (!step || !b) return;
+      const box = floatCoach();
+      if (box) box.classList.remove('hidden');
+      el('coach-step').textContent = 'Step ' + (idx + 1) + ' of ' + STEPS.length;
+      const words = nudgeText || (typeof b.text === 'function' ? b.text(latestGame, lastIds) : b.text);
+      el('coach-text').textContent = (doneShown ? '✓ ' : '') + words;
+      const next = el('coach-next');
+      const last = doneShown || beat === step.beats.length - 1;
+      next.textContent = doneShown && idx === STEPS.length - 1 ? 'Finish' : (last ? 'Next' : 'Got it');
+      next.classList.toggle('hidden', !doneShown && !!b.wait);
+      placeSoon();
+    }
+
+    function renderStep() {
+      const step = STEPS[idx];
       selectedIds = new Set();
       latestRoom = room();
       latestGame = step.build();
       renderGame(latestGame);
-
-      const box = el('coach');
-      box.classList.remove('hidden');
-      el('coach-step').textContent = step.label;
-      el('coach-text').textContent = msg
-        || (typeof step.text === 'function' ? step.text(latestGame) : step.text);
-      el('coach-next').classList.toggle('hidden', !step.tap);
-      clearTarget();
-      if (step.target) {
-        const t = el(step.target);
-        if (t) t.classList.add('coach-target');
-      }
+      beat = 0;
+      doneShown = false;
+      nudgeText = null;
+      lastIds = null;
+      showBeat();
     }
 
     function advance() {
       idx += 1;
       if (idx >= STEPS.length) return finish(true);
-      paint();
+      renderStep();
+    }
+
+    // The step's move was made: show what it did, then the result line.
+    function moveMade(ids) {
+      const step = STEPS[idx];
+      lastIds = ids;
+      selectedIds = new Set();
+      if (!step.done) { advance(); return; }
+      if (step.after) {
+        latestGame = step.after(latestGame, ids);
+        renderGame(latestGame);
+      }
+      doneShown = true;
+      nudgeText = null;
+      showBeat();
+    }
+
+    // Not the move this step is about: back to the beat that asks for it,
+    // with a correction in place of its own words.
+    function nudge() {
+      const step = STEPS[idx];
+      if (!step) return;
+      const ask = step.beats.findIndex((b) => !!b.wait);
+      if (ask >= 0) beat = ask;
+      nudgeText = step.nudge || null;
+      selectedIds = new Set();
+      renderGame(latestGame);
+      showBeat();
     }
 
     function finish(completed) {
@@ -677,7 +940,8 @@
       // briefly made every quit count twice in GA4 (abandoned + skipped).
       if (!active) return;
       active = false;
-      clearTarget();
+      hideOverlay();
+      try { window.removeEventListener('resize', onResize); } catch (e) { /* none */ }
       el('coach').classList.add('hidden');
       try { localStorage.setItem(DONE_KEY, '1'); } catch (e) { /* session only */ }
       try { logAnalytics(completed ? 'tutorial_completed' : 'tutorial_skipped', { step: idx + 1 }); } catch (e) { /* no */ }
@@ -713,27 +977,54 @@
         myPlayerId = ME;
         active = true;
         idx = 0;
+        try { window.addEventListener('resize', onResize); } catch (e) { /* no window */ }
         showScreen('screen-game');
-        paint();
+        renderStep();
       },
-      next() { if (active && STEPS[idx] && STEPS[idx].tap) advance(); },
+      // Got it / Next / Finish.
+      next() {
+        if (!active) return;
+        const step = STEPS[idx];
+        const b = currentBeat();
+        if (!step || !b) return;
+        if (doneShown) { advance(); return; }
+        if (b.wait) return;   // this beat waits for a tap on the table
+        nudgeText = null;
+        if (beat < step.beats.length - 1) { beat += 1; showBeat(); return; }
+        advance();            // the last beat of a step that only explains
+      },
       skip() { finish(false); },
+      // After every pick on the table (toggleSelectGroup). The right cards
+      // go straight on to the next beat -- even from a beat that was still
+      // explaining -- and anything else gets a correction.
+      onSelect() {
+        if (!active || doneShown) return;
+        const step = STEPS[idx];
+        if (!step || !step.beats) return;
+        const ask = step.beats.findIndex((b) => b.wait === 'pick');
+        if (ask < 0) { placeSoon(); return; }
+        if (step.beats[ask].ready(latestGame)) { beat = ask + 1; nudgeText = null; showBeat(); return; }
+        if (selectedIds.size) { beat = ask; nudgeText = step.nudge || null; showBeat(); return; }
+        if (beat > ask) { beat = ask; nudgeText = null; showBeat(); return; }
+        placeSoon();
+      },
 
       // Called instead of emitting to the server. Returns true if it handled
       // the tap, so the real handlers can bail out.
       tryDiscard(ids) {
         if (!active) return false;
         const step = STEPS[idx];
-        if (!step || !step.want) { paint(step && step.nudge); return true; }
-        if (step.want(ids, latestGame)) advance();
-        else paint(step.nudge);
+        if (!step || doneShown) return true;
+        if (step.want && step.want(ids, latestGame)) moveMade(ids);
+        else nudge();
         return true;
       },
       tryDeclare() {
         if (!active) return false;
         const step = STEPS[idx];
-        if (step && step.declare) advance();
-        else paint(step && step.nudge);
+        if (!step || doneShown) return true;
+        if (step.declare) moveMade([]);
+        else nudge();
         return true;
       },
     };
@@ -7794,6 +8085,9 @@
       group.cards.forEach((c) => selectedIds.add(c.id));
     }
     renderGame(latestGame);
+    // The lesson moves on the moment the right cards are picked (and points
+    // at them again if they are not). Never in a real game.
+    if (Tutorial.isActive()) Tutorial.onSelect();
   }
 
   function submitChainTwo(card) {
