@@ -6553,6 +6553,13 @@ html.gs2 .hand-value-pill b {
   border-radius: 15px; box-shadow: 0 6px 16px rgba(0,0,0,0.4);
   z-index: 9;
 }
+/* Your turn briefing (Nov 2026): a private line about your own game, on the
+   line just above your cards like "You drew..." -- calmer than the
+   red-to-gold +2 note, with a little gold to set it apart. */
+.hand-header .draw-toast.coach {
+  background: linear-gradient(90deg, rgba(242,193,78,0.22) 0%, rgba(242,193,78,0.05) 100%), var(--home-sheet);
+  border-color: var(--gold); color: #fff; font-weight: 600;
+}
 /* The +2 note keeps its red-to-gold. */
 .hand-header .draw-toast.trump {
   border-color: transparent;
