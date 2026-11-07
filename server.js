@@ -2784,9 +2784,24 @@ function broadcastGameState(room) {
       state.autoNextRoundInMs = room.autoNextRoundAt
         ? Math.max(0, room.autoNextRoundAt - Date.now())
         : null;
+      addTwoCounts(room, state);
       io.to(p.socketId).emit('game_state', state);
     }
   }
+}
+
+// The +2 counts behind the private turn briefing (Nov 2026): how many 2s this
+// round's decks hold, and how many are face-up on the discard pile. Both are
+// public -- the deck count is announced at the deal and every 2 was thrown in
+// front of the whole table -- so this sends nothing about anyone's hand. The
+// pile is the right source after a reshuffle too: the 2s that went back into
+// the stock are unseen again.
+function addTwoCounts(room, state) {
+  const g = room && room.game;
+  if (!g || !g.numDecks) return state;
+  state.totalTwos = 4 * g.numDecks;
+  state.twosPlayed = (g.discardPile || []).filter((c) => c && c.rank === '2').length;
+  return state;
 }
 
 // ---------------------------------------------------------------------------
@@ -4375,6 +4390,7 @@ io.on('connection', (socket) => {
       } else if (room.game) {
         const state = room.game.getPublicState(playerId);
         state.turnDeadline = room.turnDeadline || null;
+        addTwoCounts(room, state);
         io.to(socket.id).emit('game_state', state);
       }
     } catch (e) {
