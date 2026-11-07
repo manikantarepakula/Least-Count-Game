@@ -6596,3 +6596,128 @@ html.gs2 #hand .card.stacked-3 {
   --stack: 3px -3px 0 -1px #fbf9f3, 3px -3px 0 0 rgba(0,0,0,0.22),
            6px -6px 0 -1px #f3f0e8, 6px -6px 0 0 rgba(0,0,0,0.18);
 }
+
+/* ==========================================================================
+   DIWALI (7-9 Nov 2026)
+   ==========================================================================
+   On only while <html> has the `diwali` class, which app.js sets by the date
+   in India (see isDiwali) -- so it switches itself off on 10 November with no
+   second upload. Gradients and CSS only: no images, nothing to download.
+     - Home: a marigold garland under the top bar, "Happy Diwali" greeting,
+       and a lit-up panel with three diyas in the space under the three
+       ways to play, with one button: invite the family.
+     - The table: a warm diya glow in the middle of the felt, and maroon and
+       gold card backs with a rangoli star.
+     - Fireworks (app.js) where the confetti was.
+   ========================================================================== */
+
+/* ---- Marigold garland, hanging under the Home top bar ---- */
+html.diwali #screen-landing .landing-topbar { position: relative; }
+html.diwali #screen-landing .landing-topbar::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -11px; height: 13px;
+  pointer-events: none; z-index: 2;
+  background:
+    radial-gradient(4px 2.2px at 12px 10px, #2f9e44 0 92%, transparent 100%) 0 0 / 24px 13px repeat-x,
+    radial-gradient(circle at 6px 6px, #ffe066 0 1.8px, #ffb01f 2.4px 4.2px, #e8650c 4.6px 5.5px, transparent 5.9px) 0 0 / 12px 13px repeat-x;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,0.45));
+}
+
+/* ---- The Diwali panel, in the space under the three ways to play ---- */
+.home-diwali { display: none; }
+html.diwali .home-diwali {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 6px; margin-top: 12px; padding: 14px 16px 16px;
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 85% at 50% 108%, rgba(255,150,40,0.30) 0%, rgba(255,150,40,0) 62%),
+    linear-gradient(180deg, #3b0d17 0%, #23070e 100%);
+  border: 1px solid rgba(242,193,78,0.55);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,220,140,0.06);
+}
+html.diwali .hd-diyas {
+  position: relative; z-index: 1;
+  display: flex; align-items: flex-end; justify-content: center; gap: 24px;
+  height: 46px; margin-top: 4px;
+}
+/* A clay lamp: flat lip on top, round belly underneath. */
+html.diwali .hd-diya {
+  position: relative; width: 38px; height: 15px;
+  background: linear-gradient(180deg, #f39a3a 0%, #c4521c 55%, #7c2a0d 100%);
+  border-radius: 3px 3px 50% 50% / 3px 3px 100% 100%;
+  box-shadow: inset 0 2px 0 rgba(255,225,160,0.65), 0 6px 14px rgba(255,140,30,0.35);
+}
+html.diwali .hd-diya.hd-mid { width: 50px; height: 19px; }
+html.diwali .hd-flame {
+  position: absolute; left: 50%; bottom: 100%; width: 10px; height: 20px; margin: 0 0 -1px -5px;
+  border-radius: 50% 50% 50% 50% / 62% 62% 38% 38%;
+  background: radial-gradient(ellipse at 50% 72%, #fffbe8 0%, #ffe08a 30%, #ffa62b 62%, rgba(255,120,20,0) 76%);
+  box-shadow: 0 0 16px 6px rgba(255,170,50,0.45), 0 0 34px 12px rgba(255,120,20,0.18);
+  transform-origin: 50% 90%;
+  animation: hdFlicker 1.6s ease-in-out infinite alternate;
+}
+html.diwali .hd-mid .hd-flame { width: 12px; height: 25px; margin-left: -6px; animation-duration: 1.25s; }
+@keyframes hdFlicker {
+  0%   { transform: scale(1, 1) rotate(-2deg); opacity: 0.94; }
+  40%  { transform: scale(0.93, 1.07) rotate(2deg); opacity: 1; }
+  70%  { transform: scale(1.04, 0.95) rotate(-1deg); opacity: 0.9; }
+  100% { transform: scale(0.97, 1.04) rotate(1.5deg); opacity: 1; }
+}
+/* Georgia, not Cinzel: Cinzel is loaded with only the letters of LEAST
+   COUNT (see index.html), so it would draw this title in a mix of fonts. */
+html.diwali .hd-title {
+  position: relative; z-index: 1; margin: 6px 0 0;
+  font-family: Georgia, 'Times New Roman', serif; font-weight: 800; font-size: 22px;
+  letter-spacing: 1px; color: var(--gold-bright, #f2c14e);
+  text-shadow: 0 0 14px rgba(255,190,80,0.45);
+}
+html.diwali .hd-line {
+  position: relative; z-index: 1; margin: 0; max-width: 290px;
+  font-size: 13px; line-height: 1.35; color: rgba(255,240,220,0.86);
+}
+html.diwali .hd-btn {
+  position: relative; z-index: 1;
+  width: auto; margin-top: 8px; padding: 11px 20px; font-size: 14.5px;
+}
+/* Sparkles twinkling in the dark around the lamps. */
+html.diwali .hd-sparks i {
+  position: absolute; width: 4px; height: 4px; border-radius: 50%;
+  background: #ffe08a; box-shadow: 0 0 6px 2px rgba(255,210,120,0.7);
+  opacity: 0; animation: hdTwinkle 2.6s ease-in-out infinite;
+}
+html.diwali .hd-sparks i:nth-child(1) { left: 9%;  top: 16%; animation-delay: 0s; }
+html.diwali .hd-sparks i:nth-child(2) { left: 22%; top: 48%; animation-delay: 0.9s; }
+html.diwali .hd-sparks i:nth-child(3) { left: 86%; top: 14%; animation-delay: 0.4s; }
+html.diwali .hd-sparks i:nth-child(4) { left: 76%; top: 52%; animation-delay: 1.5s; }
+html.diwali .hd-sparks i:nth-child(5) { left: 50%; top: 6%;  animation-delay: 2.0s; }
+html.diwali .hd-sparks i:nth-child(6) { left: 93%; top: 70%; animation-delay: 1.1s; }
+@keyframes hdTwinkle {
+  0%, 100% { opacity: 0; transform: scale(0.4); }
+  50%      { opacity: 1; transform: scale(1); }
+}
+/* Short phones: keep the lamps and the button, drop the sentence. */
+@media (max-height: 700px) { html.diwali .hd-line { display: none; } }
+@media (max-height: 600px) { html.diwali .hd-diyas, html.diwali .hd-sparks { display: none; } }
+
+/* ---- The table: a diya glow in the middle of the felt ---- */
+html.diwali .table-felt {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(255,190,80,0.17) 0%, rgba(255,150,40,0.07) 34%, rgba(255,150,40,0) 60%),
+    radial-gradient(circle at 50% 38%, #1c5540 0%, var(--jade-bg) 42%, var(--jade-bg-dark) 78%, #041009 100%);
+}
+html.diwali .table-felt::after { border: 1px dashed rgba(242,193,78,0.22); }
+
+/* ---- Card backs: maroon and gold, with a rangoli star ---- */
+html.diwali {
+  --lc-back-bg:
+    radial-gradient(circle at 50% 50%, rgba(255,214,102,0.70) 0 6%, transparent 7%),
+    radial-gradient(circle at 50% 50%, transparent 0 17%, rgba(255,200,80,0.45) 18% 20%, transparent 21%),
+    repeating-conic-gradient(from 0deg at 50% 50%, rgba(255,196,0,0.22) 0deg 9deg, transparent 9deg 22.5deg),
+    linear-gradient(160deg, #8f1d28 0%, #4e0b15 100%);
+  --lc-back-shadow: inset 0 0 0 2px #3d0710, inset 0 0 0 3px rgba(242,193,78,0.78);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.diwali .hd-flame, html.diwali .hd-sparks i { animation: none; }
+  html.diwali .hd-sparks i { opacity: 0.8; }
+}
