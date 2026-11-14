@@ -128,6 +128,62 @@ class LeastCountGame {
     this.reshuffleCount = 0;
     // Recent discards per player, this round only -- see startRound().
     this.discardHistory = {};
+    // How each player left the game, in order (Nov 2026) -- the final places,
+    // which the rating is based on, come from this (see standings()).
+    //   { playerId, round, kind: 'score' | 'quit' | 'absent', score, seq }
+    // A player who rejoins has their exit wiped; only the last one counts.
+    this.exits = [];
+    this._exitSeq = 0;
+  }
+
+  _recordExit(playerId, kind) {
+    this.exits = this.exits.filter((e) => e.playerId !== playerId);
+    this._exitSeq += 1;
+    this.exits.push({
+      playerId, round: this.roundNumber, kind, score: this.scores[playerId] || 0, seq: this._exitSeq,
+    });
+  }
+
+  /**
+   * Final places (Nov 2026), best first: [{ playerId, place, left }].
+   *   1. the winner;
+   *   2. anyone still in without being the winner (only when nobody won);
+   *   3. players knocked out by the max score -- knocked out later is higher;
+   *      knocked out in the same round, the lower score is higher, and equal
+   *      scores share a place;
+   *   4. players who LEFT (walked out, or their seat was emptied after they
+   *      stayed away) -- last, the later leaver above the earlier one.
+   * Leaving can therefore never beat being knocked out, so walking away from
+   * a losing game never protects a rating.
+   */
+  standings() {
+    const exitOf = new Map(this.exits.map((e) => [e.playerId, e]));
+    const leftGame = (e) => !!e && (e.kind === 'quit' || e.kind === 'absent');
+    const group = (id) => {
+      if (this.winner && id === this.winner) return 0;
+      const e = exitOf.get(id);
+      if (!e) return 1;
+      return leftGame(e) ? 3 : 2;
+    };
+    const cmp = (a, b) => {
+      const ga = group(a);
+      const gb = group(b);
+      if (ga !== gb) return ga - gb;
+      if (ga === 1) return (this.scores[a] || 0) - (this.scores[b] || 0);
+      const ea = exitOf.get(a);
+      const eb = exitOf.get(b);
+      if (ga === 2) return (eb.round - ea.round) || (ea.score - eb.score);
+      if (ga === 3) return eb.seq - ea.seq;
+      return 0;
+    };
+    const ids = this.playerIds.slice().sort(cmp);
+    const out = [];
+    let place = 0;
+    ids.forEach((id, i) => {
+      if (i === 0 || cmp(ids[i - 1], id) !== 0) place = i + 1;
+      out.push({ playerId: id, place, left: leftGame(exitOf.get(id)) });
+    });
+    return out;
   }
 
   // Records card(s) a player just discarded into their rolling recent-discard
@@ -208,6 +264,7 @@ class LeastCountGame {
     if (this.eliminated.has(playerId) || this.quit.has(playerId)) return this.getPublicState();
 
     this.quit.add(playerId);
+    this._recordExit(playerId, 'quit');
     this.log.push({ type: 'quit', round: this.roundNumber, playerId });
 
     const stillActive = this.activePlayers();
@@ -235,6 +292,7 @@ class LeastCountGame {
     if (this.eliminated.has(playerId) || this.quit.has(playerId)) return this.getPublicState();
 
     this.eliminated.add(playerId);
+    this._recordExit(playerId, 'absent');
     this.log.push({ type: 'absent', round: this.roundNumber, playerId });
     // Reported separately from newlyEliminated (which means "hit the max
     // score"). The two need different wording on the result screen -- "Ravi
@@ -354,6 +412,7 @@ class LeastCountGame {
     const score = this.rejoinScoreFor(playerId);
     this.eliminated.delete(playerId);
     this.quit.delete(playerId);
+    this.exits = this.exits.filter((e) => e.playerId !== playerId);
     this.scores[playerId] = score;
     this.rejoinsUsed.add(playerId);
     this.log.push({ type: 'rejoin', round: this.roundNumber, playerId, score });
@@ -742,7 +801,12 @@ class LeastCountGame {
     const preScores = { ...this.scores };
     for (const id of this.turnOrder) {
       this.scores[id] += roundScores[id];
-      if (this.scores[id] >= this.eliminationScore) this.eliminated.add(id);
+      if (this.scores[id] >= this.eliminationScore) {
+        this.eliminated.add(id);
+        // Once per exit: anyone in this round's turn order is still in, so
+        // they have no exit on record (a rejoiner's old one was wiped).
+        if (!this.exits.some((e) => e.playerId === id)) this._recordExit(id, 'score');
+      }
     }
 
     this.roundHistory.push({ round: this.roundNumber, roundScores: { ...roundScores } });
@@ -800,6 +864,8 @@ class LeastCountGame {
       // there's no hidden info here, just a convenience so the client doesn't
       // have to replay the whole discard pile to know who threw what recently.
       discardHistory: this.discardHistory || {},
+      // The final places, once there are any (see standings()).
+      standings: this.gameOver ? this.standings() : null,
     };
     // Per-viewer, so the client never has to re-derive the eligibility rules
     // (and can't drift from them). rejoinScore is the number to put in front
