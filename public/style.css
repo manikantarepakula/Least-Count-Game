@@ -6979,3 +6979,126 @@ html.diwali .intro-bursts i:nth-child(5) { left: 84%; top: 62%; animation-delay:
   14%  { opacity: 1; }
   100% { opacity: 0; transform: scale(1.3); }
 }
+
+/* ==========================================================================
+   RATING (Nov 2026)
+   ==========================================================================
+   A chess-style number per player (the rules: game/rating.js). Three places:
+   a chip on every chair and lobby seat, the change on the game-over screen,
+   and a card at the top of the Profile panel. Each rank has one colour,
+   carried in --rt (and a faint wash, --rt-bg), so a chip, a card and a
+   progress bar of the same rank always match. */
+.rt-rookie { --rt: #b9c7c0; --rt-bg: rgba(185,199,192,0.10); }
+.rt-rising { --rt: #7be0a8; --rt-bg: rgba(123,224,168,0.12); }
+.rt-sharp  { --rt: #6cc7f2; --rt-bg: rgba(108,199,242,0.12); }
+.rt-shark  { --rt: #b79cff; --rt-bg: rgba(183,156,255,0.13); }
+.rt-pro    { --rt: #ff9d6c; --rt-bg: rgba(255,157,108,0.13); }
+.rt-raja   { --rt: #f2c14e; --rt-bg: rgba(242,193,78,0.15); }
+
+/* The change: green up, red down, grey for no change. */
+.rating-delta {
+  display: inline-block; font-weight: 800; font-size: 12px; line-height: 1.2;
+  padding: 2px 7px; border-radius: 10px; font-variant-numeric: tabular-nums;
+}
+.rating-delta.up   { color: #0c2a1c; background: #7be0a8; }
+.rating-delta.down { color: #fff;    background: #e0565b; }
+.rating-delta.flat { color: #cfe0d6; background: rgba(255,255,255,0.12); }
+
+/* ---- 1. On the chair: a small chip after the name ------------------------ */
+.seat-rating {
+  flex: 0 0 auto;
+  font-size: calc(9.5px * var(--seat-scale, 1)); font-weight: 800; line-height: 1;
+  padding: calc(2px * var(--seat-scale, 1)) calc(4px * var(--seat-scale, 1));
+  border-radius: 6px; border: 1px solid var(--rt, #b9c7c0);
+  color: var(--rt, #b9c7c0); background: rgba(0,0,0,0.28);
+  font-variant-numeric: tabular-nums;
+}
+.seat-rating.rt-raja { color: #2a1d02; border-color: transparent; background: linear-gradient(180deg, #f8d77a 0%, #e3a92f 100%); }
+/* Whose turn: the chair turns gold, so the chip goes dark on light. */
+.seat.active .seat-rating,
+html.gs2 .seat.active .seat-rating { color: #261a03; border-color: rgba(38,26,3,0.35); background: rgba(255,255,255,0.45); }
+
+/* ---- 1b. In the lobby: a chip on the top edge of the player's circle ------ */
+.ls-rating {
+  position: absolute; left: 50%; top: -9px; transform: translateX(-50%);
+  font-size: 9.5px; font-weight: 800; line-height: 1; padding: 2px 5px; border-radius: 7px;
+  color: var(--rt, #b9c7c0); background: #0f241d; border: 1px solid var(--rt, #b9c7c0);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.ls-rating.rt-raja { color: #2a1d02; border-color: transparent; background: linear-gradient(180deg, #f8d77a 0%, #e3a92f 100%); }
+.lobby-seat.offline .ls-rating { opacity: 0.5; }
+
+/* ---- 2. Game over: your rating, counted up, under the title --------------- */
+.go-rating-card {
+  margin: 0 auto 12px; max-width: 290px; padding: 10px 14px 12px;
+  border-radius: 14px; text-align: center; color: #fff;
+  background: linear-gradient(180deg, var(--rt-bg, rgba(255,255,255,0.06)) 0%, rgba(255,255,255,0.02) 100%);
+  border: 1px solid var(--rt, rgba(255,255,255,0.18));
+}
+.go-rating-card.hidden { display: none; }
+.go-rating-card.pending, .go-rating-card.note {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 9px 12px; border-color: rgba(255,255,255,0.12); background: rgba(255,255,255,0.05);
+}
+.gr-top { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; }
+.gr-label { color: var(--home-line, #9fb5ab); font-weight: 600; letter-spacing: 0.02em; }
+.gr-tier { color: var(--rt); font-weight: 800; }
+.gr-main { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 2px; }
+.gr-num { font-size: 40px; font-weight: 800; line-height: 1.1; color: #fff; font-variant-numeric: tabular-nums; }
+.gr-main .rating-delta { font-size: 15px; padding: 3px 9px; }
+.go-rating-card.done.gain .gr-num { text-shadow: 0 0 18px var(--rt); animation: grPop 0.4s ease-out; }
+.go-rating-card.done.gain .gr-main .rating-delta { animation: grPop 0.4s 0.05s ease-out; }
+.gr-rankup {
+  margin-top: 6px; font-weight: 800; font-size: 13px; color: var(--rt);
+  animation: grRise 0.5s 0.9s ease-out both;
+}
+.gr-new { margin: 8px auto 0; max-width: 220px; font-size: 11.5px; color: var(--home-line, #9fb5ab); display: flex; flex-direction: column; gap: 4px; }
+.r-bar { display: block; width: 100%; height: 5px; border-radius: 4px; background: rgba(255,255,255,0.12); overflow: hidden; }
+.r-bar i { display: block; height: 100%; border-radius: 4px; background: var(--rt, #b9c7c0); }
+.gr-half { margin-top: 6px; font-size: 11px; color: var(--home-line, #9fb5ab); }
+.gr-note { font-size: 12.5px; color: var(--home-line, #9fb5ab); line-height: 1.35; }
+.gr-wait { font-size: 12.5px; color: var(--home-line, #9fb5ab); animation: grBlink 0.9s ease-in-out infinite alternate; }
+@keyframes grPop { 0% { transform: scale(1); } 45% { transform: scale(1.14); } 100% { transform: scale(1); } }
+@keyframes grRise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes grBlink { from { opacity: 0.45; } to { opacity: 1; } }
+
+/* Everyone's change, on a second line under each name in the standings. */
+#gameover-body .go-name { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; white-space: normal; }
+.go-nm { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.go-rating { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 11.5px; font-weight: 600; }
+.go-rating.hidden { display: none; }
+.go-rt { color: rgba(255,255,255,0.8); font-variant-numeric: tabular-nums; }
+.go-rating .rating-delta { font-size: 10.5px; padding: 1px 6px; }
+.go-left {
+  margin-left: 6px; font-size: 10px; font-weight: 700; color: #ffb38a; vertical-align: 1px;
+  border: 1px solid rgba(255,179,138,0.5); border-radius: 6px; padding: 0 4px;
+}
+
+/* ---- 3. Profile: the rating card at the top ------------------------------- */
+.pr-card {
+  margin: 2px 0 14px; padding: 12px 14px; border-radius: 14px; color: #fff; text-align: left;
+  background: linear-gradient(180deg, var(--rt-bg, rgba(255,255,255,0.06)) 0%, rgba(255,255,255,0.02) 100%);
+  border: 1px solid var(--rt, rgba(255,255,255,0.18));
+}
+.pr-card.hidden { display: none; }
+.pr-top { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; }
+.pr-label { color: #9a9aa2; font-weight: 600; letter-spacing: 0.02em; }
+.pr-tier { color: var(--rt); font-weight: 800; }
+.pr-main { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+.pr-num { font-size: 36px; font-weight: 800; line-height: 1.1; color: #fff; font-variant-numeric: tabular-nums; }
+/* Above Rookie the number takes the rank's colour: something to earn. */
+.pr-card:not(.rt-rookie) .pr-num { color: var(--rt); }
+.pr-last { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: #9a9aa2; }
+.pr-meta { margin-top: 2px; font-size: 11.5px; color: #9a9aa2; }
+.pr-new { margin-top: 8px; font-size: 11.5px; color: #9a9aa2; display: flex; flex-direction: column; gap: 4px; }
+.pr-how { margin-top: 8px; font-size: 11.5px; color: #9a9aa2; }
+.pr-how summary { cursor: pointer; color: var(--rt); font-weight: 700; list-style: none; }
+.pr-how summary::-webkit-details-marker { display: none; }
+.pr-how summary::after { content: ' \203A'; }
+.pr-how[open] summary::after { content: ' \2039'; }
+.pr-how p { margin: 6px 0 0; line-height: 1.45; }
+
+@media (prefers-reduced-motion: reduce) {
+  .go-rating-card.done.gain .gr-num, .go-rating-card.done.gain .gr-main .rating-delta,
+  .gr-rankup, .gr-wait { animation: none; }
+}
