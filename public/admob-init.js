@@ -134,9 +134,70 @@
   // to fit with a 90px reserve, so erring high costs nothing.
   const FALLBACK_BANNER_HEIGHT_PX = 64;
 
-  function setSafeBottom(px) {
-    document.documentElement.style.setProperty('--ad-safe-bottom', px + 'px');
+  // --------------------------------------------------------------------
+  // THE BANNER FLOATS ABOVE THE BOTTOM (Nov 2026). Two players' screenshots,
+  // both from phones with the 3-button navigation bar, showed the bottom
+  // banner sitting one navigation-bar height ABOVE the bottom of the app,
+  // with the app's own background visible underneath it: the native side
+  // lifts the banner clear of the navigation bar even though our WebView
+  // already ends above that bar, so the lift is applied twice. The reserve
+  // below only covered the banner's own height at the very bottom, so the
+  // ad sat on Discard / Least Count! in a game, and on the chat box.
+  //
+  // So the reserve is now the banner PLUS an allowance for that lift. JS
+  // can't see the navigation bar, but it can see the screen: the screen's
+  // height minus our WebView's height is the status bar plus the navigation
+  // bar, and a status bar is at least 24px, so what is left is at least the
+  // navigation bar. Erring high leaves a strip of empty background under
+  // the ad; erring low is what put the ad on the buttons.
+  // --------------------------------------------------------------------
+  let baseSafe = 0;        // the banner's own height (0 = no banner)
+  let navAllowance = 0;    // the extra lift, see above
+
+  function refreshSafeBottom() {
+    const v = baseSafe > 0 ? baseSafe + navAllowance : 0;
+    document.documentElement.style.setProperty('--ad-safe-bottom', v + 'px');
   }
+  function setSafeBottom(px) {
+    baseSafe = px > 0 ? px : 0;
+    refreshSafeBottom();
+  }
+
+  // Typing in any text box: the on-screen keyboard shrinks the WebView, so
+  // nothing is measured then, and the banner steps aside (below).
+  function typingNow() {
+    const a = document.activeElement;
+    if (!a) return false;
+    if (a.tagName === 'TEXTAREA' || a.isContentEditable) return true;
+    return a.tagName === 'INPUT' && /^(text|search|email|tel|url|number|password)?$/i.test(a.type || '');
+  }
+
+  function measureNavAllowance() {
+    if (typingNow()) return;
+    try {
+      const s = window.screen || {};
+      const w = window.innerWidth, h = window.innerHeight;
+      const long = Math.max(s.width || 0, s.height || 0);
+      const short = Math.min(s.width || 0, s.height || 0);
+      const full = h >= w ? long : short;
+      if (!(full > 0) || !(h > 0)) return;
+      const bars = full - h;                 // status bar + navigation bar
+      // A reading under 30 means this phone reports the screen without its
+      // bars; then assume the tallest navigation bar (48) rather than none.
+      const next = bars < 30 ? 48 : Math.max(0, Math.min(60, Math.round(bars - 24 + 6)));
+      if (next !== navAllowance) {
+        navAllowance = next;
+        console.log('[AdMob] navigation allowance', next, '(screen', full, 'webview', h + ')');
+        refreshSafeBottom();
+      }
+    } catch (e) { /* keep the last value */ }
+  }
+  measureNavAllowance();
+  let navMeasureTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(navMeasureTimer);
+    navMeasureTimer = setTimeout(measureNavAllowance, 250);
+  });
 
   let initPromise = null;
   let listenerAdded = false;
@@ -316,6 +377,45 @@
     scheduleApply();
   }
 
+  // --------------------------------------------------------------------
+  // NO BANNER WHILE TYPING (Nov 2026). With the keyboard up the banner sat
+  // right on top of the chat box -- a player wrote in the table chat that
+  // the chat "isn't coming properly". It also put an ad next to the keyboard,
+  // where it gets tapped by accident (which AdMob's policies are strict
+  // about). So while a text box has focus the banner stands down; the
+  // desired state is untouched, and it comes back when typing ends. Every
+  // game update keeps asking for the banner (showBanner on each push), which
+  // is why this is decided here, in one place, and not by callers.
+  // --------------------------------------------------------------------
+  let typing = false;
+  let typingTimer = null;
+  function effectiveKind() {
+    return typing ? BANNER_NONE : desiredKind;
+  }
+  document.addEventListener('focusin', () => {
+    clearTimeout(typingTimer);
+    if (!typing && typingNow()) {
+      typing = true;
+      // Free the reserved space at once, so the chat box can sit straight on
+      // the keyboard without waiting for the native call to come back.
+      setSafeBottom(0);
+      scheduleApply();
+    }
+  });
+  document.addEventListener('focusout', () => {
+    clearTimeout(typingTimer);
+    // A short wait: focus moving from one box to the next (or the send
+    // button keeping the keyboard up) must not flash the banner.
+    typingTimer = setTimeout(() => {
+      if (typing && !typingNow()) {
+        typing = false;
+        scheduleApply();
+        // The keyboard has gone; measure the screen again.
+        setTimeout(measureNavAllowance, 400);
+      }
+    }, 350);
+  });
+
   // Marks our record of the native slot as unknown, so the next apply()
   // re-issues the desired state even if it looks unchanged.
   function invalidateBannerState(why) {
@@ -338,7 +438,7 @@
         // await is in flight, which is exactly the race that used to let a
         // game_state push steal the slot mid-swap.
         for (let guard = 0; guard < 10; guard++) {
-          const kind = desiredKind;
+          const kind = effectiveKind();
           const margin = desiredMargin;
           if (kind === appliedKind && margin === appliedMargin) break;
           try {
@@ -393,7 +493,7 @@
       } finally {
         applyRunning = null;
         // Intent may have changed during the final await -- run again if so.
-        if (desiredKind !== appliedKind || desiredMargin !== appliedMargin) scheduleApply();
+        if (effectiveKind() !== appliedKind || desiredMargin !== appliedMargin) scheduleApply();
       }
     })();
   }
