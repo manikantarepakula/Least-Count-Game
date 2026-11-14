@@ -316,26 +316,17 @@
   // ---------------- RATING (Nov 2026) ----------------
   // A chess-style number, worked out on the server after every rated game
   // (a friends' table with 2+ people and 3+ rounds -- the rules are in
-  // game/rating.js). Shown in three places: a chip on every chair and lobby
-  // seat, the change on the game-over screen, and a card at the top of the
-  // Profile panel. Every number comes from the server; nothing is worked
-  // out here.
+  // game/rating.js). Shown the chess.com way, as plain text in brackets
+  // right after the name -- "Ravi (455)", the number bold in our gold -- on
+  // the chairs, the lobby and the result screen; and as a card at the top of
+  // the Profile panel. No badges and no rank names (Mani, Nov 2026: the
+  // coloured chips looked like notification stickers). Every number comes
+  // from the server; nothing is worked out here.
   const RATING_NEW_GAMES = 10;
-  const RATING_TIERS = [
-    { min: 1000, name: 'Raja', cls: 'rt-raja' },
-    { min: 850, name: 'Pro', cls: 'rt-pro' },
-    { min: 700, name: 'Card Shark', cls: 'rt-shark' },
-    { min: 550, name: 'Sharp', cls: 'rt-sharp' },
-    { min: 400, name: 'Rising', cls: 'rt-rising' },
-    { min: -Infinity, name: 'Rookie', cls: 'rt-rookie' },
-  ];
-  function ratingTier(r) {
-    return RATING_TIERS.find((t) => r >= t.min) || RATING_TIERS[RATING_TIERS.length - 1];
-  }
-  // The next rank up and how far it is, or null at the top.
-  function ratingNextTier(r) {
-    const i = RATING_TIERS.findIndex((t) => r >= t.min);
-    return i > 0 ? { tier: RATING_TIERS[i - 1], toGo: RATING_TIERS[i - 1].min - r } : null;
+  // "(455)", for after a name. The number only: a rating is never a string
+  // from the network that could carry markup.
+  function ratingBracketHtml(rating) {
+    return '<span class="rating-br">(<b>' + Math.round(Number(rating) || 0) + '</b>)</span>';
   }
   function ratingDeltaHtml(delta) {
     const d = Math.round(Number(delta) || 0);
@@ -382,7 +373,7 @@
       const slot = row.querySelector('.go-rating');
       if (!slot) return;
       const c = u && u.rated && u.changes ? u.changes[row.dataset.playerId] : null;
-      slot.innerHTML = c ? '<span class="go-rt">' + c.after + '</span>' + ratingDeltaHtml(c.delta) : '';
+      slot.innerHTML = c ? ratingBracketHtml(c.after) + ' ' + ratingDeltaHtml(c.delta) : '';
       slot.classList.toggle('hidden', !c);
     });
     if (!u) return;   // still "Updating..." (see showGameOver)
@@ -397,14 +388,11 @@
     const key = JSON.stringify(mine);
     if (box.dataset.shown === key) return;   // already counted up
     box.dataset.shown = key;
-    const tierAfter = ratingTier(mine.after);
-    const rankUp = mine.after > mine.before && tierAfter !== ratingTier(mine.before);
     const games = Number(mine.ratedGames) || 0;
-    box.className = 'go-rating-card ' + tierAfter.cls + (mine.delta > 0 ? ' gain' : (mine.delta < 0 ? ' loss' : ''));
+    box.className = 'go-rating-card' + (mine.delta > 0 ? ' gain' : (mine.delta < 0 ? ' loss' : ''));
     box.innerHTML =
-      '<div class="gr-top"><span class="gr-label">Your rating</span><span class="gr-tier">' + escapeHtml(tierAfter.name) + '</span></div>' +
+      '<div class="gr-label">Your rating</div>' +
       '<div class="gr-main"><span class="gr-num">' + mine.before + '</span>' + ratingDeltaHtml(mine.delta) + '</div>' +
-      (rankUp ? '<div class="gr-rankup">New rank: ' + escapeHtml(tierAfter.name) + '!</div>' : '') +
       (mine.newPlayer
         ? '<div class="gr-new"><span>New player \u00b7 ' + games + ' of ' + RATING_NEW_GAMES + ' games</span>' +
           '<span class="r-bar"><i style="width:' + Math.round(games / RATING_NEW_GAMES * 100) + '%"></i></span></div>'
@@ -431,15 +419,12 @@
     const rating = Number(st.rating) || 300;
     const games = Number(st.ratedGames) || 0;
     const total = Number(st.newPlayerGames) || RATING_NEW_GAMES;
-    const tier = ratingTier(rating);
-    const next = ratingNextTier(rating);
-    box.className = 'pr-card ' + tier.cls;
+    box.className = 'pr-card';
     box.innerHTML =
-      '<div class="pr-top"><span class="pr-label">Your rating</span><span class="pr-tier">' + escapeHtml(tier.name) + '</span></div>' +
+      '<div class="pr-label">Your rating</div>' +
       '<div class="pr-main"><span class="pr-num">' + rating + '</span>' +
         (games > 0 ? '<span class="pr-last">' + ratingDeltaHtml(st.lastRatingChange) + ' last game</span>' : '') + '</div>' +
-      '<div class="pr-meta">Best ' + Math.max(Number(st.peakRating) || rating, rating) + ' \u00b7 ' + games + ' rated game' + (games === 1 ? '' : 's') +
-        (next ? ' \u00b7 ' + next.toGo + ' to ' + escapeHtml(next.tier.name) : '') + '</div>' +
+      '<div class="pr-meta">Best ' + Math.max(Number(st.peakRating) || rating, rating) + ' \u00b7 ' + games + ' rated game' + (games === 1 ? '' : 's') + '</div>' +
       (games < total
         ? '<div class="pr-new"><span>' + (games === 0 ? 'Play a game with friends to start your rating'
           : 'New player \u00b7 ' + games + ' of ' + total + ' games') + '</span>' +
@@ -2679,6 +2664,8 @@
   function showScreen(id) {
     const prevActive = document.querySelector('.screen.active');
     const prevId = prevActive ? prevActive.id : null;
+    // A popover floating over the table must not follow you to another screen.
+    if (prevId && prevId !== id) { try { closePlayerActionPopover(); } catch (e) { /* not ready */ } }
     // Lobby chat (Oct 2026) uses the same sheet as the table chat. When the
     // game starts under it, close it: the countdown and the deal need the
     // table, and anything said after this shows up on the chat button's
@@ -6475,11 +6462,13 @@
       const align = col === 0 ? 'align-left' : (col === LOBBY_SEAT_COLS - 1 ? 'align-right' : '');
       const face = p.isBot
         ? '<span class="ls-face art art-bots" aria-hidden="true"></span>'
-        : `<span class="ls-face" style="background:${seatColour(p.playerId)}" aria-hidden="true">${escapeHtml(seatInitial(name))}${isMe ? '<span class="ls-edit">' + LOBBY_PENCIL + '</span>' : ''}${typeof p.rating === 'number' ? '<span class="ls-rating ' + ratingTier(p.rating).cls + '">' + p.rating + '</span>' : ''}</span>`;
+        : `<span class="ls-face" style="background:${seatColour(p.playerId)}" aria-hidden="true">${escapeHtml(seatInitial(name))}${isMe ? '<span class="ls-edit">' + LOBBY_PENCIL + '</span>' : ''}</span>`;
       const sub = isHost ? (isMe ? 'Host · You' : 'Host')
         : (p.isBot ? 'Bot' : (isMe ? 'You' : (p.connected ? 'online' : 'offline')));
+      // Rating (Nov 2026): "Ravi (455)", as at the table.
+      const lsRating = !p.isBot && typeof p.rating === 'number' ? ratingBracketHtml(p.rating) : '';
       li.innerHTML = face
-        + `<span class="ls-name">${escapeHtml(name)}</span>`
+        + `<span class="ls-name${lsRating ? ' has-rating' : ''}"><span class="ls-nm">${escapeHtml(name)}</span>${lsRating}</span>`
         + `<span class="ls-sub">${escapeHtml(sub)}</span>`;
       if (p.isBot) {
         if (p.trait) {
@@ -6830,6 +6819,33 @@
     }
   }
 
+  // "Mallik... (455)" at the least (Nov 2026). A name next to its rating
+  // gives way first, but never to fewer than six letters: its flex-basis is
+  // the measured width of its first six letters and the "...", so the line
+  // only breaks -- the rating dropping under the name -- when even that will
+  // not fit beside the number. Measured once per name and size, with a
+  // hidden copy of the name in the same row so the font is exactly the same.
+  const seatNameSixWidth = new Map();
+  function fitSeatName(nameEl) {
+    try {
+      const text = nameEl.textContent || '';
+      const key = getComputedStyle(nameEl).fontSize + '|' + text;
+      let w = seatNameSixWidth.get(key);
+      if (w == null) {
+        const probe = nameEl.cloneNode(false);
+        probe.textContent = text.length > 6 ? text.slice(0, 6) + '\u2026' : text;
+        probe.style.cssText = 'position:absolute;visibility:hidden;flex:none;max-width:none;width:auto;';
+        nameEl.parentNode.appendChild(probe);
+        const six = probe.getBoundingClientRect().width;
+        probe.textContent = text;   // "Sukumar" is narrower than "Sukuma..."
+        w = Math.ceil(Math.min(six, probe.getBoundingClientRect().width));
+        probe.remove();
+        if (w > 0) seatNameSixWidth.set(key, w);
+      }
+      if (w > 0) nameEl.style.flexBasis = w + 'px';
+    } catch (e) { /* the stylesheet's own basis stands */ }
+  }
+
   function renderOvalTable(game, orderOverride) {
     const oval = document.getElementById('oval-table');
     // ------------------------------------------------------------------
@@ -7178,14 +7194,18 @@
       nameEl.className = 'seat-name';
       nameEl.textContent = displayName(p.name);
       idRow.appendChild(nameEl);
-      // Rating (Nov 2026): a small chip after the name, in the colour of the
-      // player's rank. None for bots or anyone without a rating yet.
+      // Rating (Nov 2026), chess.com style: "Ravi (455)". The name gives way
+      // first (it ends in "..." but never below six letters -- see
+      // fitSeatName), and on a chair too narrow even for that
+      // the number moves under the name rather than being cut off.
+      // None for bots or anyone without a rating yet.
       if (!p.isBot && typeof p.rating === 'number') {
         const rEl = document.createElement('span');
-        rEl.className = 'seat-rating ' + ratingTier(p.rating).cls;
-        rEl.textContent = String(p.rating);
-        rEl.title = 'Rating ' + p.rating + ' \u00b7 ' + ratingTier(p.rating).name;
+        rEl.className = 'seat-rating';
+        rEl.innerHTML = ratingBracketHtml(p.rating);
+        rEl.title = 'Rating ' + Math.round(p.rating);
         idRow.appendChild(rEl);
+        chipEl.classList.add('has-rating');
       }
       chipEl.appendChild(idRow);
 
@@ -7365,6 +7385,12 @@
     // ------------------------------------------------------------------
     oval.querySelectorAll('.seat').forEach((el) => el.remove());
     oval.appendChild(seatFrag);
+    // Names beside a rating get their six-letter minimum now, on the live
+    // table: inside the fragment there is nothing to measure.
+    oval.querySelectorAll('.seat-id').forEach((row) => {
+      const nm = row.querySelector('.seat-name');
+      if (nm && row.querySelector('.seat-rating')) fitSeatName(nm);
+    });
     // The commentary lane fits itself between the chairs just drawn.
     try { layoutCommentaryLane(); } catch (e) { /* layout only */ }
 
@@ -9775,8 +9801,10 @@
       row.className = 'result-row gameover-row' + (pid === game.winner ? ' winner-row' : '');
       row.dataset.playerId = pid;
       const delta = lastRoundScores[pid];
+      // Two short lines, "+4 this round" over "62 pts total" (Nov 2026): on
+      // one line the score took half the row and left the name four letters.
       const deltaHtml = delta !== undefined
-        ? `<span class="final-round-delta">+${delta}</span> this round · `
+        ? `<span class="go-sc-round"><span class="final-round-delta">+${delta}</span> this round</span>`
         : '';
       const st = placeOf.get(pid);
       const place = st ? st.place : i + 1;
@@ -9786,8 +9814,8 @@
         : `<span class="go-rank">${place}</span>`;
       const leftTag = st && st.left ? '<span class="go-left">left</span>' : '';
       row.innerHTML = rank
-        + `<span class="go-name"><span class="go-nm">${escapeHtml(playerName(pid))}${leftTag}</span><span class="go-rating hidden"></span></span>`
-        + `<span class="go-score">${deltaHtml}${Number(score) || 0} pts total</span>`;
+        + `<span class="go-name"><span class="go-nm">${escapeHtml(playerName(pid))}</span><span class="go-rating hidden"></span>${leftTag}</span>`
+        + `<span class="go-score">${deltaHtml}<span class="go-sc-total">${Number(score) || 0} pts total</span></span>`;
       body.appendChild(row);
     });
     // Your rating: counts up when the server's numbers arrive (usually
@@ -10411,8 +10439,8 @@
   function applyStatsToEl(el, stats) {
     if (!stats) { el.classList.add('hidden'); el.textContent = ''; return; }
     el.classList.remove('hidden');
-    el.textContent = (typeof stats.rating === 'number' ? `Rating ${stats.rating} · ` : '')
-      + `${stats.gamesPlayed} games · ${stats.wins} wins`;
+    el.innerHTML = (typeof stats.rating === 'number' ? 'Rating <b class="pa-rating">' + Math.round(stats.rating) + '</b> · ' : '')
+      + `${Number(stats.gamesPlayed) || 0} games · ${Number(stats.wins) || 0} wins`;
   }
 
   function loadStatsIntoPopover(playerId, statsEl) {
@@ -10496,14 +10524,54 @@
     return pop;
   }
 
+  // ------------------------------------------------------------------
+  // AT THE TABLE THE POPOVER FLOATS (Nov 2026). It used to be a child of the
+  // chair, placed with CSS -- and so it was painted UNDER every chair that
+  // came after it in the page, the open card and the hand. At six players
+  // one or two people's stats were always hidden behind a neighbour (Mani's
+  // report). Now it sits on the page itself, above the whole table: under
+  // the chair, or above it when there is more room there, and always kept
+  // inside the screen and clear of the ad space at the bottom.
+  // In the lobby it stays a child of the seat (nothing there covers it).
+  // ------------------------------------------------------------------
+  function placeFloatingPopover(pop, anchorEl) {
+    const r = anchorEl.getBoundingClientRect();
+    const M = 8;
+    const GAP = 6;
+    let adSafe = 0;
+    try { adSafe = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ad-safe-bottom')) || 0; } catch (e) { /* none */ }
+    const vw = window.innerWidth;
+    const bottomLimit = window.innerHeight - adSafe;
+    const pw = pop.offsetWidth;
+    const ph = pop.offsetHeight;
+    const left = Math.max(M, Math.min(vw - pw - M, r.left + r.width / 2 - pw / 2));
+    const roomBelow = bottomLimit - r.bottom - GAP - M;
+    const roomAbove = r.top - GAP - M;
+    let top = (roomBelow >= ph || roomBelow >= roomAbove) ? r.bottom + GAP : r.top - GAP - ph;
+    top = Math.max(M, Math.min(bottomLimit - ph - M, top));
+    pop.style.left = Math.round(left) + 'px';
+    pop.style.top = Math.round(top) + 'px';
+  }
+  function floatPopoverAt(pop, anchorEl, playerId) {
+    pop.classList.add('floating');
+    pop.dataset.forPlayer = playerId;
+    document.body.appendChild(pop);
+    placeFloatingPopover(pop, anchorEl);
+  }
+  window.addEventListener('resize', () => {
+    if (document.querySelector('.player-action-popover.floating')) closePlayerActionPopover();
+  });
+
   // anchorEl must already be a positioning context (both .seat and the lobby
-  // <li> are) -- the popover is just appended as its child and placed with
-  // plain CSS, no JS measurement needed.
+  // <li> are). At the table the popover floats (above); in the lobby it is
+  // just appended as the seat's child and placed with plain CSS.
   function showPlayerActionPopover(anchorEl, playerId, name, alignClass) {
     closePlayerActionPopover();
     if (!anchorEl) return;
     openPlayerActionForId = playerId;
-    anchorEl.appendChild(buildPlayerActionPopover(playerId, name, alignClass));
+    const pop = buildPlayerActionPopover(playerId, name, alignClass);
+    if (anchorEl.classList.contains('seat')) floatPopoverAt(pop, anchorEl, playerId);
+    else anchorEl.appendChild(pop);
   }
 
   function togglePlayerActionPopover(anchorEl, playerId, name, alignClass) {
@@ -10517,7 +10585,19 @@
   function reopenPlayerActionPopoverIfNeeded(container) {
     if (!openPlayerActionForId) return;
     const anchorEl = container.querySelector(`[data-player-id="${CSS.escape(openPlayerActionForId)}"]`);
-    if (!anchorEl) { openPlayerActionForId = null; return; }
+    // Its player has gone: a floating popover would otherwise be left behind.
+    if (!anchorEl) { closePlayerActionPopover(); return; }
+    if (anchorEl.classList.contains('seat')) {
+      // Still open from before this redraw: just follow the chair. Rebuilding
+      // it on every game update would flicker and re-ask for the stats.
+      const existing = document.querySelector('.player-action-popover.floating');
+      if (existing && existing.dataset.forPlayer === openPlayerActionForId) {
+        placeFloatingPopover(existing, anchorEl);
+        return;
+      }
+      floatPopoverAt(buildPlayerActionPopover(openPlayerActionForId, playerName(openPlayerActionForId), ''), anchorEl, openPlayerActionForId);
+      return;
+    }
     const alignClass = anchorEl.dataset.popoverAlign || '';
     anchorEl.appendChild(buildPlayerActionPopover(openPlayerActionForId, playerName(openPlayerActionForId), alignClass));
   }
