@@ -7,6 +7,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, cardValue, DECLARE_MAX_VALUE, deckCountForPlayers } = require('./game/gameLogic');
+const Rating = require('./game/rating');
 
 const app = express();
 const server = http.createServer(app);
@@ -1040,9 +1041,139 @@ function recordPartialActivity(room, playerId) {
   }
 }
 
+// --------------------------------------------------------------------------
+// RATING (Nov 2026). The rules and the maths are in game/rating.js; the
+// final places come from the engine (LeastCountGame.standings()). This part
+// reads and writes the numbers in Firestore -- in one transaction, so two
+// games finishing at once can never overwrite each other -- and tells the
+// table. Ratings live on the same users/{uid} doc as gamesPlayed and wins.
+// --------------------------------------------------------------------------
+
+// The India date, so "five games with the same people today" means today
+// for the players, not in UTC.
+function indiaDay() {
+  return new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+// Loads each player's rating for the seats and the lobby, once per account,
+// and notes which account sits in which seat of the running game -- someone
+// who leaves the room is deleted from room.players before the game ends, and
+// the rating still has to place them last.
+const RATING_RETRY_MS = 60 * 1000;
+function primeRatings(room) {
+  if (!db) return;
+  for (const pid of room.order) {
+    const p = room.players.get(pid);
+    if (!p || p.isBot || !p.firebaseUid) continue;
+    if (room.game && room.seatUids && room.game.playerIds.includes(pid)) room.seatUids[pid] = p.firebaseUid;
+    const uid = p.firebaseUid;
+    if (p.ratingUid === uid || p.ratingLoading === uid) continue;
+    if (p.ratingFailedAt && Date.now() - p.ratingFailedAt < RATING_RETRY_MS) continue;
+    p.ratingLoading = uid;
+    db.collection('users').doc(uid).get()
+      .then((doc) => {
+        if (p.firebaseUid !== uid) return;
+        const r = Rating.ratingOf(doc.exists ? doc.data() : null);
+        p.rating = r.rating;
+        p.ratedGames = r.ratedGames;
+        p.ratingUid = uid;
+        p.ratingFailedAt = null;
+        broadcastRoom(room);
+      })
+      .catch((e) => {
+        p.ratingFailedAt = Date.now();
+        console.warn('[Rating] could not load a rating:', e.message);
+      })
+      .finally(() => { if (p.ratingLoading === uid) p.ratingLoading = null; });
+  }
+}
+
+function sendRatingUpdate(room, payload) {
+  room.lastRatingUpdate = payload;
+  io.to(room.code).emit('rating_update', payload);
+}
+
+async function recordRatings(room) {
+  const game = room.game;
+  if (!db || !game || !game.gameOver || room.ratingsRecorded) return;
+  room.ratingsRecorded = true;
+  // Who played, read NOW, before anything is awaited: a player who just
+  // walked out is still in room.players at this instant (and in seatUids
+  // either way).
+  const standings = game.standings();
+  const placeOf = new Map(standings.map((x) => [x.playerId, x.place]));
+  const seats = [];
+  const uidCount = new Map();
+  for (const pid of game.playerIds) {
+    const p = room.players.get(pid);
+    if (p && p.isBot) continue;
+    const uid = (p && p.firebaseUid) || (room.seatUids && room.seatUids[pid]) || null;
+    if (!uid) continue;
+    uidCount.set(uid, (uidCount.get(uid) || 0) + 1);
+    seats.push({ pid, uid, player: p || null });
+  }
+  // One account in two seats (two tabs on one phone) can't play itself.
+  const rated = seats.filter((x) => uidCount.get(x.uid) === 1);
+  const reason = Rating.unratedReason(rated.length, (game.roundHistory || []).length);
+  if (reason) {
+    sendRatingUpdate(room, { rated: false, reason, half: false, changes: {} });
+    return;
+  }
+  const day = indiaDay();
+  const groupKey = day + '_' + crypto.createHash('sha1')
+    .update(rated.map((x) => x.uid).sort().join('|')).digest('hex').slice(0, 24);
+  try {
+    const result = await db.runTransaction(async (tx) => {
+      const refs = rated.map((x) => db.collection('users').doc(x.uid));
+      const groupRef = db.collection('ratingGroups').doc(groupKey);
+      const docs = await Promise.all(refs.map((r) => tx.get(r)));
+      const groupDoc = await tx.get(groupRef);
+      const sameToday = groupDoc.exists ? (Number(groupDoc.data().games) || 0) : 0;
+      const players = rated.map((x, i) => {
+        const r = Rating.ratingOf(docs[i].exists ? docs[i].data() : null);
+        return { key: x.pid, rating: r.rating, ratedGames: r.ratedGames, peak: r.peakRating, place: placeOf.get(x.pid) || standings.length };
+      });
+      const changes = Rating.computeRatingChanges(players, { sameGroupGamesToday: sameToday });
+      const at = new Date().toISOString();
+      players.forEach((pl, i) => {
+        const c = changes[pl.key];
+        tx.set(refs[i], {
+          rating: c.after,
+          ratedGames: c.ratedGames,
+          peakRating: Math.max(pl.peak, c.after),
+          lastRatingChange: c.delta,
+          lastRatedAt: at,
+        }, { merge: true });
+      });
+      tx.set(groupRef, { games: sameToday + 1, day }, { merge: true });
+      return { changes, half: sameToday >= Rating.SAME_GROUP_FULL_GAMES };
+    });
+    // The seats show the new numbers straight away.
+    for (const x of rated) {
+      const c = result.changes[x.pid];
+      if (x.player && c) {
+        x.player.rating = c.after;
+        x.player.ratedGames = c.ratedGames;
+        x.player.ratingUid = x.uid;
+      }
+    }
+    sendRatingUpdate(room, { rated: true, reason: null, half: result.half, changes: result.changes });
+    broadcastRoom(room);
+    console.log(`[Rating] room ${room.code}: ` + rated.map((x) => {
+      const c = result.changes[x.pid];
+      return `${x.pid} ${c.before}->${c.after}`;
+    }).join(', '));
+  } catch (e) {
+    console.error('[Rating] could not record ratings:', e.message);
+    sendRatingUpdate(room, { rated: false, reason: 'error', half: false, changes: {} });
+  }
+}
+
 async function recordGameResult(room) {
   if (!db || !room.game || !room.game.gameOver || room.statsRecorded) return;
   room.statsRecorded = true;
+  // The rating runs alongside the stats, once per game, on its own guard.
+  recordRatings(room);
   const winnerId = room.game.winner;
   const writes = [];
   const finishedAt = new Date().toISOString();
@@ -2212,7 +2343,14 @@ function publicRoomInfo(room) {
       // The one-liner that carries the character, since the name is generic.
       // Null for humans.
       trait: room.players.get(pid).trait || null,
+      // Rating (Nov 2026): null until it has loaded, and always for bots and
+      // anyone without an account.
+      rating: room.players.get(pid).ratingUid ? room.players.get(pid).rating : null,
+      ratedGames: room.players.get(pid).ratingUid ? room.players.get(pid).ratedGames : null,
     })),
+    // The rating changes of the game that just finished, so a player who
+    // reconnects to the result screen still sees them.
+    ratingUpdate: room.phase === 'game_over' ? (room.lastRatingUpdate || null) : null,
   };
 }
 
@@ -2324,6 +2462,7 @@ function pickNextHost(room, excludePlayerId) {
 }
 
 function broadcastRoom(room) {
+  primeRatings(room);
   for (const pid of room.order) {
     const p = room.players.get(pid);
     if (p.connected && p.socketId) {
@@ -4512,6 +4651,15 @@ io.on('connection', (socket) => {
       clearAllRejoinRequests(room);
       room.game = new LeastCountGame(room.order.slice(), maxScore);
       room.statsRecorded = false;
+      // Rating: fresh for every game. seatUids remembers which account
+      // played which seat (filled here and by primeRatings on later joins).
+      room.ratingsRecorded = false;
+      room.lastRatingUpdate = null;
+      room.seatUids = {};
+      for (const pid of room.order) {
+        const sp = room.players.get(pid);
+        if (sp && !sp.isBot && sp.firebaseUid) room.seatUids[pid] = sp.firebaseUid;
+      }
       room.game.startRound();
       // Per-round counters for the bots' anti-stall overrides (see
       // botDeclareThreshold). Reset with the deal, or a patient bot would
@@ -4693,6 +4841,7 @@ io.on('connection', (socket) => {
       clearAutoNextRoundTimer(room); // never leave an auto-advance armed on a torn-down/reset room
       room.game = null;
       room.phase = 'lobby';
+      room.lastRatingUpdate = null;
       broadcastRoom(room);
       ack && ack({ ok: true });
     } catch (e) {
@@ -4978,7 +5127,13 @@ io.on('connection', (socket) => {
       if (!verifiedUid) throw new Error('Not signed in yet.');
       const doc = await db.collection('users').doc(verifiedUid).get();
       const data = doc.exists ? doc.data() : {};
-      ack && ack({ ok: true, stats: { gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0 } });
+      const r = Rating.ratingOf(data);
+      ack && ack({ ok: true, stats: {
+        gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0,
+        rating: r.rating, ratedGames: r.ratedGames, peakRating: Math.max(r.peakRating, r.rating),
+        lastRatingChange: Number(data.lastRatingChange) || 0,
+        newPlayerGames: Rating.NEW_PLAYER_GAMES,
+      } });
     } catch (e) {
       console.error('[Firebase] Failed to read own stats:', e.message);
       ack && ack({ ok: false, error: e.message || 'Could not load stats right now.' });
@@ -5002,7 +5157,8 @@ io.on('connection', (socket) => {
       db.collection('users').doc(player.firebaseUid).get()
         .then((doc) => {
           const data = doc.exists ? doc.data() : {};
-          ack && ack({ ok: true, stats: { gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0 } });
+          const r = Rating.ratingOf(data);
+          ack && ack({ ok: true, stats: { gamesPlayed: data.gamesPlayed || 0, wins: data.wins || 0, rating: r.rating, ratedGames: r.ratedGames } });
         })
         .catch((e) => {
           console.error('[Firebase] Failed to read player stats:', e.message);
