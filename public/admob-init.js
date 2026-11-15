@@ -184,7 +184,18 @@
       const bars = full - h;                 // status bar + navigation bar
       // A reading under 30 means this phone reports the screen without its
       // bars; then assume the tallest navigation bar (48) rather than none.
-      const next = bars < 30 ? 48 : Math.max(0, Math.min(60, Math.round(bars - 24 + 6)));
+      //
+      // ONLY THE 3-BUTTON BAR GETS THE LIFT (Nov 2026). Both screenshots of
+      // the floating banner came from 3-button phones. With gesture
+      // navigation the banner sits right at the bottom of the app, so the
+      // allowance there was just empty space above the ad -- taken from the
+      // table, which is the one thing on the game screen that gives way.
+      // Mani's phone: 68px of bars, ~50px of gap above the ad, a visibly
+      // smaller table. A status bar is at least 24px and the 3-button bar is
+      // 48, so a 3-button phone reads 72 or more; gesture phones (a thin
+      // 16-31px bar) read less.
+      const next = bars < 30 ? 48
+        : (bars < 71 ? 0 : Math.max(0, Math.min(60, Math.round(bars - 24 + 6))));
       if (next !== navAllowance) {
         navAllowance = next;
         console.log('[AdMob] navigation allowance', next, '(screen', full, 'webview', h + ')');
