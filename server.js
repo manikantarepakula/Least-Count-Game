@@ -345,21 +345,28 @@ const BOT_ARCHETYPES = [
   // baseline bots. Difficulty is measured, not assumed -- and note #3: B2
   // (patient declaring) is a mild weakness on its own, yet this combination is
   // third strongest because A5 carries it. Rules cannot be graded alone.
-  { id: 1, discard: 'A5', declare: 'B3', chain: 'C1', delta: -12.7, speed: 1.0,
+  //
+  // rating (Nov 2026): each bot's FIXED rating, shown on its chair -- "Bot 2
+  // (425)" -- and used when a person's rating is worked out (bots count now).
+  // Measured, not guessed: 50,000 bot-only games (tools/bot-ratings-sim.js)
+  // gave the rating at which each bot breaks even under our own rating rule,
+  // anchored at #5 = 420. That is a different question from the deltas above
+  // (places at the table, not points), which is why #4 sits up with #1.
+  { id: 1, discard: 'A5', declare: 'B3', chain: 'C1', delta: -12.7, speed: 1.0, rating: 470,
     trait: 'Reads the table. Rarely wrong.' },
-  { id: 2, discard: 'A5', declare: 'B1', chain: 'C1', delta:  -8.9, speed: 0.9,
+  { id: 2, discard: 'A5', declare: 'B1', chain: 'C1', delta:  -8.9, speed: 0.9, rating: 425,
     trait: 'Knows which cards are dead.' },
-  { id: 3, discard: 'A5', declare: 'B2', chain: 'C1', delta:  -5.3, speed: 1.6,
+  { id: 3, discard: 'A5', declare: 'B2', chain: 'C1', delta:  -5.3, speed: 1.6, rating: 415,
     trait: 'Slow, careful, hard to catch.' },
-  { id: 4, discard: 'A1', declare: 'B3', chain: 'C1', delta:  -3.8, speed: 1.3,
+  { id: 4, discard: 'A1', declare: 'B3', chain: 'C1', delta:  -3.8, speed: 1.3, rating: 470,
     trait: 'Watches your hand, not his.' },
-  { id: 5, discard: 'A1', declare: 'B1', chain: 'C1', delta:  -1.4, speed: 1.1,
+  { id: 5, discard: 'A1', declare: 'B1', chain: 'C1', delta:  -1.4, speed: 1.1, rating: 420,
     trait: 'Plays it straight.' },
-  { id: 6, discard: 'A1', declare: 'B1', chain: 'C2', delta:  +7.7, speed: 0.8,
+  { id: 6, discard: 'A1', declare: 'B1', chain: 'C2', delta:  +7.7, speed: 0.8, rating: 375,
     trait: 'Saving a 2 for you. Usually too long.' },
-  { id: 7, discard: 'A4', declare: 'B1', chain: 'C1', delta: +22.0, speed: 0.55,
+  { id: 7, discard: 'A4', declare: 'B1', chain: 'C1', delta: +22.0, speed: 0.55, rating: 180,
     trait: 'One card at a time. Always in a hurry.' },
-  { id: 8, discard: 'A3', declare: 'B1', chain: 'C1', delta: +25.9, speed: 1.2,
+  { id: 8, discard: 'A3', declare: 'B1', chain: 'C1', delta: +25.9, speed: 1.2, rating: 110,
     trait: 'Collects pairs. Gets caught holding them.' },
 ];
 
@@ -389,6 +396,12 @@ function cleanBotDifficulty(level) {
 
 function archetypeById(id) {
   return BOT_ARCHETYPES.find((a) => a.id === id) || BOT_ARCHETYPES[2];
+}
+
+// A bot's fixed rating (see BOT_ARCHETYPES). A bot from before archetypes
+// existed plays today's baseline, #5.
+function botRatingOf(p) {
+  return archetypeById((p && p.archetype) || 5).rating;
 }
 
 // The next archetype for this room: first one in the tier's order that is not
@@ -1088,25 +1101,84 @@ function primeRatings(room) {
   }
 }
 
-function sendRatingUpdate(room, payload) {
+// Also straight to a player who has just walked out: their socket has left
+// the room's channel by the time the numbers come back.
+function sendRatingUpdate(room, payload, alsoSocketId) {
   room.lastRatingUpdate = payload;
-  io.to(room.code).emit('rating_update', payload);
+  (alsoSocketId ? io.to(room.code).to(alsoSocketId) : io.to(room.code)).emit('rating_update', payload);
 }
 
-async function recordRatings(room) {
+// Fresh rating bookkeeping for a game that is about to be dealt. seatUids
+// remembers which account played which seat (filled here and by
+// primeRatings on later joins) -- someone who walks out is deleted from
+// room.players before the game ends, and the rating still has to place them.
+function resetRatingState(room) {
+  room.ratingsRecorded = false;
+  room.lastRatingUpdate = null;
+  room.seatUids = {};
+  for (const pid of room.order) {
+    const sp = room.players.get(pid);
+    if (sp && !sp.isBot && sp.firebaseUid) room.seatUids[pid] = sp.firebaseUid;
+  }
+}
+
+// Is any PERSON still in the game (not knocked out, not gone)?
+function peopleStillPlaying(room) {
+  const g = room.game;
+  if (!g) return false;
+  return g.activePlayers().some((pid) => {
+    const p = room.players.get(pid);
+    return p && !p.isBot;
+  });
+}
+
+// One person against bots, and that person is out (knocked out, or walked
+// away between rounds): their place is final -- the bots still in finish
+// above them whatever happens next, and nobody can let them back in (a
+// rejoin needs another person to approve it) -- so the rating need not wait
+// for the bots to finish. With two or more people it waits for the end as
+// before: one of them could still come back in.
+function settledBeforeTheEnd(room) {
+  const g = room.game;
+  if (!g || g.gameOver || peopleStillPlaying(room)) return false;
+  const people = g.playerIds.filter((pid) => {
+    const p = room.players.get(pid);
+    return !(p && p.isBot);   // someone who has left the room still counts
+  });
+  return people.length <= 1;
+}
+
+// Works out and saves the rating for the game in room.game -- once per game.
+// Runs at game over, or earlier when settledBeforeTheEnd(). opts.force: rate
+// now, as things stand -- the one walking out of a solo game mid-round, the
+// last person leaving a table only bots are still playing, or a room torn
+// down after everyone vanished; the caller has already recorded how anyone
+// still "in" left. opts.notifySocketId: see sendRatingUpdate.
+// Never throws: it runs from round-end and leave paths that must not break.
+function recordRatings(room, opts) {
+  return recordRatingsNow(room, opts).catch((e) => {
+    console.error('[Rating] failed:', e && e.message);
+  });
+}
+async function recordRatingsNow(room, opts) {
+  const o = opts || {};
   const game = room.game;
-  if (!db || !game || !game.gameOver || room.ratingsRecorded) return;
+  if (!db || !game || room.ratingsRecorded) return;
+  if (!game.gameOver && !o.force && !settledBeforeTheEnd(room)) return;
   room.ratingsRecorded = true;
   // Who played, read NOW, before anything is awaited: a player who just
   // walked out is still in room.players at this instant (and in seatUids
   // either way).
   const standings = game.standings();
   const placeOf = new Map(standings.map((x) => [x.playerId, x.place]));
+  const lastPlace = standings.length;
   const seats = [];
+  const bots = [];
   const uidCount = new Map();
   for (const pid of game.playerIds) {
     const p = room.players.get(pid);
-    if (p && p.isBot) continue;
+    // Bots count (Nov 2026), each at its own fixed rating.
+    if (p && p.isBot) { bots.push({ key: pid, rating: botRatingOf(p), fixed: true, place: placeOf.get(pid) || lastPlace }); continue; }
     const uid = (p && p.firebaseUid) || (room.seatUids && room.seatUids[pid]) || null;
     if (!uid) continue;
     uidCount.set(uid, (uidCount.get(uid) || 0) + 1);
@@ -1114,26 +1186,30 @@ async function recordRatings(room) {
   }
   // One account in two seats (two tabs on one phone) can't play itself.
   const rated = seats.filter((x) => uidCount.get(x.uid) === 1);
-  const reason = Rating.unratedReason(rated.length, (game.roundHistory || []).length);
+  const round = game.roundNumber;
+  const reason = Rating.unratedReason(rated.length, bots.length, (game.roundHistory || []).length);
   if (reason) {
-    sendRatingUpdate(room, { rated: false, reason, half: false, changes: {} });
+    sendRatingUpdate(room, { rated: false, reason, half: false, changes: {}, round }, o.notifySocketId);
     return;
   }
+  // "The same people, again and again today" is about people: with only one
+  // person at the table (everyone else a bot) there is no group to count.
+  const group = rated.length >= 2;
   const day = indiaDay();
-  const groupKey = day + '_' + crypto.createHash('sha1')
-    .update(rated.map((x) => x.uid).sort().join('|')).digest('hex').slice(0, 24);
+  const groupKey = group ? day + '_' + crypto.createHash('sha1')
+    .update(rated.map((x) => x.uid).sort().join('|')).digest('hex').slice(0, 24) : null;
   try {
     const result = await db.runTransaction(async (tx) => {
       const refs = rated.map((x) => db.collection('users').doc(x.uid));
-      const groupRef = db.collection('ratingGroups').doc(groupKey);
+      const groupRef = group ? db.collection('ratingGroups').doc(groupKey) : null;
       const docs = await Promise.all(refs.map((r) => tx.get(r)));
-      const groupDoc = await tx.get(groupRef);
-      const sameToday = groupDoc.exists ? (Number(groupDoc.data().games) || 0) : 0;
+      const groupDoc = groupRef ? await tx.get(groupRef) : null;
+      const sameToday = groupDoc && groupDoc.exists ? (Number(groupDoc.data().games) || 0) : 0;
       const players = rated.map((x, i) => {
         const r = Rating.ratingOf(docs[i].exists ? docs[i].data() : null);
-        return { key: x.pid, rating: r.rating, ratedGames: r.ratedGames, peak: r.peakRating, place: placeOf.get(x.pid) || standings.length };
+        return { key: x.pid, rating: r.rating, ratedGames: r.ratedGames, peak: r.peakRating, place: placeOf.get(x.pid) || lastPlace };
       });
-      const changes = Rating.computeRatingChanges(players, { sameGroupGamesToday: sameToday });
+      const changes = Rating.computeRatingChanges(players.concat(bots), { sameGroupGamesToday: sameToday });
       const at = new Date().toISOString();
       players.forEach((pl, i) => {
         const c = changes[pl.key];
@@ -1145,8 +1221,8 @@ async function recordRatings(room) {
           lastRatedAt: at,
         }, { merge: true });
       });
-      tx.set(groupRef, { games: sameToday + 1, day }, { merge: true });
-      return { changes, half: sameToday >= Rating.SAME_GROUP_FULL_GAMES };
+      if (groupRef) tx.set(groupRef, { games: sameToday + 1, day }, { merge: true });
+      return { changes, half: group && sameToday >= Rating.SAME_GROUP_FULL_GAMES };
     });
     // The seats show the new numbers straight away.
     for (const x of rated) {
@@ -1157,23 +1233,43 @@ async function recordRatings(room) {
         x.player.ratingUid = x.uid;
       }
     }
-    sendRatingUpdate(room, { rated: true, reason: null, half: result.half, changes: result.changes });
-    broadcastRoom(room);
-    console.log(`[Rating] room ${room.code}: ` + rated.map((x) => {
+    sendRatingUpdate(room, { rated: true, reason: null, half: result.half, changes: result.changes, round }, o.notifySocketId);
+    if (rooms.has(room.code)) broadcastRoom(room);
+    console.log(`[Rating] room ${room.code}${game.gameOver ? '' : ' (no person left in it)'}: ` + rated.map((x) => {
       const c = result.changes[x.pid];
       return `${x.pid} ${c.before}->${c.after}`;
-    }).join(', '));
+    }).join(', ') + (bots.length ? ` vs ${bots.length} bot(s)` : ''));
   } catch (e) {
     console.error('[Rating] could not record ratings:', e.message);
-    sendRatingUpdate(room, { rated: false, reason: 'error', half: false, changes: {} });
+    sendRatingUpdate(room, { rated: false, reason: 'error', half: false, changes: {}, round }, o.notifySocketId);
   }
 }
 
-async function recordGameResult(room) {
+// A room torn down with its game still running and every person gone (the
+// idle sweep). Anyone still "in" walked away: last place, all of them
+// together, then the rating -- otherwise closing the app would be a way to
+// dodge a losing game.
+function rateAbandonedGame(room) {
+  const g = room.game;
+  if (!g || g.gameOver || room.ratingsRecorded) return;
+  const gone = g.activePlayers().filter((pid) => {
+    const p = room.players.get(pid);
+    return p && !p.isBot;
+  });
+  if (gone.length) {
+    gone.forEach((pid) => g._recordExit(pid, 'absent'));
+    // Left at the same moment: one shared place, not an order nobody chose.
+    const seq = g._exitSeq;
+    g.exits.forEach((e) => { if (gone.includes(e.playerId)) e.seq = seq; });
+  }
+  recordRatings(room, { force: true });
+}
+
+async function recordGameResult(room, ratingOpts) {
   if (!db || !room.game || !room.game.gameOver || room.statsRecorded) return;
   room.statsRecorded = true;
   // The rating runs alongside the stats, once per game, on its own guard.
-  recordRatings(room);
+  recordRatings(room, ratingOpts);
   const winnerId = room.game.winner;
   const writes = [];
   const finishedAt = new Date().toISOString();
@@ -2343,14 +2439,16 @@ function publicRoomInfo(room) {
       // The one-liner that carries the character, since the name is generic.
       // Null for humans.
       trait: room.players.get(pid).trait || null,
-      // Rating (Nov 2026): null until it has loaded, and always for bots and
-      // anyone without an account.
-      rating: room.players.get(pid).ratingUid ? room.players.get(pid).rating : null,
+      // Rating (Nov 2026): null until it has loaded, and for anyone without
+      // an account. A bot always has its fixed one.
+      rating: room.players.get(pid).isBot ? botRatingOf(room.players.get(pid))
+        : (room.players.get(pid).ratingUid ? room.players.get(pid).rating : null),
       ratedGames: room.players.get(pid).ratingUid ? room.players.get(pid).ratedGames : null,
     })),
-    // The rating changes of the game that just finished, so a player who
-    // reconnects to the result screen still sees them.
-    ratingUpdate: room.phase === 'game_over' ? (room.lastRatingUpdate || null) : null,
+    // The rating changes of the current game once they are worked out (at
+    // game over, or earlier when no person is left in it), so a player who
+    // reconnects still sees them. Cleared when the next game is dealt.
+    ratingUpdate: room.lastRatingUpdate || null,
   };
 }
 
@@ -2982,6 +3080,7 @@ function startMatchedRoom(entries) {
   rooms.set(code, room);
   clearAllRejoinRequests(room);
   room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
+  resetRatingState(room);
   room.game.startRound();
   // Per-round counters for the bots' anti-stall overrides (see
   // botDeclareThreshold). Reset with the deal, or a patient bot would
@@ -3019,9 +3118,52 @@ function clearTurnTimer(room) {
   room.turnDeadline = null;
 }
 
+// ---------------------------------------------------------------------------
+// A solo game waits for its player (Nov 2026).
+//
+// With bots now counting for the rating, a bots-only table that played on
+// while its one person was away -- a phone call, a WhatsApp reply, a dropped
+// network -- would auto-play their hand and soon empty their seat: last place,
+// for picking up the phone. So while the only person at the table is
+// disconnected, nothing moves: no bot turns, no turn clock, no next round.
+// They come back to the game exactly as they left it. If they never do, the
+// idle-room sweep closes it after ROOM_ABANDONED_GRACE_MS and that counts as
+// leaving (rateAbandonedGame). Tables with more than one person are unchanged:
+// the others are waiting, so the absent seat is still played and emptied.
+// ---------------------------------------------------------------------------
+function soloPlayerAway(room) {
+  if (!room || !room.game || room.game.gameOver) return false;
+  let people = 0;
+  let away = 0;
+  for (const pid of room.order) {
+    const p = room.players.get(pid);
+    if (!p || p.isBot) continue;
+    people += 1;
+    if (!p.connected) away += 1;
+  }
+  return people === 1 && away === 1;
+}
+
+// The person is back: pick up where the table stopped.
+function resumeSoloGame(room) {
+  room.awayPaused = false;
+  const g = room.game;
+  if (!g || g.gameOver || room.phase === 'starting') return;   // the deal's own timers carry on
+  if (!g.roundOver) {
+    if (!room.turnTimer) scheduleTurnTimer(room);
+  } else {
+    // A fresh scorecard wait: the old deadline passed while they were gone.
+    room.autoNextDueAt = Date.now() + AUTO_NEXT_ROUND_MS;
+    rearmAutoNextRound(room);
+  }
+  broadcastGameState(room);
+}
+
 function scheduleTurnTimer(room) {
   clearTurnTimer(room);
   if (!room.game || room.game.roundOver || room.game.gameOver) return;
+  // Nobody to play for: hold everything (see soloPlayerAway).
+  if (soloPlayerAway(room)) { room.awayPaused = true; return; }
   // Solo play: if it's a bot's turn, they act quickly on their own timer
   // instead of waiting out the full human turn countdown -- no deadline
   // shown to the human either, since there's nothing for them to react to.
@@ -3328,6 +3470,11 @@ function onRoundEnded(room) {
     recordGameResult(room);
     clearAutoNextRoundTimer(room);
   } else {
+    // The last person still in was just knocked out (or their seat emptied)
+    // and only bots play on: their rating is settled now, so it is worked
+    // out now -- on this round's result screen, not after the bots finish.
+    // A no-op while any person is still playing.
+    if (room.game) recordRatings(room);
     // The round's deadline, set once here. Re-arms later carry on from it
     // (see scheduleAutoNextRound).
     room.autoNextDueAt = Date.now() + AUTO_NEXT_ROUND_MS;
@@ -3617,6 +3764,7 @@ io.on('connection', (socket) => {
 
       clearAllRejoinRequests(room);
       room.game = new LeastCountGame(room.order.slice(), soloMaxScore);
+      resetRatingState(room);
       room.game.startRound();
       // Per-round counters for the bots' anti-stall overrides (see
       // botDeclareThreshold). Reset with the deal, or a patient bot would
@@ -3705,6 +3853,7 @@ io.on('connection', (socket) => {
       rooms.set(code, room);
       clearAllRejoinRequests(room);
       room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
+      resetRatingState(room);
       room.game.startRound();
       // Per-round counters for the bots' anti-stall overrides (see
       // botDeclareThreshold). Reset with the deal, or a patient bot would
@@ -4509,6 +4658,8 @@ io.on('connection', (socket) => {
       socket.join(code);
       ack && ack({ ok: true, roomCode: code, playerId, sessionToken: ensureSessionToken(p), chatHistory: room.chatHistory });
       broadcastRoom(room);
+      // Their solo game was holding for them -- carry on (see soloPlayerAway).
+      if (room.awayPaused) resumeSoloGame(room);
       if (!isFreshReconnect) return; // just a keepalive ping -- client already has everything
       // Don't leak hands/joker/open-card to a reconnecting client while the
       // countdown/deal/reveal sequence is still in progress for everyone
@@ -4651,15 +4802,8 @@ io.on('connection', (socket) => {
       clearAllRejoinRequests(room);
       room.game = new LeastCountGame(room.order.slice(), maxScore);
       room.statsRecorded = false;
-      // Rating: fresh for every game. seatUids remembers which account
-      // played which seat (filled here and by primeRatings on later joins).
-      room.ratingsRecorded = false;
-      room.lastRatingUpdate = null;
-      room.seatUids = {};
-      for (const pid of room.order) {
-        const sp = room.players.get(pid);
-        if (sp && !sp.isBot && sp.firebaseUid) room.seatUids[pid] = sp.firebaseUid;
-      }
+      // Rating: fresh for every game.
+      resetRatingState(room);
       room.game.startRound();
       // Per-round counters for the bots' anti-stall overrides (see
       // botDeclareThreshold). Reset with the deal, or a patient bot would
@@ -4919,7 +5063,19 @@ io.on('connection', (socket) => {
       const binningSoloRoom = soloVsBots && room.game && !room.game.roundOver;
       if (room.game && !room.game.gameOver && !binningSoloRoom) {
         room.game.removePlayer(playerId);
-        if (room.game.gameOver) { room.phase = 'game_over'; recordGameResult(room); }
+        if (room.game.gameOver) { room.phase = 'game_over'; recordGameResult(room, { notifySocketId: socket.id }); }
+        // Rating (Nov 2026): if this leaves no person in the game -- a solo
+        // table between rounds, or the last of several people -- it is rated
+        // now, while the leaver can still be read (the room may be deleted
+        // below). A no-op while anyone else is still playing.
+        else recordRatings(room, { notifySocketId: socket.id });
+      } else if (binningSoloRoom && !room.game.gameOver) {
+        // Walking out of a solo game mid-round. The engine can't take them out
+        // of a live hand, but their place is settled -- they left, so last --
+        // and once the room is gone there is nothing left to rate. (Someone
+        // already knocked out keeps that place; theirs was rated back then.)
+        if (!room.game.isSpectator(playerId)) room.game._recordExit(playerId, 'quit');
+        recordRatings(room, { force: true, notifySocketId: socket.id });
       }
 
       room.players.delete(playerId);
@@ -4935,6 +5091,10 @@ io.on('connection', (socket) => {
         clearTurnTimer(room);
         clearStartSequenceTimers(room);
         clearAutoNextRoundTimer(room); // never leave an auto-advance armed on a torn-down/reset room
+        // The last person is gone from a game the bots were still playing:
+        // nobody can come back to it now, so it is rated as it stands (each
+        // person's own exit is already on record). A no-op if it was rated.
+        if (room.game && !room.game.gameOver) recordRatings(room, { force: true, notifySocketId: socket.id });
         rooms.delete(roomCode);
         ack && ack({ ok: true });
         return;
@@ -5199,6 +5359,12 @@ io.on('connection', (socket) => {
       return;
     }
     const p = room.players.get(entry.playerId);
+    // An OLD socket going away after the player is already back on a new one
+    // (a network blip: the reconnect's rejoin can land before the server
+    // notices the old connection died) or after the seat moved to another
+    // tab. They are here -- marking them gone would auto-play their turns,
+    // and a solo game would stop and wait for someone who never left.
+    if (p && p.socketId && p.socketId !== socket.id) return;
     if (p) {
       // Closing the app is how most sessions actually end -- far more common
       // than tapping Leave. Recorded here too, or the report would still miss
@@ -5232,6 +5398,11 @@ io.on('connection', (socket) => {
       if (!anyHumanConnected && room.allHumansDisconnectedAt == null) {
         room.allHumansDisconnectedAt = Date.now();
       }
+      // A solo game stops and waits for them (see soloPlayerAway).
+      if (soloPlayerAway(room)) {
+        clearTurnTimer(room);
+        room.awayPaused = true;
+      }
       broadcastRoom(room);
     }
   });
@@ -5256,6 +5427,8 @@ setInterval(() => {
       clearTurnTimer(room);
       clearStartSequenceTimers(room);
       clearAutoNextRoundTimer(room); // never leave an auto-advance armed on a torn-down/reset room
+      // A game nobody came back to counts as left (last) for the rating.
+      try { rateAbandonedGame(room); } catch (e) { console.error('[Rating] abandoned game:', e.message); }
       rooms.delete(code);
       console.log(`[Cleanup] Deleted abandoned room ${code} (no human connected for 10+ minutes).`);
     }
