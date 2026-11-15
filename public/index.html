@@ -101,7 +101,7 @@
      server.js) can never pair the new markup with the old styles or code.
      The same ?v= is on app.js at the bottom of this file. -->
 
-<link rel="stylesheet" href="style.css?v=brackets-2026-11-15" />
+<link rel="stylesheet" href="style.css?v=botrating-2026-11-15" />
 <!-- The 3D icons are inside style.css now (Oct 2026), at the end, broken into
      short lines: as a stylesheet of their own (home-art.css) their very long
      lines did not survive copy-and-paste into GitHub. home-art.css is no
@@ -1137,6 +1137,9 @@
 
     <div id="podium" class="podium"></div>
     <div id="round-result-note" class="round-result-note"></div>
+    <!-- Rating (Nov 2026): knocked out of a game only bots are still playing,
+         your rating is settled at once and shows here (renderRoundRating). -->
+    <div id="round-rating" class="go-rating-card hidden"></div>
 
     <!-- Rejoin offer (Sept 2026). Shown only to a player the engine says is
          eligible (game.canRejoin, computed per-viewer in getPublicState).
@@ -1508,7 +1511,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js?v=adfix-2026-11-14" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js?v=brackets-2026-11-15" defer></script>
+<script src="app.js?v=botrating-2026-11-15" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
