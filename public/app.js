@@ -315,7 +315,7 @@
 
   // ---------------- RATING (Nov 2026) ----------------
   // A chess-style number, worked out on the server after every rated game
-  // (a friends' table with 2+ people and 3+ rounds -- the rules are in
+  // (3+ rounds, against friends, bots or both -- the rules are in
   // game/rating.js). Shown the chess.com way, as plain text in brackets
   // right after the name -- "Ravi (455)", the number bold in our gold -- on
   // the chairs, the lobby and the result screen; and as a card at the top of
@@ -335,31 +335,36 @@
     return '<span class="rating-delta ' + cls + '">' + text + '</span>';
   }
   const RATING_UNRATED = {
-    people: 'Rating counts in games with friends. Bots don\u2019t count.',
+    people: 'Not rated: there was nobody to compare you with.',
     short: 'Not rated: a game needs 3 or more rounds to count.',
     error: 'Your rating could not be updated this time.',
   };
 
-  // The changes from the game that just ended. Arrives as rating_update, or
-  // inside room_update for someone who reconnects to the result screen; any
-  // other phase means it belongs to an older game, so it is dropped.
+  // The changes from the current game, once the server has them: at game
+  // over -- or earlier, when you are knocked out of a game only bots are
+  // still playing, or walk out of one (Nov 2026). Arrives as rating_update,
+  // and inside every room_update, so a reconnect still finds it; the room's
+  // copy is cleared when the next game is dealt, and ours with it.
   let latestRatingUpdate = null;
   let ratingPendingTimer = null;
+  // Your seat in the game you just walked out of: its numbers arrive after
+  // you are back on the menu, as a short note.
+  let ratingLeftAs = null;
   socket.on('rating_update', (u) => {
     latestRatingUpdate = u || null;
     try { playerStatsCache.clear(); } catch (e) { /* not built yet */ }
     renderGameOverRatings();
+    renderRoundRating();
+    const mine = !myRoomCode && ratingLeftAs && u && u.rated && u.changes ? u.changes[ratingLeftAs] : null;
+    if (mine) { ratingLeftAs = null; showRatingToast(mine, 'You left early, so it counts as last'); }
   });
   socket.on('room_update', (room) => {
-    if (!room) return;
-    if (room.phase === 'game_over') {
-      if (room.ratingUpdate && !latestRatingUpdate) {
-        latestRatingUpdate = room.ratingUpdate;
-        renderGameOverRatings();
-      }
-    } else {
-      latestRatingUpdate = null;
-    }
+    if (!room || !('ratingUpdate' in room)) return;
+    const u = room.ratingUpdate || null;
+    if (JSON.stringify(u) === JSON.stringify(latestRatingUpdate)) return;
+    latestRatingUpdate = u;
+    renderGameOverRatings();
+    renderRoundRating();
   });
 
   let ratingAnimRaf = 0;
@@ -368,17 +373,49 @@
     const overlay = document.getElementById('overlay-gameover');
     if (!box || !overlay || overlay.classList.contains('hidden')) return;
     const u = latestRatingUpdate;
-    // Everyone's change, under their name in the standings.
+    // Everyone's change, under their name in the standings -- and a bot's
+    // fixed rating, which never changes.
     document.querySelectorAll('#gameover-body .gameover-row').forEach((row) => {
       const slot = row.querySelector('.go-rating');
       if (!slot) return;
-      const c = u && u.rated && u.changes ? u.changes[row.dataset.playerId] : null;
-      slot.innerHTML = c ? ratingBracketHtml(c.after) + ' ' + ratingDeltaHtml(c.delta) : '';
-      slot.classList.toggle('hidden', !c);
+      const pid = row.dataset.playerId;
+      const c = u && u.rated && u.changes ? u.changes[pid] : null;
+      const bot = !c && latestRoom && Array.isArray(latestRoom.players)
+        ? latestRoom.players.find((x) => x.playerId === pid && x.isBot) : null;
+      slot.innerHTML = c ? ratingBracketHtml(c.after) + ' ' + ratingDeltaHtml(c.delta)
+        : (bot && typeof bot.rating === 'number' ? ratingBracketHtml(bot.rating) : '');
+      slot.classList.toggle('hidden', !slot.innerHTML);
     });
     if (!u) return;   // still "Updating..." (see showGameOver)
     clearTimeout(ratingPendingTimer);
+    fillYourRating(box, u);
+  }
+
+  // Knocked out of a game only bots are still playing (Nov 2026): your place
+  // is settled, so the rating is worked out at once and shows on that
+  // round's result -- not after the bots finish.
+  function renderRoundRating() {
+    const box = document.getElementById('round-rating');
+    if (!box) return;
+    const u = latestRatingUpdate;
+    const g = latestGame;
+    const mineOrNote = u && (u.rated ? u.changes && u.changes[myPlayerId] : currentFirebaseUid());
+    if (!u || !g || g.gameOver || u.round !== g.roundNumber || !mineOrNote) {
+      box.className = 'go-rating-card hidden';
+      box.innerHTML = '';
+      box.dataset.shown = '';
+      return;
+    }
+    fillYourRating(box, u);
+  }
+
+  // "Your rating" on either card, counted up from the old number. A game
+  // that did not count says why -- except to someone with no account, who
+  // has no rating to show.
+  function fillYourRating(box, u) {
     if (!u.rated) {
+      box.dataset.shown = '';
+      if (!currentFirebaseUid()) { box.className = 'go-rating-card hidden'; box.innerHTML = ''; return; }
       box.className = 'go-rating-card note';
       box.innerHTML = '<span class="gr-note">' + escapeHtml(RATING_UNRATED[u.reason] || RATING_UNRATED.error) + '</span>';
       return;
@@ -426,13 +463,39 @@
         (games > 0 ? '<span class="pr-last">' + ratingDeltaHtml(st.lastRatingChange) + ' last game</span>' : '') + '</div>' +
       '<div class="pr-meta">Best ' + Math.max(Number(st.peakRating) || rating, rating) + ' \u00b7 ' + games + ' rated game' + (games === 1 ? '' : 's') + '</div>' +
       (games < total
-        ? '<div class="pr-new"><span>' + (games === 0 ? 'Play a game with friends to start your rating'
+        ? '<div class="pr-new"><span>' + (games === 0 ? 'Play a game of 3+ rounds to start your rating'
           : 'New player \u00b7 ' + games + ' of ' + total + ' games') + '</span>' +
           '<span class="r-bar"><i style="width:' + Math.round(games / total * 100) + '%"></i></span></div>'
         : '') +
       '<details class="pr-how"><summary>How rating works</summary><p>Everyone starts at 300. Finish above a player and you take points from them, more for beating a stronger player. ' +
-      'Games with friends count (3 or more rounds); bots don\u2019t. Leaving early counts as last. Your first 10 games move faster.</p></details>';
+      'Games with friends and with bots count (3 or more rounds); every bot has its own fixed rating. Leaving early counts as last. Your first 10 games move faster.</p></details>';
   }
+  // A short note at the bottom of the menu: the rating from a game you just
+  // walked out of.
+  let ratingToastTimer = null;
+  function showRatingToast(mine, note) {
+    let el = document.getElementById('rating-toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'rating-toast';
+      el.setAttribute('role', 'status');
+      document.body.appendChild(el);
+    }
+    el.className = 'rating-toast';
+    el.innerHTML = '<span class="rt-label">Your rating</span><b class="rt-num">' + Math.round(Number(mine.after) || 0) + '</b>'
+      + ratingDeltaHtml(mine.delta) + (note ? '<span class="rt-note">' + escapeHtml(note) + '</span>' : '');
+    clearTimeout(ratingToastTimer);
+    ratingToastTimer = setTimeout(() => { el.className = 'rating-toast hidden'; }, 5000);
+  }
+
+  // What walking out costs, for the leave dialog -- only when it costs
+  // something: 3+ rounds in, still playing, and an account to rate.
+  function leaveRatingNote() {
+    const g = latestGame;
+    if (!g || g.gameOver || !currentFirebaseUid() || amSpectator()) return '';
+    return (g.roundHistory || []).length >= 3 ? ' It counts as last place for your rating.' : '';
+  }
+
   async function loadProfileRating() {
     const box = document.getElementById('profile-rating');
     if (!box) return;
@@ -6466,7 +6529,7 @@
       const sub = isHost ? (isMe ? 'Host · You' : 'Host')
         : (p.isBot ? 'Bot' : (isMe ? 'You' : (p.connected ? 'online' : 'offline')));
       // Rating (Nov 2026): "Ravi (455)", as at the table.
-      const lsRating = !p.isBot && typeof p.rating === 'number' ? ratingBracketHtml(p.rating) : '';
+      const lsRating = typeof p.rating === 'number' ? ratingBracketHtml(p.rating) : '';
       li.innerHTML = face
         + `<span class="ls-name${lsRating ? ' has-rating' : ''}"><span class="ls-nm">${escapeHtml(name)}</span>${lsRating}</span>`
         + `<span class="ls-sub">${escapeHtml(sub)}</span>`;
@@ -7198,8 +7261,9 @@
       // first (it ends in "..." but never below six letters -- see
       // fitSeatName), and on a chair too narrow even for that
       // the number moves under the name rather than being cut off.
-      // None for bots or anyone without a rating yet.
-      if (!p.isBot && typeof p.rating === 'number') {
+      // A bot shows its fixed one (Nov 2026); nothing for someone whose
+      // rating hasn't loaded or who has no account.
+      if (typeof p.rating === 'number') {
         const rEl = document.createElement('span');
         rEl.className = 'seat-rating';
         rEl.innerHTML = ratingBracketHtml(p.rating);
@@ -8785,6 +8849,7 @@
     // pop in a frame later. Eligibility is entirely the engine's call
     // (game.canRejoin, per viewer).
     renderRejoinOffer(game);
+    renderRoundRating();
 
     document.getElementById('overlay-round-result').classList.remove('hidden');
     // Deliberately AFTER the overlay is unhidden. It used to run before, and
@@ -9824,8 +9889,8 @@
     const ratingBox = document.getElementById('gameover-rating');
     if (ratingBox) {
       ratingBox.dataset.shown = '';
-      const humans = latestRoom ? latestRoom.players.filter((x) => !x.isBot).length : 0;
-      if (!latestRatingUpdate && humans >= 2 && (game.roundHistory || []).length >= 3) {
+      // Any game of 3+ rounds counts now, bots or not (Nov 2026).
+      if (!latestRatingUpdate && currentFirebaseUid() && (game.roundHistory || []).length >= 3) {
         ratingBox.className = 'go-rating-card pending';
         ratingBox.innerHTML = '<span class="gr-label">Your rating</span><span class="gr-wait">Updating\u2026</span>';
         clearTimeout(ratingPendingTimer);
@@ -9920,6 +9985,7 @@
       }
       localStorage.removeItem('leastcount_session');
       mySessionToken = null;  // the seat is gone; do not keep a credential for it
+      ratingLeftAs = myPlayerId;   // this game's numbers may still be on their way
       myRoomCode = null;
       myPlayerId = null;
       latestRoom = null;
@@ -10066,12 +10132,12 @@
     if (leaveAfterRound) {
       // Already queued -- this dialog is now "do you want to call it off?"
       t.textContent = 'Leaving when this round ends';
-      p.textContent = 'You’ll go back to the menu as soon as this hand finishes. Your turns are being played for you until then.';
+      p.textContent = 'You’ll go back to the menu as soon as this hand finishes. Your turns are being played for you until then.' + leaveRatingNote();
       cancel.textContent = 'Stay in the game';
       confirm.textContent = 'Keep leaving';
     } else {
       t.textContent = 'Leave this game?';
-      p.textContent = 'You’ll forfeit the game and go back to the menu. The others carry on without you.';
+      p.textContent = 'You’ll forfeit the game and go back to the menu. The others carry on without you.' + leaveRatingNote();
       cancel.textContent = 'Stay';
       confirm.textContent = 'Leave';
     }
