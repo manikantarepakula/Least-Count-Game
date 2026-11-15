@@ -165,11 +165,23 @@
 
   // Typing in any text box: the on-screen keyboard shrinks the WebView, so
   // nothing is measured then, and the banner steps aside (below).
+  //
+  // Only a text box that is actually ON SCREEN counts (Nov 2026). Renaming
+  // yourself at the table and pressing Enter closes the little dialog but
+  // leaves its (now hidden) box holding focus -- no focusout ever fires --
+  // so the banner stayed down for the rest of the game: Mani's screenshot,
+  // a game screen with no ad and no space for one. A hidden element has no
+  // boxes on the page (getClientRects is empty), so it no longer counts.
   function typingNow() {
     const a = document.activeElement;
     if (!a) return false;
-    if (a.tagName === 'TEXTAREA' || a.isContentEditable) return true;
-    return a.tagName === 'INPUT' && /^(text|search|email|tel|url|number|password)?$/i.test(a.type || '');
+    const box = a.tagName === 'TEXTAREA' || a.isContentEditable
+      || (a.tagName === 'INPUT' && /^(text|search|email|tel|url|number|password)?$/i.test(a.type || ''));
+    if (!box) return false;
+    try {
+      if (typeof a.getClientRects === 'function' && a.getClientRects().length === 0) return false;
+    } catch (e) { /* treat as on screen */ }
+    return true;
   }
 
   function measureNavAllowance() {
@@ -208,6 +220,9 @@
   window.addEventListener('resize', () => {
     clearTimeout(navMeasureTimer);
     navMeasureTimer = setTimeout(measureNavAllowance, 250);
+    // The keyboard opening for a box that already had focus (so no focusin
+    // fired -- e.g. a dialog reopened around the same box): still typing.
+    try { if (!typing && typingNow()) startTyping(); } catch (e) { /* not ready yet */ }
   });
 
   let initPromise = null;
@@ -403,15 +418,16 @@
   function effectiveKind() {
     return typing ? BANNER_NONE : desiredKind;
   }
+  function startTyping() {
+    typing = true;
+    // Free the reserved space at once, so the chat box can sit straight on
+    // the keyboard without waiting for the native call to come back.
+    setSafeBottom(0);
+    scheduleApply();
+  }
   document.addEventListener('focusin', () => {
     clearTimeout(typingTimer);
-    if (!typing && typingNow()) {
-      typing = true;
-      // Free the reserved space at once, so the chat box can sit straight on
-      // the keyboard without waiting for the native call to come back.
-      setSafeBottom(0);
-      scheduleApply();
-    }
+    if (!typing && typingNow()) startTyping();
   });
   document.addEventListener('focusout', () => {
     clearTimeout(typingTimer);
@@ -525,6 +541,14 @@
     // bottom banner would immediately reclaim the single slot and replace
     // the round-result ad a fraction of a second after it appeared.
     if (resultOverlayOpen()) return;
+    // Typing ended without a focusout (the box was hidden while it held
+    // focus): every game update re-checks, so the banner comes back on the
+    // next move instead of staying away for the rest of the game.
+    if (typing && !typingNow()) {
+      typing = false;
+      clearTimeout(typingTimer);
+      setTimeout(measureNavAllowance, 400);
+    }
     requestBanner(BANNER_BOTTOM, 0);
   }
   function hideBanner() { requestBanner(BANNER_NONE, 0); }
