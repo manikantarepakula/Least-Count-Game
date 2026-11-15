@@ -4049,13 +4049,31 @@
   // link. Previously this logic lived inline in the Join button's handler,
   // which meant every new way of arriving at a room needed its own copy of
   // the pending-approval and session-saving branches.
+  // One request at a time per action (Nov 2026): "a player is getting added
+  // two times from the same device". A double tap on Join, Create or Play
+  // Online sent two requests, and each one could seat you. A second tap while
+  // the first is on its way now does nothing. (The server refuses a second
+  // seat for the same phone too; this just stops asking twice.) Released when
+  // the server answers, or after 10s in case it never does.
+  const requestsInFlight = new Map();
+  function startOnce(key) {
+    const at = requestsInFlight.get(key);
+    if (at && Date.now() - at < 10000) return false;
+    requestsInFlight.set(key, Date.now());
+    return true;
+  }
+  function doneOnce(key) { requestsInFlight.delete(key); }
+
   async function joinRoomByKey(key) {
     const name = getPlayerName();
     const roomCode = (key || '').trim();
     if (!name) return promptForName();
     if (!roomCode) return setLandingError('Enter room code');
-    const firebaseIdToken = await currentFirebaseIdToken();
+    if (!startOnce('join')) return;
+    let firebaseIdToken = null;
+    try { firebaseIdToken = await currentFirebaseIdToken(); } catch (e) { /* join as a guest */ }
     socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+      doneOnce('join');
       if (!res.ok) return setLandingError(res.error);
       // room.phase was already 'playing' when the request landed -- the
       // server held it as a pending request instead of joining outright
@@ -5057,8 +5075,11 @@
   document.getElementById('btn-create').onclick = async () => {
     const name = getPlayerName();
     if (!name) return promptForName();
-    const firebaseIdToken = await currentFirebaseIdToken();
+    if (!startOnce('create')) return;   // a double tap made two tables
+    let firebaseIdToken = null;
+    try { firebaseIdToken = await currentFirebaseIdToken(); } catch (e) { /* as a guest */ }
     socket.emit('create_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+      doneOnce('create');
       if (!res.ok) return setLandingError(res.error);
       logAnalytics('room_created');
       saveSession(res.roomCode, res.playerId, res.sessionToken);
@@ -6280,8 +6301,13 @@
     const name = getPlayerName();
     if (!name) return promptForName();
     const playerCount = Number(document.getElementById('input-online-playercount').value) || 3;
-    const firebaseIdToken = await currentFirebaseIdToken();
+    // A double tap queued you twice -- and the matchmaker then sat you at
+    // the same table twice.
+    if (!startOnce('queue')) return;
+    let firebaseIdToken = null;
+    try { firebaseIdToken = await currentFirebaseIdToken(); } catch (e) { /* as a guest */ }
     socket.emit('queue_join', { playerCount, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+      doneOnce('queue');
       if (!res.ok) return setLandingError(res.error);
       queuedPlayerCount = playerCount;
       document.getElementById('queue-waiting-count').textContent = String(playerCount);
