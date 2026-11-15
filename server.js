@@ -1831,9 +1831,23 @@ async function readGroup(code, opts) {
 //
 // hostPlayerId is left null: nobody is seated yet. join_room's lobby path
 // promotes whoever arrives first.
-async function createRoomForGroup(code) {
+// Two people opening the same group at the same moment both found no room,
+// both read the group, and each made a room -- the second replacing the first
+// in `rooms`, so the first person sat in a room nobody else could reach (and
+// on their next reconnect was sent back to join again). One room per group:
+// a second caller waits for the first one's room. (Nov 2026)
+const groupRoomsOpening = new Map();   // code -> Promise<room|null>
+function createRoomForGroup(code) {
+  if (rooms.has(code)) return Promise.resolve(rooms.get(code));
+  if (groupRoomsOpening.has(code)) return groupRoomsOpening.get(code);
+  const opening = openGroupRoom(code).finally(() => groupRoomsOpening.delete(code));
+  groupRoomsOpening.set(code, opening);
+  return opening;
+}
+async function openGroupRoom(code) {
   const group = await readGroup(code);
   if (!group) return null;
+  if (rooms.has(code)) return rooms.get(code);
   const room = {
     code,
     groupCode: code,
@@ -3793,6 +3807,22 @@ io.on('connection', (socket) => {
       if (queueIndex.has(socket.id)) throw new Error('Already in a matchmaking queue.');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      // ONE PLACE PER PERSON (Nov 2026). Asked again AFTER the await: a
+      // double tap on Play Online sent two of these, both passed the check
+      // above while the token was being verified, and the matchmaker then sat
+      // the same phone at a table twice. And a person already waiting from an
+      // older connection (the app reconnected) keeps one place, on the new
+      // connection -- never a match against themselves.
+      if (queueIndex.has(socket.id)) throw new Error('Already in a matchmaking queue.');
+      if (verifiedUid) {
+        for (const [size, bucket] of matchQueues) {
+          for (let i = bucket.length - 1; i >= 0; i--) {
+            if (bucket[i].firebaseUid !== verifiedUid) continue;
+            queueIndex.delete(bucket[i].socketId);
+            bucket.splice(i, 1);
+          }
+        }
+      }
       const playerId = makePlayerId();
       matchQueues.get(n).push({ playerId, socketId: socket.id, name: cleanName, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
       queueIndex.set(socket.id, n);
@@ -3890,6 +3920,39 @@ io.on('connection', (socket) => {
       if (!room) throw new Error('Room not found. Check the code.');
       const cleanName = (name || '').trim().slice(0, 20) || 'Player';
       const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+
+      // ONE SEAT PER PHONE (Nov 2026): "a player is getting added two times
+      // from the same device". This connection may already be sitting at
+      // this table -- a double tap on Join, the group's auto-join landing on
+      // top of a tap, an invite link opened again -- or already be waiting
+      // for the host to let it in. Everything above awaited, so a second
+      // request from the same phone can arrive in that gap; and with no
+      // account yet (sign-in still starting) there is no uid to match it on.
+      // The connection itself is the proof: same socket, same seat.
+      const already = socketIndex.get(socket.id);
+      if (already && already.roomCode === code) {
+        if (already.pending && room.pendingJoins && room.pendingJoins.has(already.playerId)) {
+          ack && ack({ ok: true, pending: true, roomCode: code, playerId: already.playerId, needsAd: await needsAdToEnter(room, already.playerId, 'join', verifiedUid) });
+          return;
+        }
+        const seat = !already.pending && room.players.get(already.playerId);
+        if (seat && !seat.isBot) {
+          // Sign-in finished since they sat down: the seat learns its
+          // account, so a later join from a new connection finds it too.
+          if (verifiedUid && !seat.firebaseUid && !findExistingSeat(room, verifiedUid, cleanName)) {
+            seat.firebaseUid = verifiedUid;
+            rememberPlayerUid(room, verifiedUid, already.playerId);
+            if (room.seatUids && room.game && room.game.playerIds.includes(already.playerId)) room.seatUids[already.playerId] = verifiedUid;
+          }
+          seat.connected = true;
+          room.allHumansDisconnectedAt = null;
+          socket.join(code);
+          ack && ack({ ok: true, roomCode: code, playerId: already.playerId, sessionToken: ensureSessionToken(seat), chatHistory: room.chatHistory });
+          broadcastRoom(room);
+          if (room.game) broadcastGameState(room);
+          return;
+        }
+      }
 
       // Already have a chair at this table? Sit back down in it rather than
       // pulling up another one. See findExistingSeat() for why this matters
@@ -4004,6 +4067,24 @@ io.on('connection', (socket) => {
       // idea as a meeting "waiting room". Not added to room.players/order
       // yet at all, so they don't show up anywhere in the UI until admitted.
       if (!room.pendingJoins) room.pendingJoins = new Map();
+      // The same person asking again from a new connection (the app
+      // reconnected, or they opened the link again while waiting): keep
+      // their one place in line and move it to this connection, rather than
+      // asking the host about them twice -- two "yes" taps were two seats.
+      if (verifiedUid) {
+        for (const [pid, req] of room.pendingJoins) {
+          if (req.firebaseUid !== verifiedUid) continue;
+          if (req.socketId && req.socketId !== socket.id) socketIndex.delete(req.socketId);
+          req.socketId = socket.id;
+          req.name = cleanName;
+          req.platform = cleanPlatform(platform);
+          socketIndex.set(socket.id, { roomCode: code, playerId: pid, pending: true });
+          socket.join(code);
+          ack && ack({ ok: true, pending: true, roomCode: code, playerId: pid, needsAd: await needsAdToEnter(room, pid, 'join', verifiedUid) });
+          notifyHostOfJoinRequest(room);
+          return;
+        }
+      }
       if (room.pendingJoins.size + room.order.length >= 10) throw new Error('Room is full (max 10 players).');
       const playerId = makePlayerId();
       const JOIN_REQUEST_TIMEOUT_MS = 120000; // 2 minutes -- see the "Waiting for host" screen client-side
