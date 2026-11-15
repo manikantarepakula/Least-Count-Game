@@ -3,9 +3,12 @@
 //
 // The rules, as agreed with Mani:
 //   - Everyone starts at 300. A rating never goes below 100.
-//   - A game counts ("is rated") when at least 2 real people with an account
-//     play it to the end, and it lasted at least 3 rounds. Bots are ignored:
-//     with 2 people and 2 bots, only the 2 people are compared.
+//   - A game counts ("is rated") when at least one person with an account
+//     plays at least 3 rounds against anyone -- friends, bots, or both.
+//   - Bots (Nov 2026, second step): every bot character has a FIXED rating,
+//     measured by letting the bots play each other (tools/bot-ratings-sim.js;
+//     the numbers live on BOT_ARCHETYPES in server.js). A bot is compared
+//     like any other player, but its own number never moves.
 //   - Places: the winner is 1st; then the players knocked out by the max
 //     score, the later one placed higher (same round: the lower score is
 //     higher; equal = a draw between them); players who LEFT come last, the
@@ -18,8 +21,15 @@
 //   - K = 40 for a player's first 10 rated games ("new player"), then 20.
 //   - A settled player (10+ rated games) gets only half the change from each
 //     NEW player at the table, so fresh accounts can't be farmed for points.
+//     (Bots are never "new".)
 //   - After 5 rated games with exactly the same people on one day, the 6th
 //     and later count half, so friends can't push one person up by losing.
+//     Only between people: there is no daily limit against bots -- beating
+//     the same weak bots again pays less and less on its own.
+//   - One person against bots: the rating is worked out as soon as that
+//     person is out (knocked out, or left) -- the bots still in finish above
+//     them whatever happens next, so nobody has to watch the bots finish.
+//     With two or more people it waits for the end (one could rejoin).
 //
 // Pure functions only: no Firestore, no sockets. server.js does the reading
 // and writing; this file is what the tests check.
@@ -58,7 +68,9 @@ function isNewPlayer(ratedGames) {
 }
 
 /**
- * players: [{ key, rating, ratedGames, place }]  (place 1 = best; ties share)
+ * players: [{ key, rating, ratedGames, place, fixed }]  (place 1 = best; ties share)
+ *   fixed: a bot -- compared against at its set rating like anyone else, but
+ *   its own number never moves, so it gets no entry in the result.
  * opts.sameGroupGamesToday: rated games these exact people already played
  *   together today (before this one).
  * Returns { [key]: { before, after, delta, ratedGames, newPlayer } }, where
@@ -71,13 +83,14 @@ function computeRatingChanges(players, opts) {
   if (n < 2) return out;
   const halfForGroup = num(o.sameGroupGamesToday, 0) >= SAME_GROUP_FULL_GAMES;
   for (const p of players) {
+    if (p.fixed) continue;
     const settled = !isNewPlayer(p.ratedGames);
     const k = settled ? K_SETTLED : K_NEW;
     let sum = 0;
     for (const q of players) {
       if (q === p) continue;
       const result = p.place < q.place ? 1 : (p.place > q.place ? 0 : 0.5);
-      const weight = settled && isNewPlayer(q.ratedGames) ? 0.5 : 1;
+      const weight = settled && !q.fixed && isNewPlayer(q.ratedGames) ? 0.5 : 1;
       sum += k * weight * (result - expectedScore(p.rating, q.rating));
     }
     let change = sum / (n - 1);
@@ -96,12 +109,13 @@ function computeRatingChanges(players, opts) {
 }
 
 /**
- * Why a finished game does NOT count, or null when it does.
- *   'people'  -- fewer than 2 real people with an account (bots don't count)
+ * Why a game does NOT count, or null when it does.
+ *   'people'  -- nobody to rate (no person with an account), or nobody for
+ *                them to be compared with (no other person, no bot)
  *   'short'   -- fewer than MIN_ROUNDS rounds were played
  */
-function unratedReason(peopleWithAccounts, roundsPlayed) {
-  if (peopleWithAccounts < 2) return 'people';
+function unratedReason(peopleWithAccounts, bots, roundsPlayed) {
+  if (peopleWithAccounts < 1 || peopleWithAccounts + bots < 2) return 'people';
   if (roundsPlayed < MIN_ROUNDS) return 'short';
   return null;
 }
