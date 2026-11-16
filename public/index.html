@@ -101,7 +101,7 @@
      server.js) can never pair the new markup with the old styles or code.
      The same ?v= is on app.js at the bottom of this file. -->
 
-<link rel="stylesheet" href="style.css?v=botrating-2026-11-15" />
+<link rel="stylesheet" href="style.css?v=appfirst-2026-11-17" />
 <!-- The 3D icons are inside style.css now (Oct 2026), at the end, broken into
      short lines: as a stylesheet of their own (home-art.css) their very long
      lines did not survive copy-and-paste into GitHub. home-art.css is no
@@ -327,6 +327,17 @@
     <div id="invite-card" class="invite-card hidden">
       <p id="invite-headline" class="invite-headline">You've been invited to play</p>
       <div class="invite-room-line">Room <span id="invite-roomcode">----</span></div>
+      <!-- The app first, on Android browsers (Nov 2026). Nearly every new
+           player arrives through an invite link, and the link opens the
+           WEBSITE -- where no ads run. The Play Store page installs the app,
+           or opens it if it's already there; the code is copied on the way
+           so it's one paste in the app. Joining here in the browser is still
+           right below. Shown by enterInviteMode() in app.js. -->
+      <div id="invite-app" class="invite-app hidden">
+        <a id="btn-invite-app" class="invite-app-btn" href="#" target="_blank" rel="noopener">Play in the app</a>
+        <p id="invite-app-hint" class="invite-app-hint">Free on Play Store. Then tap <b>Play with Friends</b> and enter code <b id="invite-app-code">----</b></p>
+        <div class="invite-or"><span>or play here in the browser</span></div>
+      </div>
       <label for="input-invite-name">Your name</label>
       <input id="input-invite-name" type="text" maxlength="20" placeholder="e.g. Manikanta"
              autocomplete="name" enterkeyhint="go" />
@@ -410,6 +421,14 @@
             </span>
             <svg class="home-mode-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
           </button>
+        </div>
+        <!-- Website on an Android phone only (Nov 2026): the app is where
+             the game is meant to be played (and where ads pay for it). ×
+             hides it for a day. See updateAppPromos() in app.js. -->
+        <div id="home-app-bar" class="app-promo hidden" role="note">
+          <span class="app-promo-text"><b>Get the Least Count app</b><span>Smoother than the browser</span></span>
+          <a id="btn-home-app" class="app-promo-btn" href="#" target="_blank" rel="noopener">Install</a>
+          <button id="btn-home-app-close" class="app-promo-x" type="button" aria-label="Not now">&times;</button>
         </div>
       </div><!-- /pane-quick -->
 
@@ -780,6 +799,14 @@
         <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2Zm0 18.15h-.01a8.2 8.2 0 0 1-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.2 8.2 0 0 1-1.26-4.38c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.83 2.42a8.19 8.19 0 0 1 2.41 5.83c0 4.54-3.7 8.23-8.24 8.23Zm4.52-6.17c-.25-.12-1.47-.72-1.69-.81-.23-.08-.39-.12-.56.13-.16.24-.64.8-.78.97-.15.16-.29.18-.53.06-.25-.13-1.05-.39-1.99-1.23-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.01-.38.11-.5.11-.11.25-.29.37-.44.13-.15.17-.25.25-.42.08-.16.04-.31-.02-.43-.06-.12-.56-1.34-.76-1.84-.2-.48-.4-.42-.56-.43h-.48c-.16 0-.43.06-.65.31-.22.25-.85.84-.85 2.03 0 1.2.87 2.35.99 2.51.12.16 1.71 2.62 4.15 3.67.58.25 1.03.4 1.39.51.58.19 1.11.16 1.53.1.47-.07 1.47-.6 1.67-1.18.21-.58.21-1.07.15-1.18-.06-.11-.22-.17-.47-.29Z"/></svg>
         Invite on WhatsApp
       </button>
+    </div>
+
+    <!-- Waiting for friends is idle time: the moment to install the app for
+         next time (website on Android only, Nov 2026). See updateAppPromos(). -->
+    <div id="lobby-app-bar" class="app-promo hidden" role="note">
+      <span class="app-promo-text"><b>Waiting? Get the app</b><span>For your next game</span></span>
+      <a id="btn-lobby-app" class="app-promo-btn" href="#" target="_blank" rel="noopener">Install</a>
+      <button id="btn-lobby-app-close" class="app-promo-x" type="button" aria-label="Not now">&times;</button>
     </div>
 
     <!-- data-fit-list: when a big table doesn't fit, layout.js lets THIS list
@@ -1511,7 +1538,7 @@
 <script type="module" src="firebase-init.js"></script>
 <script src="admob-init.js?v=bannerfix-2026-11-17" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
-<script src="app.js?v=oneseat-2026-11-16" defer></script>
+<script src="app.js?v=appfirst-2026-11-17" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
      only reads/sets layout: it picks how tight each screen's spacing needs
      to be so the whole screen fits the phone it is on. See the top of the
