@@ -7124,3 +7124,48 @@ html.gs2 .seat.active .seat-rating .rating-br b { color: #261a03; }
 .rating-toast .rt-note { flex-basis: 100%; color: var(--home-line, #9fb5ab); font-size: 12px; }
 @keyframes rtIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .rating-toast { animation: none; } }
+
+/* ---- Website players into the app (Nov 2026) --------------------------------
+   Android browsers only (showInviteAppChoice / updateAppPromos in app.js).
+   The Play links are <a> elements -- a real tap hands off to the Play Store
+   app even where window.open would be blocked -- and every .primary rule in
+   this file is scoped to button.primary, so they carry their own gold. */
+.invite-app { display: flex; flex-direction: column; gap: 8px; }
+.invite-app.hidden { display: none; }
+a.invite-app-btn, a.invite-app-btn:link, a.invite-app-btn:visited, a.invite-app-btn:hover,
+a.app-promo-btn, a.app-promo-btn:link, a.app-promo-btn:visited, a.app-promo-btn:hover {
+  display: flex; align-items: center; justify-content: center; box-sizing: border-box;
+  background: linear-gradient(180deg, #f8cf62 0%, var(--brand) 48%, #ebb43a 100%);
+  color: #261a03; font-family: inherit; font-weight: 700; text-decoration: none;
+  border-radius: 14px; box-shadow: 0 4px 0 var(--gold-edge), 0 8px 18px rgba(0,0,0,0.25);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+a.invite-app-btn { min-height: 52px; font-size: 17px; }
+a.invite-app-btn:active, a.app-promo-btn:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--gold-edge); }
+.invite-app-hint { margin: 2px 0 0; font-size: 13px; line-height: 1.45; color: var(--text-muted); }
+.invite-app-hint b { color: var(--text-light); }
+.invite-app-hint.copied { color: #7be0a8; }
+.invite-app-hint.copied b { color: #fff; }
+.invite-or { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+.invite-or::before, .invite-or::after { content: ''; flex: 1; height: 1px; background: var(--jade-border); }
+/* With the app leading, joining here is the second choice: green, not gold. */
+.invite-card.app-first #btn-invite-join { background: #2d5145; color: #fff; box-shadow: 0 4px 0 #142a23; }
+
+/* The slim bars on Home and in the lobby. */
+.app-promo {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 12px; padding: 9px 6px 9px 14px;
+  background: var(--jade-panel); border: 1px solid rgba(242,193,78,0.35);
+  border-radius: 14px; box-shadow: 0 3px 0 rgba(3,12,9,0.45);
+}
+.app-promo.hidden { display: none; }
+#screen-lobby .app-promo { margin: 0; }
+.app-promo-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; text-align: left; }
+.app-promo-text b { font-size: 14px; color: #fff; }
+.app-promo-text span { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+a.app-promo-btn { flex: 0 0 auto; min-height: 38px; padding: 0 16px; font-size: 14px; border-radius: 12px; box-shadow: 0 3px 0 var(--gold-edge); }
+button.app-promo-x {
+  flex: 0 0 auto; width: 34px; height: 38px; min-height: 0; padding: 0; margin: 0;
+  background: transparent; border: 0; box-shadow: none; color: var(--text-muted);
+  font-size: 22px; line-height: 1; border-radius: 10px;
+}
