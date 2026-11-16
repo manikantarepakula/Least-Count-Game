@@ -2807,6 +2807,8 @@
         }
       }
     }
+    // "Get the app" bars on Home and in the lobby (website on Android only).
+    if (id === 'screen-landing' || id === 'screen-lobby') updateAppPromos();
     if (id === 'screen-game') {
       applyKeyboardSafeLayout();
     } else {
@@ -4896,6 +4898,58 @@
   // --------------------------------------------------------------------
   let inviteJoinKey = null;
 
+  // Each install prompt says it was shown once per page load, not on every
+  // redraw. (A `var`, set up on first use: the invite card below logs from
+  // start-up, long before the rest of the install code further down runs.)
+  var installShownLogged = null;
+  function logInstallShown(where) {
+    if (!installShownLogged) installShownLogged = new Set();
+    if (installShownLogged.has(where)) return;
+    installShownLogged.add(where);
+    logAnalytics('install_prompt_shown', { where });
+  }
+
+  // The invite card, on the website on an Android phone (Nov 2026): "Play in
+  // the app" first, the browser second. Almost every new player arrives
+  // through an invite link, and the link opens the website. See the install
+  // notes by INSTALL_URL further down.
+  function showInviteAppChoice(key) {
+    const box = document.getElementById('invite-app');
+    const card = document.getElementById('invite-card');
+    const join = document.getElementById('btn-invite-join');
+    if (!box || !card || !join) return;
+    const appFirst = FEATURES.installPrompt && CLIENT_PLATFORM === 'web' && /Android/i.test(navigator.userAgent || '');
+    box.classList.toggle('hidden', !appFirst);
+    card.classList.toggle('app-first', appFirst);
+    join.textContent = appFirst ? 'Join in the browser' : 'Join Game';
+    if (!appFirst) return;
+    const codeEl = document.getElementById('invite-app-code');
+    if (codeEl) codeEl.textContent = key;
+    const hint = document.getElementById('invite-app-hint');
+    if (hint) hint.classList.remove('copied');
+    logInstallShown('invite');
+  }
+
+  (function wireInviteAppButton() {
+    const btn = document.getElementById('btn-invite-app');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      // Set now, at the tap: the install code further down is not ready
+      // during start-up, when the card is drawn.
+      btn.href = installUrl('invite');
+      const key = inviteJoinKey || '';
+      logAnalytics('install_prompt_accepted', { where: 'invite' });
+      // The app can't be told which table (that needs the next app build),
+      // so the code goes on the clipboard: one paste in the app.
+      try { if (key && navigator.clipboard) navigator.clipboard.writeText(key).catch(() => {}); } catch (e) { /* type it instead */ }
+      const hint = document.getElementById('invite-app-hint');
+      if (hint && key) {
+        hint.innerHTML = 'Code <b>' + escapeHtml(key) + '</b> copied. In the app tap <b>Play with Friends</b> and paste it in <b>Enter code</b>.';
+        hint.classList.add('copied');
+      }
+    });
+  })();
+
   function enterInviteMode(key, headline) {
     inviteJoinKey = key;
     // A link tapped while a Home sheet is open: the invite card replaces the
@@ -4912,7 +4966,11 @@
     // Returning players never retype -- same stored name the rest of the app
     // uses, so this is usually already filled and it's a single tap to play.
     nameInput.value = localStorage.getItem(NAME_STORAGE_KEY) || '';
-    setTimeout(() => { try { nameInput.focus(); } catch (e) {} }, 60);
+    showInviteAppChoice(key);
+    // Not with "Play in the app" leading: the keyboard popping up over it
+    // would push the main choice off the screen.
+    if (!card.classList.contains('app-first')) setTimeout(() => { try { nameInput.focus(); } catch (e) {} }, 60);
+    updateAppPromos();
   }
 
   function exitInviteMode() {
@@ -4921,6 +4979,7 @@
     const blocks = document.querySelector('.mode-blocks');
     if (card) card.classList.add('hidden');
     if (blocks) blocks.classList.remove('hidden');
+    updateAppPromos();
   }
 
   // Set when this visit began from an invite link, so the join that follows
@@ -9716,22 +9775,98 @@
   // with, or after, the first production rollout, never before it.
   const INSTALL_URL = 'https://play.google.com/store/apps/details?id=com.manikanta.leastcount';
   const INSTALL_CHOICE_KEY = 'leastcount_install_prompt';
-  const INSTALL_SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
-  const INSTALL_DONE = 'installed';
+  // ------------------------------------------------------------------
+  // Website players into the app (Nov 2026). GA4, last 28 days: about 40%
+  // of all rounds were played on the website, where no ads run, and most
+  // NEW players started there -- through invite links, which open the site.
+  // The one prompt we had (a card at game over, hidden for 3 days on "Not
+  // now") was shown to ~26 people and taken by nobody. Now four places, all
+  // on Android browsers only (there is no iPhone or computer app):
+  //   invite  -- the invite-link card leads with "Play in the app"
+  //   home    -- a slim bar under the three ways to play
+  //   lobby   -- a slim bar while you wait for friends
+  //   gameover-- the card that was already there
+  // "Not now" (×) hides home/lobby/game over for a day, not three; Install
+  // hides them for three days (they may well not finish installing). Every
+  // shown / accepted / dismissed event says where, and the Play link carries
+  // the same tag, so Play Console can count installs per place.
+  // ------------------------------------------------------------------
+  const INSTALL_SNOOZE_MS = 24 * 60 * 60 * 1000;
+  const INSTALL_TAPPED_SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
 
-  function installPromptAllowed() {
+  // The Play Store page for this app, tagged with where the tap came from.
+  function installUrl(where) {
+    return INSTALL_URL + '&referrer=' + encodeURIComponent('utm_source=website&utm_medium=' + (where || 'other'));
+  }
+
+  // The website, on an Android phone: the only place an install makes sense.
+  function onAndroidWebsite() {
     if (!FEATURES.installPrompt) return false;
     // Already inside the Capacitor app -- nothing to install.
     if (CLIENT_PLATFORM !== 'web') return false;
     // There is no iOS or desktop build, so the prompt would be a dead end.
-    if (!/Android/i.test(navigator.userAgent || '')) return false;
+    return /Android/i.test(navigator.userAgent || '');
+  }
+
+  function installPromptAllowed() {
+    if (!onAndroidWebsite()) return false;
     let stored = null;
     try { stored = localStorage.getItem(INSTALL_CHOICE_KEY); } catch (e) { stored = null; }
-    if (stored === INSTALL_DONE) return false;
+    // (An old "installed" from before Nov 2026 counts as nothing: whoever is
+    // still on the website has not moved, whatever they once tapped.)
     const until = Number(stored);
     if (until && Date.now() < until) return false;
     return true;
   }
+
+  // The home and lobby bars. Called whenever either screen is drawn -- which
+  // can be during start-up, before the constants above exist; the next
+  // call (the end of wireAppPromos below) puts it right.
+  function updateAppPromos() {
+    try {
+      const allowed = installPromptAllowed();
+      const homeBar = document.getElementById('home-app-bar');
+      if (homeBar) {
+        // Not over an invite card: that one has its own, bigger choice.
+        const show = allowed && !inviteJoinKey;
+        homeBar.classList.toggle('hidden', !show);
+        if (show) logInstallShown('home');
+      }
+      const lobbyBar = document.getElementById('lobby-app-bar');
+      if (lobbyBar) {
+        const lobby = document.getElementById('screen-lobby');
+        const show = allowed && !!lobby && lobby.classList.contains('active');
+        lobbyBar.classList.toggle('hidden', !show);
+        if (show) logInstallShown('lobby');
+      }
+    } catch (e) { /* not set up yet */ }
+  }
+
+  (function wireAppPromos() {
+    [['home', 'btn-home-app', 'btn-home-app-close', 'home-app-bar'],
+      ['lobby', 'btn-lobby-app', 'btn-lobby-app-close', 'lobby-app-bar']].forEach(([where, goId, xId, barId]) => {
+      const go = document.getElementById(goId);
+      const x = document.getElementById(xId);
+      if (go) {
+        go.href = installUrl(where);
+        go.addEventListener('click', () => {
+          logAnalytics('install_prompt_accepted', { where });
+          rememberInstallChoice(String(Date.now() + INSTALL_TAPPED_SNOOZE_MS));
+          setTimeout(updateAppPromos, 300);   // after the Play Store has taken over
+        });
+      }
+      if (x) {
+        x.addEventListener('click', () => {
+          logAnalytics('install_prompt_dismissed', { where });
+          rememberInstallChoice(String(Date.now() + INSTALL_SNOOZE_MS));
+          const bar = document.getElementById(barId);
+          if (bar) bar.classList.add('hidden');
+          updateAppPromos();
+        });
+      }
+    });
+    updateAppPromos();
+  })();
 
   function rememberInstallChoice(value) {
     // Private browsing throws on setItem; the prompt reappearing is a far
@@ -9756,13 +9891,13 @@
 
     const install = document.createElement('a');
     install.className = 'primary install-card-btn';
-    install.href = INSTALL_URL;
+    install.href = installUrl('gameover');
     install.target = '_blank';
     install.rel = 'noopener';
     install.textContent = 'Install';
     install.addEventListener('click', () => {
-      logAnalytics('install_prompt_accepted', {});
-      rememberInstallChoice(INSTALL_DONE);
+      logAnalytics('install_prompt_accepted', { where: 'gameover' });
+      rememberInstallChoice(String(Date.now() + INSTALL_TAPPED_SNOOZE_MS));
       card.remove();
     });
 
@@ -9771,9 +9906,10 @@
     later.className = 'secondary install-card-btn';
     later.textContent = 'Not now';
     later.addEventListener('click', () => {
-      logAnalytics('install_prompt_dismissed', {});
+      logAnalytics('install_prompt_dismissed', { where: 'gameover' });
       // Snooze rather than suppress forever: someone on their third game is a
-      // better prospect than the same person on their first.
+      // better prospect than the same person on their first. A day, not
+      // three (Nov 2026): three days was most of a regular's week.
       rememberInstallChoice(String(Date.now() + INSTALL_SNOOZE_MS));
       card.remove();
     });
@@ -9788,7 +9924,9 @@
 
   function maybeShowInstallCard(container) {
     if (!container || !installPromptAllowed()) return;
-    logAnalytics('install_prompt_shown', {});
+    // Every game over counts here (not once per page load like the bars):
+    // each one is a fresh moment to ask.
+    logAnalytics('install_prompt_shown', { where: 'gameover' });
     container.appendChild(buildInstallCard());
   }
 
