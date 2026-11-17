@@ -197,17 +197,20 @@
       // A reading under 30 means this phone reports the screen without its
       // bars; then assume the tallest navigation bar (48) rather than none.
       //
-      // ONLY THE 3-BUTTON BAR GETS THE LIFT (Nov 2026). Both screenshots of
-      // the floating banner came from 3-button phones. With gesture
-      // navigation the banner sits right at the bottom of the app, so the
-      // allowance there was just empty space above the ad -- taken from the
-      // table, which is the one thing on the game screen that gives way.
-      // Mani's phone: 68px of bars, ~50px of gap above the ad, a visibly
-      // smaller table. A status bar is at least 24px and the 3-button bar is
-      // 48, so a 3-button phone reads 72 or more; gesture phones (a thin
-      // 16-31px bar) read less.
-      const next = bars < 30 ? 48
-        : (bars < 71 ? 0 : Math.max(0, Math.min(60, Math.round(bars - 24 + 6))));
+      // ROOM FOR THE LIFT ON EVERY PHONE, until the next app build (Nov 2026).
+      // For two days only phones reading 71+ got it, on the theory that only
+      // the 3-button bar lifts the banner and only 3-button phones read that
+      // high: gesture phones (Mani's, a thin bar, no lift) got their table
+      // space back. Then a friend's 3-button Samsung, banner lifted ~50px as
+      // before, read UNDER 71 -- and the ad sat on Discard / Least Count!
+      // again. From inside the page the two kinds of phone can't be told
+      // apart, and the two mistakes are not equal: an empty strip above the
+      // ad costs a little table; an ad over the buttons stops the game and
+      // invites accidental ad taps, which AdMob penalises. So every phone
+      // keeps room for the lift (the 48px bar plus a margin).
+      // The real fix is native: the next build updates the AdMob plugin,
+      // which stops the double lift -- and then this allowance goes.
+      const next = bars < 30 ? 56 : Math.max(56, Math.min(60, Math.round(bars - 24 + 6)));
       if (next !== navAllowance) {
         navAllowance = next;
         console.log('[AdMob] navigation allowance', next, '(screen', full, 'webview', h + ')');
