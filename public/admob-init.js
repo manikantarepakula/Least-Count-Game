@@ -184,6 +184,19 @@
     return true;
   }
 
+  // Which Android this is, from the WebView's description of itself
+  // ("... Android 14; SM-A146B Build/...; wv ..."). null when it isn't there,
+  // or when the browser hides it -- the reduced form reads "Android 10; K"
+  // on every phone.
+  function androidVersion() {
+    const ua = (window.navigator && window.navigator.userAgent) || '';
+    const m = ua.match(/Android (\d+)[^;]*;\s*([^;)]*)/);
+    if (!m) return null;
+    if (m[1] === '10' && m[2].trim() === 'K') return null;
+    const v = Number(m[1]);
+    return Number.isFinite(v) ? v : null;
+  }
+
   function measureNavAllowance() {
     if (typingNow()) return;
     try {
@@ -210,7 +223,27 @@
       // keeps room for the lift (the 48px bar plus a margin).
       // The real fix is native: the next build updates the AdMob plugin,
       // which stops the double lift -- and then this allowance goes.
-      const next = bars < 30 ? 56 : Math.max(56, Math.min(60, Math.round(bars - 24 + 6)));
+      //
+      // ...and it has (app 1.2, Nov 2026). Read in the plugin's own source:
+      // on Android 15+ Capacitor already pads the banner's parent above the
+      // navigation bar, and AdMob 8.1.0 then added the bar's height again as
+      // a margin -- the lift. 8.4.1 uses only what is left after Capacitor's
+      // padding (nothing), so the banner sits right at the bottom of the page
+      // on every phone. Builds from 1.2 on are the ones carrying the App
+      // plugin (added in the same update), so: no allowance there.
+      const fixedBuild = !!(window.Capacitor && typeof window.Capacitor.isPluginAvailable === 'function'
+        && window.Capacitor.isPluginAvailable('App'));
+      // And on the OLD build, the same source says WHO gets lifted: AdMob
+      // 8.1.0 adds the margin only under SDK_INT >= VANILLA_ICE_CREAM, i.e.
+      // Android 15 and newer (Capacitor pads only there too). Android 14 and
+      // older never lift -- Mani's phone: ad flush at the bottom -- so they
+      // get no room at all, and the empty strip above the ad goes. Android
+      // 15+ (the 3-button Samsung, ~50px lift) keeps the room. A phone whose
+      // version can't be read keeps it too: the safe side.
+      const ver = androidVersion();
+      const mayLift = !fixedBuild && (ver === null || ver >= 15);
+      const next = !mayLift ? 0
+        : (bars < 30 ? 56 : Math.max(56, Math.min(60, Math.round(bars - 24 + 6))));
       if (next !== navAllowance) {
         navAllowance = next;
         console.log('[AdMob] navigation allowance', next, '(screen', full, 'webview', h + ')');
