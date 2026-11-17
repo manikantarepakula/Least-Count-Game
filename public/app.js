@@ -5078,14 +5078,26 @@
   (function listenForDeepLinks() {
     const CapApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
     if (!CapApp || !CapApp.addListener) return;
-    CapApp.addListener('appUrlOpen', (event) => {
+    // The same link can arrive twice (the launch link is also replayed as an
+    // event): the second within a few seconds is ignored.
+    let lastHref = null;
+    let lastAt = 0;
+    function openInviteFromLink(href, how) {
       try {
-        const url = new URL(event.url);
+        if (!href) return;
+        if (href === lastHref && Date.now() - lastAt < 15000) return;
+        const url = new URL(href);
         const gcode = (url.searchParams.get('g') || '').trim().toUpperCase();
         const room = (url.searchParams.get('room') || '').trim().toUpperCase();
         if (!gcode && !room) return;
+        lastHref = href;
+        lastAt = Date.now();
         // Already sitting in that exact table? Don't yank them out of it.
         if (myRoomCode && (myRoomCode === gcode || myRoomCode === room)) return;
+        inviteArrival = gcode ? 'group' : 'room';
+        let isNew = true;
+        try { isNew = !hasPlayedBefore(); } catch (e) { /* unknown -> count as new */ }
+        logAnalytics('invite_link_opened', { kind: inviteArrival, is_new_player: isNew, in_app: true, how });
         if (gcode) {
           enterInviteMode(gcode, 'You’ve been invited to play');
           socket.emit('get_group', { code: gcode }, (res) => {
@@ -5099,9 +5111,27 @@
         }
         showScreen('screen-landing');
       } catch (e) {
-        console.warn('[DeepLink] could not handle', event && event.url, e && e.message);
+        console.warn('[DeepLink] could not handle', href, e && e.message);
       }
-    });
+    }
+    // The app already open: the link arrives as an event.
+    CapApp.addListener('appUrlOpen', (event) => openInviteFromLink(event && event.url, 'open'));
+    // The app was CLOSED and the link opened it (Nov 2026, app 1.2). The site
+    // loads as usual and the link only reaches the page through
+    // getLaunchUrl() -- without this, an invite tapped in WhatsApp opened the
+    // app on Home and the invite was lost. Once per launch link: reloading
+    // the page reports the same link again, and the card must not come back.
+    if (typeof CapApp.getLaunchUrl === 'function') {
+      CapApp.getLaunchUrl().then((res) => {
+        const href = res && res.url;
+        if (!href) return;
+        let seen = null;
+        try { seen = sessionStorage.getItem('leastcount_launch_link'); } catch (e) { /* private mode */ }
+        if (seen === href) return;
+        try { sessionStorage.setItem('leastcount_launch_link', href); } catch (e) { /* private mode */ }
+        openInviteFromLink(href, 'launch');
+      }).catch(() => { /* no launch link */ });
+    }
   })();
 
   document.getElementById('btn-invite-join').onclick = () => {
@@ -5354,6 +5384,24 @@
     }
   };
 
+  // The phone's own share sheet, in the app (Nov 2026, app 1.2+, the Share
+  // plugin). navigator.share doesn't exist in Android's WebView, so until
+  // now the app's Share buttons could only copy the link. true = the sheet
+  // was shown (or the player closed it); false = not here, fall back.
+  async function appShareSheet(text, url) {
+    const cap = window.Capacitor;
+    if (!cap || typeof cap.isPluginAvailable !== 'function' || !cap.isPluginAvailable('Share')) return false;
+    const Share = cap.Plugins && cap.Plugins.Share;
+    if (!Share || typeof Share.share !== 'function') return false;
+    try {
+      await Share.share({ title: 'Least Count', text, url, dialogTitle: 'Invite to Least Count' });
+      return true;
+    } catch (e) {
+      // Closing the sheet without picking an app rejects -- that's fine.
+      return /cancel/i.test((e && e.message) || '');
+    }
+  }
+
   document.getElementById('btn-game-invite-share').onclick = async () => {
     // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
     // stays comparable); every other route lands here, tagged by method.
@@ -5361,6 +5409,7 @@
     if (!myRoomCode) return;
     const link = roomInviteLink();
     const shareText = inviteShareText();
+    if (await appShareSheet(shareText.split('\n')[0], link)) return;
     if (navigator.share) {
       try {
         await navigator.share({ title: 'Least Count', text: shareText.split('\n')[0], url: link });
@@ -5396,6 +5445,7 @@
     if (!myRoomCode) return;
     const link = roomInviteLink();
     const shareText = inviteShareText();
+    if (await appShareSheet(shareText.split('\n')[0], link)) return;
     if (navigator.share) {
       try {
         await navigator.share({ title: 'Least Count', text: shareText.split('\n')[0], url: link });
