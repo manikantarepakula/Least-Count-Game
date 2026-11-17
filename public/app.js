@@ -2893,11 +2893,46 @@
   //     session (matches the "Setting up decks.../Shuffling.../Dealing
   //     cards..." flicker from the previous report).
   // --------------------------------------------------------------------
+  // --------------------------------------------------------------------
+  // ...BUT "ONLY EVER GROWS" WAS TOO STRONG (Nov 2026). It latched onto any
+  // moment the view was briefly TALLER than the phone really is -- coming
+  // back from WhatsApp after sending an invite, or the moment around a
+  // full-screen ad -- and kept the game that many pixels taller for the rest
+  // of the session. The extra height went to the table and pushed Discard
+  // and Least Count! down under the ad. Friends games were where people
+  // hopped out to WhatsApp, so friends games were where it showed; bot games
+  // looked fine (Mani, both screenshots: the table ~70px taller -- the
+  // phone's two bars -- and the buttons gone).
+  //
+  // So: while a text box has focus (the keyboard's doing) it still only
+  // grows, exactly as before. Otherwise the view's own height IS the screen:
+  // taller is taken at once (a keyboard closing), shorter after it has held
+  // for a moment (a bar coming back), so nothing jumps mid-animation.
+  // --------------------------------------------------------------------
   let maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  let viewportShrinkTimer = null;
+  function textBoxFocused() {
+    const a = document.activeElement;
+    if (!a) return false;
+    if (a.tagName === 'TEXTAREA' || a.isContentEditable) return true;
+    return a.tagName === 'INPUT' && /^(text|search|email|tel|url|number|password)?$/i.test(a.type || '');
+  }
   function applyKeyboardSafeLayout() {
     if (!window.visualViewport || !document.body.classList.contains('game-active')) return;
     const vv = window.visualViewport;
-    maxViewportHeight = Math.max(maxViewportHeight, vv.height);
+    if (vv.height >= maxViewportHeight || textBoxFocused()) {
+      clearTimeout(viewportShrinkTimer);
+      viewportShrinkTimer = null;
+      maxViewportHeight = Math.max(maxViewportHeight, vv.height);
+    } else if (!viewportShrinkTimer) {
+      viewportShrinkTimer = setTimeout(() => {
+        viewportShrinkTimer = null;
+        const now = window.visualViewport;
+        if (!now || textBoxFocused() || now.height >= maxViewportHeight) return;
+        maxViewportHeight = now.height;
+        applyKeyboardSafeLayout();
+      }, 400);
+    }
 
     document.body.style.height = maxViewportHeight + 'px';
     const screenGameEl = document.getElementById('screen-game');
