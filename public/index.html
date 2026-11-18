@@ -34,6 +34,95 @@
   })();
 </script>
 
+<!-- THE NAVIGATION BAR, READ FROM ANDROID (Nov 2026) -- for the ad's space.
+     In the Android app 1.1 on Android 15+, the ad plugin lifts the bottom
+     banner by exactly the phone's navigation-bar height: 0 when the gesture
+     bar is hidden, about 24 with the gesture line, 48 with the 3 buttons
+     (read in the plugin's own source, AdMob 8.1.0 BannerExecutor). The page
+     can't see that bar, so it kept 56px for everyone: the empty strip above
+     the ad on gesture phones. Capacitor (the app's shell, 8.5.0 SystemBars)
+     does report the bar, as --safe-area-inset-bottom, but only while the
+     page asks for the full screen (viewport-fit=cover) on WebView 140+.
+     So, once: ask, read the bar, put the page back as it was. The reading is
+     kept on the phone and reused while the screen stays the same; then
+     admob-init.js keeps exactly that much room. Nothing here runs on the
+     website, in a newer app, or on Android 14 and older. -->
+<script>
+  (function () {
+    var w = window, d = document;
+    try {
+      var sb = w.CapacitorSystemBarsAndroidInterface;
+      if (!sb || typeof sb.onDOMReady !== 'function') return;
+      if (w.Capacitor && typeof w.Capacitor.isPluginAvailable === 'function'
+          && w.Capacitor.isPluginAvailable('App')) return;
+      var ua = (w.navigator && w.navigator.userAgent) || '';
+      var cv = ua.match(/Chrome\/(\d+)/);
+      if (!cv || Number(cv[1]) < 140) return;
+      var av = ua.match(/Android (\d+)[^;]*;\s*([^;)]*)/);
+      if (av && !(av[1] === '10' && av[2].replace(/\s+/g, '') === 'K') && Number(av[1]) < 15) return;
+      var KEY = 'lc_navbar_v1';
+      var sc = w.screen || {};
+      var sw = sc.width || 0, sh = sc.height || 0;
+      var h0 = w.innerHeight || 0;
+      var saved = null;
+      try { saved = JSON.parse(w.localStorage.getItem(KEY) || 'null'); } catch (e) { saved = null; }
+      if (saved && typeof saved.n === 'number' && saved.sw === sw && saved.sh === sh
+          && h0 > 0 && Math.abs((saved.h || 0) - h0) <= 2) {
+        saved.from = 'saved';
+        w.__lcNavBar = saved;
+        return;
+      }
+      var metas = d.querySelectorAll('meta[name=viewport]');
+      var meta = metas[metas.length - 1];
+      if (!meta) return;
+      var original = meta.getAttribute('content') || '';
+      if (original.indexOf('viewport-fit=cover') !== -1) return;
+      var root = d.documentElement;
+      var px = function (name) { return parseFloat(root.style.getPropertyValue(name)) || 0; };
+      var ask = function (cover) {
+        meta.setAttribute('content', cover ? original + ', viewport-fit=cover' : original);
+        try { sb.onDOMReady(); } catch (e) { /* stays as it is */ }
+      };
+      var emit = function (r) {
+        w.__lcNavBar = r;
+        try { w.dispatchEvent(new Event('lc-navbar')); } catch (e) { /* read on the next resize */ }
+      };
+      w.__lcNavBar = { pending: true };
+      var t0 = Date.now(), got = null, back = false, lastH = -1, still = 0;
+      ask(true);
+      var timer = setInterval(function () {
+        var t = Date.now() - t0;
+        if (!back) {
+          // Capacitor answers with the real bars (top = status bar, always
+          // more than 0); until then it reports zeros.
+          var top = px('--safe-area-inset-top');
+          if (top > 0) got = { n: Math.round(px('--safe-area-inset-bottom')), s: Math.round(top) };
+          if (got || t > 1500) { back = true; ask(false); }
+          return;
+        }
+        // Put back: Capacitor reports zeros again (its usual mode) and the
+        // page is its old height again, held for a moment.
+        var h = w.innerHeight || 0;
+        if (h !== lastH) { lastH = h; still = Date.now(); }
+        var normal = px('--safe-area-inset-top') === 0;
+        var home = Math.abs(h - h0) <= 2;
+        if (!(normal && home && Date.now() - still >= 150) && t < 4000) return;
+        clearInterval(timer);
+        if (!normal) ask(false);
+        if (got && normal && got.n >= 0 && got.n <= 100) {
+          got.h = h; got.sw = sw; got.sh = sh; got.from = 'read';
+          if (home) {
+            try { w.localStorage.setItem(KEY, JSON.stringify(got)); } catch (e) { /* read again next time */ }
+          }
+          emit(got);
+        } else {
+          emit({ failed: got ? 'not back' : 'no reading' });
+        }
+      }, 30);
+    } catch (e) { /* the page keeps its usual space */ }
+  })();
+</script>
+
 <!-- ------------------------------------------------------------------
      Link preview (Open Graph) -- added Sept 2026.
 
@@ -1536,7 +1625,7 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script type="module" src="firebase-init.js"></script>
-<script src="admob-init.js?v=android14-2026-11-18" defer></script>
+<script src="admob-init.js?v=adfix-2026-11-18" defer></script>
 <script type="module" src="revenuecat-init.js"></script>
 <script src="app.js?v=app12-2026-11-18" defer></script>
 <!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
