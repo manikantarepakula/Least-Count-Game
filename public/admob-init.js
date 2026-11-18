@@ -153,6 +153,7 @@
   // --------------------------------------------------------------------
   let baseSafe = 0;        // the banner's own height (0 = no banner)
   let navAllowance = 0;    // the extra lift, see above
+  let lastNavInfo = null;  // what the last measurement saw (for the check box below)
 
   function refreshSafeBottom() {
     const v = baseSafe > 0 ? baseSafe + navAllowance : 0;
@@ -195,6 +196,20 @@
     if (m[1] === '10' && m[2].trim() === 'K') return null;
     const v = Number(m[1]);
     return Number.isFinite(v) ? v : null;
+  }
+
+  // The navigation bar's height as read from Android by the script at the
+  // top of index.html (window.__lcNavBar), as long as it still describes this
+  // screen: same screen size (not turned or unfolded) and the same page
+  // height (a 3-button bar switched on since would have shrunk the page).
+  // The +1 covers Capacitor rounding the bar down to whole pixels.
+  function navBarReading(h) {
+    const r = window.__lcNavBar;
+    if (!r || typeof r.n !== 'number' || !(r.n >= 0 && r.n <= 100)) return null;
+    const s = window.screen || {};
+    if ((s.width || 0) !== r.sw || (s.height || 0) !== r.sh) return null;
+    if (!(Math.abs(h - r.h) <= 3)) return null;
+    return r.n > 0 ? r.n + 1 : 0;
   }
 
   function measureNavAllowance() {
@@ -242,16 +257,74 @@
       // version can't be read keeps it too: the safe side.
       const ver = androidVersion();
       const mayLift = !fixedBuild && (ver === null || ver >= 15);
+      // HOW MUCH it lifts is no longer a guess (Nov 2026). The same source:
+      // the lift is the navigation bar's own height, and the script at the
+      // top of index.html reads that height from Android. Android 17, Mani's
+      // phone (bar hidden): 0, so no strip. A 3-button phone: its 48, so the
+      // ad sits just above Discard / Least Count!. With no reading for the
+      // screen as it is now (WebView older than 140, screen turned, bar
+      // changed since), the safe guess below stays.
+      const read = mayLift ? navBarReading(h) : null;
       const next = !mayLift ? 0
+        : read !== null ? read
         : (bars < 30 ? 56 : Math.max(56, Math.min(60, Math.round(bars - 24 + 6))));
+      lastNavInfo = { ver, fixedBuild, mayLift, read, full, h, next };
       if (next !== navAllowance) {
         navAllowance = next;
-        console.log('[AdMob] navigation allowance', next, '(screen', full, 'webview', h + ')');
+        console.log('[AdMob] navigation allowance', next, read !== null ? '(read from Android)' : '(safe guess)',
+          '(screen', full, 'webview', h + ')');
         refreshSafeBottom();
       }
     } catch (e) { /* keep the last value */ }
   }
   measureNavAllowance();
+  // The reading usually lands a moment after this file runs.
+  window.addEventListener('lc-navbar', () => measureNavAllowance());
+
+  // ---- A check for the bottom space (Nov 2026) ----------------------------
+  // Five quick taps on the empty space kept above the ad show what the page
+  // knows about it. If the strip is ever back, a screenshot of this box says
+  // why at once. The ad itself covers the rest of that space, so with no
+  // strip there is nothing to tap.
+  let checkTaps = [];
+  function showAdSpaceCheck() {
+    const old = document.getElementById('ad-space-check');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    const r = window.__lcNavBar || null;
+    const ua = (window.navigator && window.navigator.userAgent) || '';
+    const cv = (ua.match(/Chrome\/(\d+)/) || [])[1] || '?';
+    const i = lastNavInfo || {};
+    const s = window.screen || {};
+    const bar = !r ? 'not read'
+      : typeof r.n === 'number' ? r.n + 'px (' + r.from + ', status bar ' + r.s + ', page ' + r.h + ')'
+      : r.pending ? 'reading...' : 'not read: ' + (r.failed || '?');
+    const lines = [
+      'Ad space check',
+      'Android ' + (i.ver == null ? '?' : i.ver) + ' | WebView ' + cv + ' | ' + (i.fixedBuild ? 'new app' : 'app 1.1'),
+      'Navigation bar: ' + bar,
+      'Screen ' + (s.width || 0) + 'x' + (s.height || 0) + ' | page ' + window.innerHeight,
+      'Kept free: ad ' + baseSafe + ' + lift ' + navAllowance + (i.read != null ? ' (read)' : i.mayLift ? ' (guess)' : ''),
+    ];
+    const box = document.createElement('div');
+    box.id = 'ad-space-check';
+    box.style.cssText = 'position:fixed;left:8px;right:8px;top:8px;z-index:2147483647;'
+      + 'background:rgba(0,0,0,.88);color:#fff;font:12px/1.5 monospace;padding:10px 12px;'
+      + 'border-radius:8px;white-space:pre-wrap;';
+    box.textContent = lines.join('\n');
+    box.addEventListener('click', () => { if (box.parentNode) box.parentNode.removeChild(box); });
+    document.body.appendChild(box);
+    setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, 15000);
+  }
+  document.addEventListener('click', (e) => {
+    try {
+      const reserve = baseSafe > 0 ? baseSafe + navAllowance : 0;
+      if (!(reserve > 0) || !e || !(e.clientY >= window.innerHeight - reserve - 2)) { checkTaps = []; return; }
+      const now = Date.now();
+      checkTaps = checkTaps.filter((t) => now - t < 2500);
+      checkTaps.push(now);
+      if (checkTaps.length >= 5) { checkTaps = []; showAdSpaceCheck(); }
+    } catch (err) { /* never in the way */ }
+  }, true);
   let navMeasureTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(navMeasureTimer);
@@ -280,7 +353,11 @@
     // never the banner itself.
     try {
       const result = AdMob.addListener('bannerAdSizeChanged', (size) => {
-        if (appliedKind === BANNER_BOTTOM && size && typeof size.height === 'number' && size.height > 0) {
+        const h = size && typeof size.height === 'number' ? size.height : 0;
+        // Also how a resume / removal is confirmed (see putUp below).
+        onSizeEvent(h);
+        if (h > 0 && nativeKind === BANNER_BOTTOM) bottomHeight = h;
+        if (appliedKind === BANNER_BOTTOM && effectiveKind() === BANNER_BOTTOM && h > 0) {
           // Logged so the real reported height is visible in a device log --
           // this is the one number that would settle whether the event fires
           // at all, and what units it reports in.
@@ -352,6 +429,16 @@
       console.warn('[AdMob]   code 3 = NO_FILL (AdMob had no ad -- account/app' +
         ' still pending review, or unit too new). code 1 = INVALID_REQUEST' +
         ' (our ad unit / app ID is wrong). code 2 = NETWORK_ERROR.');
+      // The plugin has already destroyed the banner (its own failure handler
+      // removes it -- also when a refresh of a showing banner fails). Before,
+      // our record still said "banner up": its space stayed reserved over
+      // nothing, and the banner never came back that session. Now: free the
+      // space at once, and ask AdMob again in a minute.
+      nativeView = 'none';
+      bannerRetryAt = Date.now() + 60 * 1000;
+      if (appliedKind === BANNER_BOTTOM) setSafeBottom(0);
+      invalidateBannerState(null);
+      scheduleApply();
     });
     addDiagListener('bannerAdOpened', () => console.log('[AdMob] banner opened'));
     addDiagListener('bannerAdClosed', () => console.log('[AdMob] banner closed'));
@@ -484,11 +571,102 @@
   function invalidateBannerState(why) {
     appliedKind = null;
     appliedMargin = null;
+    if (nativeView === 'shown' || nativeView === 'hidden') nativeView = 'unknown';
     if (why) console.log('[AdMob] banner state invalidated:', why);
+  }
+
+  // ------------------------------------------------------------------------
+  // WHAT THE PLUGIN REALLY DOES (AdMob 8.1.0, read in its own BannerExecutor,
+  // Nov 2026). This is "open any box and close it, the ads go away", and the
+  // ad sitting on the Friends sheet's join box:
+  //   showBanner    creates the banner ONLY if there is none. If one exists
+  //                 -- even a hidden one -- it loads a new ad into it, leaves
+  //                 it hidden, and NEVER ANSWERS. This loop used to wait for
+  //                 that answer, forever: after the first hide -> show (typing
+  //                 in any box, or the banner re-asserted after a full-screen
+  //                 ad) nothing here ran again for the rest of the session.
+  //                 The ad stayed away, or stayed up while the page believed
+  //                 it was gone (no room kept, ad over the sheet). Closing the
+  //                 app was the only cure.
+  //   hideBanner    hides it, kept for later (fails if there is none)
+  //   resumeBanner  shows a hidden one again, answers at once, then reports
+  //                 the banner's size
+  //   removeBanner  destroys it; answers at once, the removal lands a moment
+  //                 later (reported as size 0)
+  //   a failed load (AdMob had no ad) destroys the banner by itself.
+  // So: create once, then hide / resume. Remove + create only to change the
+  // kind of banner. And every native call has a time limit, so this can never
+  // freeze again.
+  // ------------------------------------------------------------------------
+  // 'unknown' at page start: if the page is reloaded inside the app, the
+  // previous page's banner is still there natively, and "create" on top of
+  // it is the call that never answers. So the first show tries a resume.
+  let nativeView = 'unknown';     // 'none' | 'shown' | 'hidden' | 'unknown'
+  let nativeKind = BANNER_BOTTOM; // the kind of the banner that may exist
+  let bottomHeight = 0;       // last real height of the bottom banner
+  let bannerRetryAt = 0;      // after "no ad", don't ask again before this
+  let retryTimer = null;
+  let sizeWaiters = [];
+  function onSizeEvent(h) { sizeWaiters.slice().forEach((f) => f(h)); }
+  function waitForSize(test, ms) {
+    return new Promise((resolve) => {
+      let done = false;
+      const timer = setTimeout(() => finish(false), ms);
+      function fn(h) { if (test(h)) finish(true); }
+      function finish(v) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        sizeWaiters = sizeWaiters.filter((x) => x !== fn);
+        resolve(v);
+      }
+      sizeWaiters.push(fn);
+    });
+  }
+  function nativeCall(label, fn, ms) {
+    const limit = ms || 5000;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(label + ' did not answer within ' + limit + 'ms')), limit);
+      Promise.resolve().then(fn).then(
+        (v) => { clearTimeout(timer); resolve(v); },
+        (e) => { clearTimeout(timer); reject(e); }
+      );
+    });
+  }
+  function retryLater(ms) {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => { retryTimer = null; invalidateBannerState(null); scheduleApply(); }, ms);
+  }
+
+  // Puts the banner of this kind on screen, the way the plugin can do it.
+  async function putUp(kind, options) {
+    if (nativeKind === kind && nativeView !== 'none') {
+      // Ours, hidden (or not sure): show it again. If there turns out to be
+      // no banner after all, resume does nothing and no size comes back --
+      // then make a new one.
+      const seen = waitForSize((h) => h > 0, 400);
+      await nativeCall('resumeBanner', () => AdMob.resumeBanner());
+      if (await seen) { nativeView = 'shown'; return 'resumed'; }
+      nativeView = 'none';
+    }
+    if (nativeView !== 'none') {
+      // A banner of the other kind: remove it, and wait for the removal to
+      // land -- creating while one still exists is the call that never answers.
+      const gone = waitForSize((h) => h === 0, 1000);
+      await nativeCall('removeBanner', () => AdMob.removeBanner());
+      await gone;
+      nativeView = 'none';
+    }
+    nativeKind = kind;
+    nativeView = 'unknown';   // until the call answers
+    await nativeCall('showBanner', () => AdMob.showBanner(options));
+    nativeView = 'shown';
+    return 'created';
   }
 
   function scheduleApply() {
     if (applyRunning) return;   // the running loop re-checks desired at the end
+    let failed = false;
     applyRunning = (async () => {
       try {
         // Listener registration lives in ensureInit() now, NOT here. This
@@ -505,23 +683,28 @@
           const margin = desiredMargin;
           if (kind === appliedKind && margin === appliedMargin) break;
           try {
-            // ALWAYS tear the old banner down before putting a different one
-            // up. The plugin holds exactly ONE banner instance, and asking it
-            // to swap ad unit, size and position in place is a silent no-op:
-            // the new ad never appears, yet the call resolves so we believe
-            // it did. That is what broke both the round-result ad AND every
-            // banner after it -- we recorded the swap as applied, so the way
-            // back to the bottom banner was skipped as redundant too.
-            // The device log from the version that DID work shows exactly
-            // this pair: hideBanner immediately followed by showBanner.
-            if (appliedKind !== BANNER_NONE && appliedKind !== null) {
-              try { await AdMob.hideBanner(); } catch (e) { /* nothing up */ }
-            }
             if (kind === BANNER_NONE) {
-              await AdMob.hideBanner();
+              if (nativeView !== 'none' && nativeView !== 'hidden') {
+                try {
+                  await nativeCall('hideBanner', () => AdMob.hideBanner());
+                  nativeView = 'hidden';
+                } catch (e) {
+                  // "never shown": there is no banner (a failed load removed it).
+                  if (!/never shown/i.test(String(e && e.message))) throw e;
+                  nativeView = 'none';
+                }
+              }
               setSafeBottom(0);
+            } else if (kind === BANNER_BOTTOM && nativeView === 'none' && Date.now() < bannerRetryAt) {
+              // AdMob had no ad a moment ago: no banner and no empty space
+              // for now; ask again when the wait is over.
+              setSafeBottom(0);
+              retryLater(bannerRetryAt - Date.now());
             } else if (kind === BANNER_BOTTOM) {
-              await AdMob.showBanner({
+              // Room first: the banner is about to appear (a resume shows it
+              // within a frame), so the page makes space as it does.
+              setSafeBottom(Math.max(FALLBACK_BANNER_HEIGHT_PX, bottomHeight || 0));
+              const how = await putUp(BANNER_BOTTOM, {
                 adId: BANNER_AD_ID,
                 adSize: 'ADAPTIVE_BANNER',
                 position: 'BOTTOM_CENTER',
@@ -529,10 +712,10 @@
               });
               // Reaching here only means the native call returned, not that
               // an ad loaded -- watch for BANNER LOADED / FAILED TO LOAD.
-              console.log('[AdMob] bottom banner requested');
-              setSafeBottom(FALLBACK_BANNER_HEIGHT_PX);
+              console.log('[AdMob] bottom banner', how);
+              setSafeBottom(Math.max(FALLBACK_BANNER_HEIGHT_PX, bottomHeight || 0));
             } else {
-              await AdMob.showBanner({
+              await putUp(BANNER_RESULT, {
                 adId: RECT_AD_ID,
                 adSize: 'LARGE_BANNER',
                 position: 'TOP_CENTER',
@@ -547,16 +730,18 @@
             appliedMargin = margin;
           } catch (e) {
             console.warn('[AdMob] banner apply failed for "' + kind + '":', e && e.message);
-            // Leave applied as unknown so the next request retries rather
-            // than assuming this state stuck.
+            // Leave applied as unknown and try again shortly (not at once:
+            // a call that keeps failing must not spin).
             invalidateBannerState(null);
+            failed = true;
             break;
           }
         }
       } finally {
         applyRunning = null;
+        if (failed) retryLater(3000);
         // Intent may have changed during the final await -- run again if so.
-        if (effectiveKind() !== appliedKind || desiredMargin !== appliedMargin) scheduleApply();
+        else if (effectiveKind() !== appliedKind || desiredMargin !== appliedMargin) scheduleApply();
       }
     })();
   }
