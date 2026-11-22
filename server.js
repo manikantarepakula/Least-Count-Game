@@ -1427,9 +1427,11 @@ const queueIndex = new Map(); // socket.id -> playerCount (which bucket they're 
 // Cut from 20s (which was itself cut from 30s). Fast enough to keep a table
 // moving; still long enough to group and select cards on a phone.
 const TURN_SECONDS = 15;
-// Consecutive turns auto-played WHILE DISCONNECTED before a seat is put on
-// bot pace, and then emptied at the end of the round. Strikes deliberately
-// never accrue for a player who is present but slow -- see handleTurnTimeout.
+// Missed turns in a row (the clock ran out) before a bot takes the seat --
+// connected or not (Nov 2026, Mani's rule): the seat then plays at bot pace,
+// the player gets an "I'm back" button, and if they are still away when that
+// round ends they are out. Solo games against bots pause instead. See
+// handleTurnTimeout.
 const ABSENCE_STRIKES = 3;
 const CHAT_HISTORY_LIMIT = 100;
 const DEFAULT_ELIMINATION_SCORE = 200;
@@ -1595,6 +1597,7 @@ const RATE_LIMITS = {
   // Asking to rejoin holds up everyone else's next round, so it's kept
   // deliberately tight -- one rejoin is allowed per game anyway.
   request_rejoin: { max: 4, windowMs: 60000 },
+  im_back: { max: 10, windowMs: 10000 },
   get_my_stats: { max: 10, windowMs: 30000 },
   get_player_stats: { max: 20, windowMs: 30000 },
   // Changing the max score on the round result. A player trying a few values
@@ -2445,11 +2448,17 @@ function publicRoomInfo(room) {
     // Named rather than a bare boolean so the wait can say who it is waiting on.
     awaitingSeat: awaitingSeatInfo(room),
     awaitingRejoin: awaitingRejoinInfo(room),
+    // A solo game paused because its person missed three turns in a row:
+    // their screen shows "Continue" (see handleTurnTimeout).
+    idlePaused: !!room.idlePause,
     players: room.order.map((pid) => ({
       playerId: pid,
       name: room.players.get(pid).name,
       connected: room.players.get(pid).connected,
       isBot: !!room.players.get(pid).isBot,
+      // Missed three turns in a row: a bot is playing the seat until they tap
+      // "I'm back" (their screen) -- "bot playing" on the chair for everyone.
+      away: !!room.players.get(pid).botMode,
       // The one-liner that carries the character, since the name is generic.
       // Null for humans.
       trait: room.players.get(pid).trait || null,
@@ -3158,9 +3167,22 @@ function soloPlayerAway(room) {
   return people === 1 && away === 1;
 }
 
+// One person at the table, the rest bots. Their missed turns pause the game
+// rather than handing the seat to a bot: nobody is waiting on them.
+function soloHumanGame(room) {
+  if (!room || !room.game) return false;
+  let people = 0;
+  for (const pid of room.order) {
+    const p = room.players.get(pid);
+    if (p && !p.isBot) people += 1;
+  }
+  return people === 1;
+}
+
 // The person is back: pick up where the table stopped.
 function resumeSoloGame(room) {
   room.awayPaused = false;
+  room.idlePause = false;
   const g = room.game;
   if (!g || g.gameOver || room.phase === 'starting') return;   // the deal's own timers carry on
   if (!g.roundOver) {
@@ -3178,6 +3200,9 @@ function scheduleTurnTimer(room) {
   if (!room.game || room.game.roundOver || room.game.gameOver) return;
   // Nobody to play for: hold everything (see soloPlayerAway).
   if (soloPlayerAway(room)) { room.awayPaused = true; return; }
+  // ...and likewise while its one person, still connected, has missed three
+  // turns in a row: held until they tap "Continue" (see handleTurnTimeout).
+  if (room.idlePause) { room.awayPaused = true; return; }
   // Solo play: if it's a bot's turn, they act quickly on their own timer
   // instead of waiting out the full human turn countdown -- no deadline
   // shown to the human either, since there's nothing for them to react to.
@@ -3187,14 +3212,14 @@ function scheduleTurnTimer(room) {
     room.turnTimer = setTimeout(() => runBotTurn(room), botMoveMsFor(room, currentId));
     return;
   }
-  // A human seat that has been abandoned (ABSENCE_STRIKES auto-plays in a row
-  // with the socket gone) moves at bot pace for the rest of the round, so
-  // three people aren't made to sit through 15 empty seconds every lap
-  // waiting for someone who has clearly left. The deadline is still published
-  // rather than hidden the way a bot's is -- everyone else can then see the
-  // seat ticking fast, which is what makes it obvious somebody has dropped
-  // out rather than looking like the game has stalled.
-  if (currentPlayerRecord && currentPlayerRecord.botMode && !currentPlayerRecord.connected) {
+  // A human seat that missed ABSENCE_STRIKES turns in a row moves at bot pace
+  // until they tap "I'm back" (or the round ends and the seat is emptied), so
+  // the others aren't made to sit through 15 empty seconds every lap waiting
+  // for someone who isn't playing -- connected or not (Nov 2026: a phone
+  // left open on the table stays connected, and used to be waited for, at
+  // full time, for ever). The deadline is still published rather than hidden
+  // the way a bot's is, and the chair says "bot playing".
+  if (currentPlayerRecord && currentPlayerRecord.botMode) {
     room.turnDeadline = Date.now() + BOT_MOVE_MS;
     room.turnTimer = setTimeout(() => handleTurnTimeout(room), BOT_MOVE_MS);
     return;
@@ -3448,9 +3473,11 @@ function rearmAutoNextRound(room) {
 function applyAbsenceEliminations(room) {
   const game = room.game;
   if (!game || !game.roundOver || game.gameOver) return;
+  // Still on bot play when the round ends = never came back: out, connected
+  // or not (Nov 2026). Solo games never get here -- they pause instead.
   const gone = room.order.filter((pid) => {
     const p = room.players.get(pid);
-    return p && !p.isBot && !p.connected && p.botMode;
+    return p && !p.isBot && p.botMode;
   });
   for (const pid of gone) {
     try {
@@ -3628,6 +3655,11 @@ function clearAbsenceStrikes(room, playerId) {
   if (!p) return;
   p.awayStrikes = 0;
   p.botMode = false;
+  // A solo game held for its idle player carries on.
+  if (room.idlePause) {
+    room.idlePause = false;
+    if (room.awayPaused && !soloPlayerAway(room)) resumeSoloGame(room);
+  }
 }
 
 function handleTurnTimeout(room) {
@@ -3636,35 +3668,50 @@ function handleTurnTimeout(room) {
 
   const pid = game.currentPlayer();
   // ------------------------------------------------------------------
-  // Strikes accrue ONLY while the player is actually gone.
+  // Three missed turns in a row: a bot takes the seat (Nov 2026).
   //
-  // A present-but-slow player is auto-played exactly as before and keeps
-  // their seat indefinitely. That asymmetry is the whole point: being
-  // eliminated while sitting at the table watching it happen is far worse
-  // than a slow game, and at a 15-second clock a beginner with 13 cards will
-  // time out sometimes. The rule is aimed at people who walked away.
+  // This used to count only while the player's connection was gone, and
+  // reset on every miss while connected -- so a phone left open on the
+  // table, or an app sitting in the background with its connection still
+  // up, was auto-played at full 15-second pace for ever and never left the
+  // table. Mani's rule is about playing, not about the connection: miss
+  // three in a row and the seat goes to bot play (bot pace, "bot playing"
+  // on the chair, an "I'm back" button for the player); any real move or
+  // that button hands it straight back; still away when the round ends and
+  // they are out (applyAbsenceEliminations), with the usual way to ask back
+  // in. A slow beginner is safe: one move in time resets the count, and the
+  // button is on their screen the moment the bot takes over.
   //
-  // The consequence, accepted deliberately: somebody who reconnects and then
-  // does nothing can be auto-played for ever and never eliminated. This
-  // fixes "left the room", not "stopped paying attention".
+  // A solo game (one person, bots) pauses instead: nobody is waiting, and
+  // a bots-only table eliminating its only person for answering the phone
+  // is what the solo pause exists to prevent (see soloPlayerAway).
   // ------------------------------------------------------------------
   const timedOut = room.players.get(pid);
   if (timedOut && !timedOut.isBot) {
-    if (!timedOut.connected) {
-      timedOut.awayStrikes = (timedOut.awayStrikes || 0) + 1;
-      if (timedOut.awayStrikes >= ABSENCE_STRIKES) timedOut.botMode = true;
-    } else {
-      timedOut.awayStrikes = 0;
-      timedOut.botMode = false;
+    timedOut.awayStrikes = (timedOut.awayStrikes || 0) + 1;
+    if (timedOut.awayStrikes >= ABSENCE_STRIKES) {
+      if (soloHumanGame(room)) room.idlePause = true;   // held by scheduleTurnTimer
+      else timedOut.botMode = true;
     }
   }
   try {
     const cardIds = game.autoPickDiscard(pid);
-    game.playTurn(pid, cardIds);
-    revealDrawIfAny(room);
-    emitLogBasedReactions(room, room.code);
-    checkLowCardReaction(room, room.code, pid);
-    emitSeatReaction(room.code, 'timeout', pid);
+    if (cardIds.length === 0 && game.chainCount === 0) {
+      // An empty hand: their last cards went out matching the open card, so
+      // there is nothing to throw and the only move left is to call -- and a
+      // hand of 0 can always call. Without this the auto-play threw, the turn
+      // never moved on, and the table sat on this seat for good (now with
+      // the missed-turns rule, at bot pace).
+      game.declare(pid);
+      const newlyEliminated = (game.lastRoundResult && game.lastRoundResult.newlyEliminated) || [];
+      for (const id of newlyEliminated) emitSeatReaction(room.code, 'eliminated', id);
+    } else {
+      game.playTurn(pid, cardIds);
+      revealDrawIfAny(room);
+      emitLogBasedReactions(room, room.code);
+      checkLowCardReaction(room, room.code, pid);
+      emitSeatReaction(room.code, 'timeout', pid);
+    }
   } catch (e) {
     console.error(`Turn timeout auto-play failed for room ${room.code}:`, e.message);
   }
@@ -4740,7 +4787,9 @@ io.on('connection', (socket) => {
       ack && ack({ ok: true, roomCode: code, playerId, sessionToken: ensureSessionToken(p), chatHistory: room.chatHistory });
       broadcastRoom(room);
       // Their solo game was holding for them -- carry on (see soloPlayerAway).
-      if (room.awayPaused) resumeSoloGame(room);
+      // Not when it is held for missed turns: a reconnect is not a person
+      // tapping "Continue" (an app in the background reconnects by itself).
+      if (room.awayPaused && !room.idlePause) resumeSoloGame(room);
       if (!isFreshReconnect) return; // just a keepalive ping -- client already has everything
       // Don't leak hands/joker/open-card to a reconnecting client while the
       // countdown/deal/reveal sequence is still in progress for everyone
@@ -4912,6 +4961,34 @@ io.on('connection', (socket) => {
       if (room.game.roundOver || room.game.gameOver) clearTurnTimer(room);
       else scheduleTurnTimer(room);
       broadcastGameState(room);
+      ack && ack({ ok: true });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // "I'm back" (Nov 2026): the button a player sees once a bot has taken
+  // their seat for missing three turns in a row, or once their solo game has
+  // paused for the same reason. Hands the seat straight back.
+  socket.on('im_back', (_payload, ack) => {
+    try {
+      if (isRateLimited(socket, 'im_back')) throw new Error('Too many actions too quickly. Please slow down.');
+      const entry = socketIndex.get(socket.id);
+      if (!entry) throw new Error('Not in a room.');
+      const room = rooms.get(entry.roomCode);
+      if (!room) throw new Error('Room not found.');
+      const p = room.players.get(entry.playerId);
+      if (!p || p.isBot) throw new Error('Not a player seat.');
+      const wasOnBot = !!p.botMode;
+      clearAbsenceStrikes(room, entry.playerId);   // also lifts a solo pause
+      // Their own turn, ticking at bot pace: a full clock again.
+      const g = room.game;
+      if (wasOnBot && g && !g.roundOver && !g.gameOver && room.phase !== 'starting'
+          && g.currentPlayer() === entry.playerId) {
+        scheduleTurnTimer(room);
+      }
+      broadcastRoom(room);
+      if (room.game) broadcastGameState(room);
       ack && ack({ ok: true });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
