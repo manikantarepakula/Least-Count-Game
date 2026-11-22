@@ -248,7 +248,54 @@
   // is actually growing and where people drop off.
   function logAnalytics(name, params) {
     if (window.LCAnalytics) window.LCAnalytics.log(name, params);
+    try {
+      if (SERVER_EVENTS.has(name)) trackOnServer(params && params.via_invite ? { e: name, via: 'invite' } : { e: name });
+    } catch (e) { /* analytics only */ }
   }
+
+  // --------------------------------------------------------------------
+  // Our own analytics (Nov 2026). The few events the Admin reports need also
+  // go to our own server -- event names and counts only, never a name or
+  // anything typed (see game/analytics.js on the server). Google Analytics
+  // keeps getting everything it got before.
+  //
+  // Once per connection the app says hello: which account this is (proved by
+  // its sign-in token, never a bare id) and app or website -- that is the
+  // "opened the app today" count. Events wait until the hello has gone, so
+  // each one is counted for the right account.
+  // --------------------------------------------------------------------
+  const SERVER_EVENTS = new Set([
+    'invite_shared', 'invite_shared_whatsapp', 'invite_link_opened', 'room_joined', 'room_joined_midgame',
+    'tutorial_started', 'tutorial_completed', 'tutorial_skipped', 'tutorial_declined',
+    'install_prompt_shown', 'install_prompt_accepted',
+  ]);
+  let helloSent = false;
+  const pendingTrack = [];
+  function trackOnServer(ev) {
+    try {
+      if (!socket.connected || !helloSent) {
+        if (pendingTrack.length < 100) pendingTrack.push(ev);
+        return;
+      }
+      socket.emit('track', ev);
+    } catch (e) { /* analytics only */ }
+  }
+  async function helloServer() {
+    helloSent = false;
+    try {
+      const firebaseIdToken = await currentFirebaseIdToken();
+      if (!socket.connected) return;     // the next connect says hello again
+      socket.emit('track', { e: 'hello', firebaseIdToken, platform: CLIENT_PLATFORM });
+    } catch (e) { /* analytics only */ }
+    helloSent = true;
+    while (pendingTrack.length && socket.connected) socket.emit('track', pendingTrack.shift());
+  }
+  socket.on('connect', helloServer);
+  socket.on('disconnect', () => { helloSent = false; });
+  if (socket.connected) helloServer();
+  // admob-init.js reports each ad through this (it queues until this exists).
+  window.LCTrack = trackOnServer;
+  if (Array.isArray(window.__lcTrackQueue)) window.__lcTrackQueue.splice(0).forEach(trackOnServer);
 
   // ---------------- optional Google sign-in (non-blocking) ----------------
   // Small status line + button on the landing screen only. A guest can keep
@@ -6362,7 +6409,7 @@
       logAnalytics('tutorial_started');
       Tutorial.start();
     };
-    if (no) no.onclick = dismiss;
+    if (no) no.onclick = () => { logAnalytics('tutorial_declined'); dismiss(); };
 
     // The handoff after the last lesson. "Play bots" starts an ordinary
     // solo game -- nothing about it is special, which is the point: the
