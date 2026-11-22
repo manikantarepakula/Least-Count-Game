@@ -25,6 +25,9 @@
 'use strict';
 
 const UserAnalytics = require('./userAnalytics');
+// The AdMob report for the months before our own ad tracking (optional file).
+let ADMOB = null;
+try { ADMOB = require('./admobHistory'); } catch (e) { ADMOB = null; }
 
 // ============================== time (IST) =================================
 const IST_MS = 330 * 60 * 1000;
@@ -211,6 +214,7 @@ function buildModel(store, nowMs) {
       uid: r.uid, ms, day, month: day.slice(0, 7), done,
       app: r.platform === 'android-app', web: r.platform === 'web',
       multi: r.mode === 'multiplayer' || Number(r.humanCount) > 1,
+      won: r.won === true,
       name: typeof r.displayName === 'string' ? r.displayName : null,
       // One key per game that reached a winner: every player's row from
       // recordGameResult shares the room and the moment it ended.
@@ -672,7 +676,7 @@ h1{margin:2px 0 2px}.sub{margin-bottom:14px}
 .sec h2{font-size:15px;margin:0 0 2px}
 .q{color:#8fae9c;font-size:12px;margin-bottom:10px}
 .tag{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;white-space:nowrap}
-.tag.now{background:#1d5c3a;color:#a8f0c6}.tag.live{background:#5c4a1d;color:#f2d79a}
+.tag.now{background:#1d5c3a;color:#a8f0c6}.tag.live{background:#5c4a1d;color:#f2d79a}.tag.admob{background:#3a3f5c;color:#c3c8f0}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{padding:7px 8px;border-bottom:1px solid #205237;white-space:nowrap;text-align:right}
@@ -972,7 +976,8 @@ ${body}
 <div class="notes">${notes}</div>`);
 }
 function sec(title, q, tag, inner, insight) {
-  const t = tag === 'now' ? '<span class="tag now">your data now</span>' : '<span class="tag live">from go-live</span>';
+  const t = tag === 'now' ? '<span class="tag now">your data now</span>'
+    : tag === 'admob' ? '<span class="tag admob">from AdMob</span>' : '<span class="tag live">from go-live</span>';
   return `<div class="sec"><h2>${title}${t}</h2><div class="q">${q}</div>${inner}`
     + (insight ? `<div class="insight"><b>What this tells us:</b> ${insight}</div>` : '') + '</div>';
 }
@@ -1551,7 +1556,43 @@ function rGamesCompletion(M, L) {
   }).filter(Boolean);
   const fin30 = p30.length ? cnt(p30, (p) => FINISHED.has(p.result)) / p30.length : null;
   const e30 = g30.filter(toEnd);
-  const body = sec('Games each month', 'Games played to the end, and every player&rsquo;s own result: won, knocked out, out for missed turns, or walked out.', 'live',
+  // History from the game log (since it began in Sep 2026): every game that
+  // reached a winner, and every player's game -- finished, or left part-way.
+  const logM = M.logStartMs != null ? monthOf(M.logStartMs) : null;
+  const hcols = monthCols(M, logM);
+  const rowsBy = groupBy(M.rows, (r) => r.month);
+  const RW = (c) => c.months.flatMap((m) => rowsBy.get(m) || []);
+  const keysOf = (rs, f) => { const k = new Set(); for (const r of rs) if (r.key && (!f || f(r))) k.add(r.key); return k.size; };
+  const daysIn = (c) => sumOf(c.months, (m) => (m === M.curMonth
+    ? Math.max(1, Math.ceil((M.nowMs - monthStart(m)) / DAY_MS))
+    : Math.round((monthStart(shiftMonth(m, 1)) - monthStart(m)) / DAY_MS)));
+  const hist = mtable(hcols, [
+    ['Games to a winner', (c) => fmtInt(keysOf(RW(c))), 'total'],
+    ['&hellip; against bots only', (c) => fmtInt(keysOf(RW(c), (r) => !r.multi)), 'ind'],
+    ['&hellip; with other people', (c) => fmtInt(keysOf(RW(c), (r) => r.multi)), 'ind'],
+    ['Games a day', (c) => fmtNum(keysOf(RW(c)) / daysIn(c), 1)],
+    ['Won by a person', (c) => { const k = keysOf(RW(c)); return k ? pctSpan(keysOf(RW(c), (r) => r.won) / k) : null; }],
+    ['Players&rsquo; games', null, 'grp'],
+    ['Player games (one per player per game)', (c) => fmtInt(RW(c).length), 'total'],
+    ['Finished', (c) => fmtInt(cnt(RW(c), (r) => r.done)), 'ind'],
+    ['Left part-way', (c) => fmtInt(cnt(RW(c), (r) => !r.done)), 'ind'],
+    ['Finished %', (c) => (RW(c).length ? pctSpan(cnt(RW(c), (r) => r.done) / RW(c).length) : null)],
+  ]);
+  const closedM = hcols.filter((c) => !c.fy && !c.cur).map((c) => c.m);
+  const lastM = closedM[closedM.length - 1];
+  const prevMM = closedM[closedM.length - 2];
+  let histIns = null;
+  if (lastM && prevMM) {
+    const a = keysOf(rowsBy.get(prevMM) || []);
+    const b = keysOf(rowsBy.get(lastM) || []);
+    if (a) histIns = `Games to a winner went from ${fmtInt(a)} in ${monShort(prevMM)} to ${fmtInt(b)} in ${monShort(lastM)} (${b >= a ? '+' : '&minus;'}${Math.abs(Math.round(((b - a) / a) * 100))}%).`;
+  }
+  const MT = monthToDate(M);
+  const gCur = gamesToWinner(M, MT.w).v;
+  const gPrev = covered(M, 'act', MT.usual[0]) ? gamesToWinner(M, MT.usual[0]).v : null;
+  const body = sec('Games each month &ndash; from the game log', 'Every game that reached a winner since the log began, and every player&rsquo;s game: finished, or left part-way.', 'now',
+    M.rows.length ? hist : '<div class="empty">No games logged yet.</div>', histIns)
+    + sec('Game details each month', 'Games played to the end, and every player&rsquo;s own result: won, knocked out, out for missed turns, or walked out.', 'live',
     M.games.length ? mtable(cols, rows) : notYet(M),
     ok(fin30) && p30.length >= 20 ? `${fmtPct(fin30)} of players finish their game (won or knocked out); ${fmtPct(cnt(p30, (p) => p.result === 'walked-out') / p30.length)} walk out.` : null)
     + grid2(sec('When players walk out &ndash; last 30 days', 'After how many of their rounds players still in the game walked out (knocked-out players are not counted).', 'live', leave,
@@ -1563,7 +1604,7 @@ function rGamesCompletion(M, L) {
   return reportPage(M, L, {
     block: 'games', title: 'Games played &amp; completion', sub: 'How many games, how long, and where they break',
     cards: [
-      [fmtInt(e30.length), 'Games to the end', `last 30 days, of ${g30.length}`, ''],
+      [fmtInt(gCur), `Games to a winner ${monShort(M.curMonth)}`, gPrev != null ? `${monShort(MT.prevM)} same days: ${fmtInt(gPrev)}` : 'so far', gPrev != null && gCur > gPrev ? 'up' : ''],
       [fmtPct(fin30), 'Players who finished', 'won or knocked out', ''],
       [e30.length ? fmtNum(avgOf(e30.map((g) => g.secs / 60)), 0) + ' min' : DASH, 'Average game', e30.length ? fmtNum(avgOf(e30.map((g) => g.rounds)), 1) + ' rounds' : '', ''],
       [fmtPct(early), 'Walk out in rounds 1&ndash;2', 'of those who walk out', 'down'],
@@ -1572,7 +1613,9 @@ function rGamesCompletion(M, L) {
     notes: '<b>Rounds / minutes per game</b> = the whole game, from the deal to the end. <b>Rounds / minutes a player plays</b> = until that player won, '
       + 'was knocked out or walked out &ndash; shorter, because most players are out before the end. <b>Finished</b> (a player) = won, or knocked out on score: '
       + 'they played their game through. <b>Walked out</b> = left, or closed the app for good, while still in. <b>Played to the end</b> (a game) = reached a winner, '
-      + 'or every person in it was knocked out (only bots were left). <b>Ended early</b> = every person left first. All of this starts from go-live.',
+      + 'or every person in it was knocked out (only bots were left). <b>Ended early</b> = every person left first. '
+      + '<b>From the game log</b>: back to the start of the log; there, <b>Finished</b> = played to the end, and until this version a player '
+      + 'knocked out who then left was saved as &ldquo;left part-way&rdquo;. The details (rounds, results, walk-outs) start from go-live.',
   });
 }
 
@@ -1837,6 +1880,69 @@ function adsHelpers(M) {
   return { docsOf, docsIn, R, RT, A, appU, money };
 }
 
+// Month by month from the AdMob report (game/admobHistory.js): what AdMob
+// itself counted, back to the first ads -- before our own tracking began.
+function admobHistory(M) {
+  if (!ADMOB || !Array.isArray(ADMOB.rows) || !ADMOB.rows.length) return null;
+  const rows = ADMOB.rows.map(([date, u, e, req, mat, imp, clk]) => ({ date, month: String(date).slice(0, 7), u, e: Number(e) || 0, req, mat, imp, clk }));
+  const last = rows.reduce((a, r) => (r.date > a ? r.date : a), rows[0].date);
+  const first = rows.reduce((a, r) => (r.date < a ? r.date : a), rows[0].date);
+  const cols = monthCols(M, first.slice(0, 7)).filter((c) => c.months.some((m) => m <= last.slice(0, 7)));
+  for (const c of cols) if (c.cur || (!c.fy && c.m === last.slice(0, 7) && last < addDays(shiftMonth(c.m, 1) + '-01', -1))) c.so = 'to ' + dm(last);
+  const pick = (c, units) => rows.filter((r) => c.months.includes(r.month) && units.includes(r.u));
+  const S = (c, units, k) => sumOf(pick(c, units), (r) => r[k]);
+  const cur = ADMOB.currency || 'USD';
+  const money = (v) => fmtMoney(v * 1e6, cur);
+  const ALL = ['b', 'f', 'rr', 'rj'];
+  const RW = ['rr', 'rj'];
+  const ecpm = (units) => (c) => { const n = S(c, units, 'imp'); return n ? money((S(c, units, 'e') / n) * 1000) : null; };
+  const appPl = (c) => new Set(M.rows.filter((r) => r.app && c.months.includes(r.month) && r.day <= last).map((r) => r.uid)).size;
+  const table = mtable(cols, [
+    ['Revenue by ad type', null, 'grp'],
+    ['Bottom banner', (c) => money(S(c, ['b'], 'e'))],
+    ['Full-screen (leaving a room)', (c) => money(S(c, ['f'], 'e'))],
+    ['Rewarded: rejoin', (c) => money(S(c, ['rr'], 'e'))],
+    ['Rewarded: join a game', (c) => money(S(c, ['rj'], 'e'))],
+    ['Total revenue', (c) => money(S(c, ALL, 'e')), 'total'],
+    ['Earned per 1,000 shows (eCPM)', null, 'grp'],
+    ['Bottom banner', ecpm(['b'])],
+    ['Full-screen', ecpm(['f'])],
+    ['Rewarded', ecpm(RW)],
+    ['Ads shown', null, 'grp'],
+    ['Banner shows', (c) => fmtInt(S(c, ['b'], 'imp'))],
+    ['Full-screen shows', (c) => fmtInt(S(c, ['f'], 'imp'))],
+    ['Rewarded shows', (c) => fmtInt(S(c, RW, 'imp'))],
+    ['Ad health', null, 'grp'],
+    ['Banner: an ad was available (fill)', (c) => { const q = S(c, ['b'], 'req'); return q ? pctSpan(S(c, ['b'], 'mat') / q) : null; }],
+    ['Full-screen: loaded ads that were shown', (c) => { const q = S(c, ['f'], 'mat'); return q ? fmtPct(S(c, ['f'], 'imp') / q) : null; }],
+    ['Rewarded: loaded ads that were shown', (c) => { const q = S(c, RW, 'mat'); return q ? fmtPct(S(c, RW, 'imp') / q) : null; }],
+    ['Banner taps per 100 shows', (c) => { const n = S(c, ['b'], 'imp'); return n ? fmtNum((100 * S(c, ['b'], 'clk')) / n, 2) : null; }],
+    ['Per player', null, 'grp'],
+    ['Revenue per app player', (c) => { const n = appPl(c); return n ? money(S(c, ALL, 'e') / n) : null; }],
+  ]);
+  // What it says.
+  const closed = cols.filter((c) => !c.fy && !c.cur && !String(c.so || '').startsWith('to '));
+  const ins = [];
+  const fill = (c) => { const q = S(c, ['b'], 'req'); return q ? S(c, ['b'], 'mat') / q : null; };
+  const latest = cols.filter((c) => !c.fy).slice(-1)[0];
+  if (closed.length && latest && ok(fill(closed[0])) && ok(fill(latest)) && fill(closed[0]) - fill(latest) >= 0.05) {
+    ins.push(`Banner fill fell from ${fmtPct(fill(closed[0]))} (${monShort(closed[0].m)}) to ${fmtPct(fill(latest))} (${monShort(latest.m)}) &ndash; AdMob had no banner for more of the requests, which costs revenue directly.`);
+  }
+  const all = { months: [...new Set(rows.map((r) => r.month))] };
+  const bE = S(all, ['b'], 'imp') ? S(all, ['b'], 'e') / S(all, ['b'], 'imp') : null;
+  const fE = S(all, ['f'], 'imp') ? S(all, ['f'], 'e') / S(all, ['f'], 'imp') : null;
+  if (ok(bE) && ok(fE) && bE > 0) ins.push(`A full-screen show earns about ${Math.round(fE / bE)}&times; a banner show.`);
+  const fShow = S(all, ['f'], 'mat') ? S(all, ['f'], 'imp') / S(all, ['f'], 'mat') : null;
+  if (ok(fShow) && fShow < 0.8) ins.push(`${fmtPct(1 - fShow)} of the full-screen ads AdMob loaded were never shown (the player closed the app first, or no ad moment came).`);
+  const ctr = S(all, ['b'], 'imp') ? S(all, ['b'], 'clk') / S(all, ['b'], 'imp') : 0;
+  if (ctr >= 0.008) ins.push(`About ${fmtNum(ctr * 100, 1)} banner taps per 100 shows is high &ndash; some may be accidental; the new tap-timing check (Ads &amp; players) will show it.`);
+  return {
+    first, last, cur, money, total: (months) => sumOf(rows.filter((r) => months.includes(r.month)), (r) => r.e),
+    html: sec('From the AdMob report &ndash; month by month', `What AdMob itself counted, ${dm(first)} &ndash; ${dm(last)} (${esc(cur)}). Our own ad tracking starts at go-live; this fills the months before it.`, 'admob',
+      table, ins.join(' ') || null),
+  };
+}
+
 function rAdsRevenue(M, L) {
   const H = adsHelpers(M);
   const cols = monthCols(M, liveMonth(M));
@@ -1885,20 +1991,24 @@ function rAdsRevenue(M, L) {
   const curRev = revenue(M, P.w).v;
   const prevRev = M.liveStartMs != null && M.liveStartMs <= P.usual[0].from ? revenue(M, P.usual[0]).v : null;
   const g30 = gamesEnded(M, w30).length;
-  const body = sec('Ad revenue by month', 'What each type of ad earned, what it earns per 1,000 shows, and per player and game.', 'live', M.dayKeys.length ? rev : notYet(M), revIns)
+  const AH = admobHistory(M);
+  const body = (AH ? AH.html : '')
+    + sec('Ad revenue by month', 'What each type of ad earned, what it earns per 1,000 shows, and per player and game.', 'live', M.dayKeys.length ? rev : notYet(M), revIns)
     + grid2(sec('Revenue per day &ndash; last 30 days', 'What the ads earned each day.', 'live', M.dayKeys.length ? spark(vals, [dm(labels[0]), sym + ' per day', dm(labels[labels.length - 1])], true) : notYet(M)),
       sec('What moving a website player to the app is worth', 'The website shows no ads, so every website player who moves to the app adds revenue.', 'live', worth,
         ok(per) && web30 ? `Moving website players to the app is worth about ${H.money(per)} each a month.` : null));
   return reportPage(M, L, {
     block: 'ads', title: 'Ad revenue', sub: 'What the ads earn, by type, per player and per game &middot; in your AdMob currency',
     cards: [
-      [H.money(curRev), `Revenue ${monShort(M.curMonth)} (so far)`, prevRev != null ? `${monShort(P.prevM)} same days: ${H.money(prevRev)}` : '', prevRev != null && curRev > prevRev ? 'up' : ''],
+      [H.money(curRev), `Revenue ${monShort(M.curMonth)} (so far)`, prevRev != null ? `${monShort(P.prevM)} same days: ${H.money(prevRev)}`
+        : (AH && AH.total([P.prevM]) ? `AdMob ${monShort(P.prevM)}: ${AH.money(AH.total([P.prevM]))}` : ''), prevRev != null && curRev > prevRev ? 'up' : ''],
       [H.money(per), 'Per app user', 'last 30 days', ''],
       [ok(fE) ? H.money(fE * 1000) : DASH, 'Full-screen eCPM', 'per 1,000 shows', ''],
       [g30 && d30.length ? H.money(H.RT(d30) / g30) : DASH, 'Per game', 'last 30 days', ''],
     ],
     body,
-    notes: 'Revenue here is what each ad reports to the app as it is shown (AdMob&rsquo;s <b>impression-level ad revenue</b> &ndash; switch it on in '
+    notes: '<b>From AdMob</b> = the AdMob report (Ads Activity, by date and ad unit), downloaded and built into the reports; it is refreshed by downloading it again. '
+      + 'Revenue in the other sections is what each ad reports to the app as it is shown (AdMob&rsquo;s <b>impression-level ad revenue</b> &ndash; switch it on in '
       + 'AdMob &rsaquo; Settings). AdMob&rsquo;s own report stays the final figure; the two should be close. <b>App user</b> = opened the app in the period. '
       + 'Google&rsquo;s test ads are never counted. All from go-live.',
   });
