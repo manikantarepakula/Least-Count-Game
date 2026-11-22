@@ -9,6 +9,8 @@ const admin = require('firebase-admin');
 const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, cardValue, DECLARE_MAX_VALUE, deckCountForPlayers } = require('./game/gameLogic');
 const Rating = require('./game/rating');
 const UserAnalytics = require('./game/userAnalytics');
+const { createAnalytics } = require('./game/analytics');
+const Reports = require('./game/reports');
 
 const app = express();
 const server = http.createServer(app);
@@ -297,6 +299,10 @@ if (firebaseServiceAccountPath) {
 } else {
   console.warn('[Firebase] Service account file not found -- Firestore writes are disabled for now.');
 }
+
+// Our own game analytics (Nov 2026) -- numbers only; see game/analytics.js.
+// The Admin reports are built on these records.
+const Analytics = createAnalytics({ db: () => db, FieldValue: () => admin.firestore.FieldValue });
 
 // /api/firebase-test REMOVED Sept 2026 (security audit).
 //
@@ -761,6 +767,68 @@ app.get('/api/admin/user-analytics', async (req, res) => {
 });
 
 // --------------------------------------------------------------------------
+// Admin reports (Nov 2026): Home (4 blocks) -> Dashboard / Users / Games / Ads
+// -> the reports. Built in game/reports.js from the activity log, the users
+// docs, the sign-in accounts and the analytics records (game/analytics.js).
+// The data is kept in memory and topped up at most every 10 minutes (only
+// new rows are read); Refresh (?refresh=1) reads at once. Same access as the
+// pages above: the app's 30-minute link (?t=) or the admin key.
+//
+//   /api/admin                 home        /api/admin/dashboard
+//   /api/admin/users|games|ads block pages /api/admin/report/<id>
+// --------------------------------------------------------------------------
+const reportsStore = Reports.createStore();
+async function reportModel(req) {
+  const force = !!req.query.refresh;
+  // Today's counters live in memory for up to 5 minutes; write them first.
+  if (force || !reportsStore.model || Date.now() - reportsStore.at > 10 * 60 * 1000) {
+    await Analytics.flush().catch(() => {});
+  }
+  let auth = null;
+  try { auth = admin.auth(); } catch (e) { auth = null; }
+  await Reports.refreshStore(reportsStore, { db, auth, now: () => Date.now(), force });
+  return reportsStore.model;
+}
+function reportLinks(req, path) {
+  return {
+    home: adminLink(req, '/api/admin'),
+    dashboard: adminLink(req, '/api/admin/dashboard'),
+    users: adminLink(req, '/api/admin/users'),
+    games: adminLink(req, '/api/admin/games'),
+    ads: adminLink(req, '/api/admin/ads'),
+    report: (id) => adminLink(req, '/api/admin/report/' + id),
+    refresh: adminLink(req, path, 'refresh=1'),
+  };
+}
+async function sendAdminPage(req, res, render) {
+  if (!adminRequestOk(req, res)) return;
+  if (!db) return res.status(500).json({ ok: false, error: 'Firestore is not initialized on the server.' });
+  try {
+    const M = await reportModel(req);
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'no-store');
+    res.send(render(M));
+  } catch (e) {
+    console.error('[admin] report failed:', e && (e.stack || e.message));
+    res.status(500).json({ ok: false, error: 'Could not build the report.' });
+  }
+}
+// What the server sees right now, for the dashboard's live panel.
+function liveNow() {
+  return Object.assign(liveCounts(), Analytics.liveInfo());
+}
+app.get('/api/admin', (req, res) => sendAdminPage(req, res, (M) => Reports.renderHome(M, reportLinks(req, '/api/admin'))));
+app.get('/api/admin/dashboard', (req, res) => sendAdminPage(req, res,
+  (M) => Reports.renderDashboard(M, reportLinks(req, '/api/admin/dashboard'), liveNow())));
+app.get('/api/admin/:block(users|games|ads)', (req, res) => sendAdminPage(req, res,
+  (M) => Reports.renderBlock(M, reportLinks(req, '/api/admin/' + req.params.block), req.params.block)));
+app.get('/api/admin/report/:id', (req, res) => {
+  const id = String(req.params.id || '');
+  if (!Reports.hasReport(id)) return res.status(404).json({ ok: false, error: 'No such report.' });
+  return sendAdminPage(req, res, (M) => Reports.renderReport(M, reportLinks(req, '/api/admin/report/' + id), id));
+});
+
+// --------------------------------------------------------------------------
 // Tester-activity report -- built for the Google Play closed-testing review,
 // which requires 12+ testers opted in for 14 continuous days AND evidence
 // that they actually USED the app (Google checks real engagement, not just
@@ -1109,7 +1177,16 @@ ${quiet.length ? `<table>
 // Guarded per-uid per-room, and skipped entirely once the game is over, so a
 // player can never produce both a partial and a completed row for one game.
 // ---------------------------------------------------------------------------
-function recordPartialActivity(room, playerId) {
+// Out of this game on score -- not walked out, not removed for missed turns.
+function knockedOutOnScore(room, playerId) {
+  const g = room && room.game;
+  if (!g || !g.eliminated || !g.eliminated.has(playerId)) return false;
+  if (g.quit && g.quit.has(playerId)) return false;
+  const exit = (g.exits || []).find((x) => x.playerId === playerId);
+  return !!exit && exit.kind === 'score';
+}
+
+function recordPartialActivity(room, playerId, opts) {
   try {
     if (!db || !room || !room.game) return;
     if (room.game.gameOver || room.statsRecorded) return;  // the real recorder owns this game
@@ -1120,6 +1197,17 @@ function recordPartialActivity(room, playerId) {
     if (!room.partialRecorded) room.partialRecorded = new Set();
     if (room.partialRecorded.has(player.firebaseUid)) return;
     room.partialRecorded.add(player.firebaseUid);
+
+    // Knocked out on score and now leaving (Nov 2026): their game is over --
+    // they played their part of it to the end -- so it is recorded as finished,
+    // exactly as if they had stayed to watch the last rounds: a completed row
+    // and +1 games played. Only on leaving: a dropped connection may come back
+    // and watch, and is then recorded with everyone at the end.
+    const finished = !!(opts && opts.leaving) && knockedOutOnScore(room, playerId);
+    if (finished) {
+      if (!room.completedUids) room.completedUids = new Set();
+      room.completedUids.add(player.firebaseUid);
+    }
 
     const at = new Date().toISOString();
     const humanCount = room.game.playerIds.filter((id) => {
@@ -1132,7 +1220,9 @@ function recordPartialActivity(room, playerId) {
     // anything the player can see.
     Promise.all([
       db.collection('users').doc(player.firebaseUid)
-        .set({ displayName: player.name, lastPlayedAt: at }, { merge: true }),
+        .set(finished
+          ? { displayName: player.name, lastPlayedAt: at, gamesPlayed: admin.firestore.FieldValue.increment(1), wins: admin.firestore.FieldValue.increment(0) }
+          : { displayName: player.name, lastPlayedAt: at }, { merge: true }),
       db.collection('activity').add({
         uid: player.firebaseUid,
         displayName: player.name,
@@ -1140,7 +1230,7 @@ function recordPartialActivity(room, playerId) {
         day: istDayKey(Date.parse(at)),
         roomCode: room.code,
         won: false,
-        completed: false,
+        completed: finished,
         roundsPlayed: room.game.roundHistory.length,
         mode: humanCount > 1 ? 'multiplayer' : 'solo-vs-bots',
         humanCount,
@@ -1381,11 +1471,16 @@ async function recordGameResult(room, ratingOpts) {
   for (const pid of room.game.playerIds) {
     const player = room.players.get(pid);
     if (!player || player.isBot || !player.firebaseUid) continue;
+    // Recorded as finished when they left knocked out (recordPartialActivity)
+    // and came back to watch: not twice. If they were let back in and played
+    // on, the result is written but the game is not counted a second time.
+    const already = !!(room.completedUids && room.completedUids.has(player.firebaseUid));
+    if (already && pid !== winnerId && room.game.eliminated.has(pid)) continue;
     const ref = db.collection('users').doc(player.firebaseUid);
     const isWinner = pid === winnerId;
     writes.push(ref.set({
       displayName: player.name,
-      gamesPlayed: admin.firestore.FieldValue.increment(1),
+      gamesPlayed: admin.firestore.FieldValue.increment(already ? 0 : 1),
       wins: admin.firestore.FieldValue.increment(isWinner ? 1 : 0),
       lastPlayedAt: finishedAt,
     }, { merge: true }));
@@ -1698,6 +1793,7 @@ const RATE_LIMITS = {
   im_back: { max: 10, windowMs: 10000 },
   admin_check: { max: 10, windowMs: 60000 },
   admin_link: { max: 10, windowMs: 60000 },
+  track: { max: 120, windowMs: 60000 },
   get_my_stats: { max: 10, windowMs: 30000 },
   get_player_stats: { max: 20, windowMs: 30000 },
   // Changing the max score on the round result. A player trying a few values
@@ -1973,6 +2069,7 @@ async function openGroupRoom(code) {
     // Which tier new bots are drawn from. Host-settable in the lobby.
     botDifficulty: DEFAULT_BOT_DIFFICULTY,
     allHumansDisconnectedAt: null,
+    mode: 'group',
   };
   rooms.set(code, room);
   return room;
@@ -2912,6 +3009,7 @@ function seatAdmittedPlayer(room, playerId, req) {
   // would be the one person who could still leave and come back as
   // somebody new (see knownPlayerIdFor).
   rememberPlayerUid(room, req.firebaseUid, playerId);
+  Analytics.friendJoined(room);
   const sockEntry = socketIndex.get(req.socketId);
   if (sockEntry) sockEntry.pending = false;
   // Actual game-engine entry (addPlayer) happens in next_round, right
@@ -3009,6 +3107,7 @@ function seatRejoiner(room, playerId) {
     return false;
   }
   room.game.rejoinEliminated(playerId);
+  Analytics.rejoined(room, playerId);
   // They are back in on merit now; a later absence elimination should be
   // judged on its own, and so should a later rejoin.
   if (room.absenceEliminated) room.absenceEliminated.delete(playerId);
@@ -3205,6 +3304,9 @@ function startMatchedRoom(entries) {
   room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
   resetRatingState(room);
   room.game.startRound();
+  room.mode = 'online';
+  for (const e of entries) Analytics.searchEnded(e, 'matched');
+  Analytics.gameStarted(room);
   // Per-round counters for the bots' anti-stall overrides (see
   // botDeclareThreshold). Reset with the deal, or a patient bot would
   // inherit last round's turn count and give up being patient immediately.
@@ -3468,6 +3570,7 @@ function startNextRound(room, eliminationScore) {
       try {
         if (room.game.canRejoin(pid)) {
           room.game.rejoinEliminated(pid);
+          Analytics.rejoined(room, pid);
           if (room.absenceEliminated) room.absenceEliminated.delete(pid);
           if (room.rejoinAdNeeded) room.rejoinAdNeeded.delete(pid);
           const p = room.players.get(pid);
@@ -3486,7 +3589,11 @@ function startNextRound(room, eliminationScore) {
   // now -- this is the one moment "joins starting next round" actually
   // happens, right before the deal, at whatever the current max score is.
   for (const pid of room.order) {
-    if (!room.game.playerIds.includes(pid)) room.game.addPlayer(pid);
+    if (!room.game.playerIds.includes(pid)) {
+      room.game.addPlayer(pid);
+      const jp = room.players.get(pid);
+      Analytics.midGameJoin(room, pid, !!(jp && jp.joinedViaAd));
+    }
   }
 
   room.game.startRound();
@@ -3606,8 +3713,10 @@ function onRoundEnded(room) {
   // player is itself a way for the game to end, and eliminateAbsent() sets
   // gameOver when it leaves fewer than two people standing.
   applyAbsenceEliminations(room);
+  Analytics.roundEnded(room);
   if (room.game && room.game.gameOver) {
     room.phase = 'game_over';
+    Analytics.gameFinished(room);
     recordGameResult(room);
     clearAutoNextRoundTimer(room);
   } else {
@@ -3753,6 +3862,7 @@ function checkLowCardReaction(room, roomCode, playerId) {
 function clearAbsenceStrikes(room, playerId) {
   const p = room && room.players && room.players.get(playerId);
   if (!p) return;
+  if (p.botMode) Analytics.takeover(room, playerId, 'back');
   p.awayStrikes = 0;
   p.botMode = false;
   // A solo game held for its idle player carries on.
@@ -3790,8 +3900,13 @@ function handleTurnTimeout(room) {
   if (timedOut && !timedOut.isBot) {
     timedOut.awayStrikes = (timedOut.awayStrikes || 0) + 1;
     if (timedOut.awayStrikes >= ABSENCE_STRIKES) {
-      if (soloHumanGame(room)) room.idlePause = true;   // held by scheduleTurnTimer
-      else timedOut.botMode = true;
+      if (soloHumanGame(room)) {
+        if (!room.idlePause) Analytics.soloPaused(room);
+        room.idlePause = true;   // held by scheduleTurnTimer
+      } else {
+        if (!timedOut.botMode) Analytics.takeover(room, pid, 'start');
+        timedOut.botMode = true;
+      }
     }
   }
   try {
@@ -3858,6 +3973,8 @@ io.on('connection', (socket) => {
       room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
       room.order.push(playerId);
       rememberPlayerUid(room, verifiedUid, playerId);
+      room.mode = 'friends';
+      Analytics.roomCreated(room);
       rooms.set(code, room);
       socketIndex.set(socket.id, { roomCode: code, playerId });
       socket.join(code);
@@ -3927,6 +4044,8 @@ io.on('connection', (socket) => {
       room.game = new LeastCountGame(room.order.slice(), soloMaxScore);
       resetRatingState(room);
       room.game.startRound();
+      room.mode = 'bots';
+      Analytics.gameStarted(room);
       // Per-round counters for the bots' anti-stall overrides (see
       // botDeclareThreshold). Reset with the deal, or a patient bot would
       // inherit last round's turn count and give up being patient immediately.
@@ -3971,7 +4090,7 @@ io.on('connection', (socket) => {
         }
       }
       const playerId = makePlayerId();
-      matchQueues.get(n).push({ playerId, socketId: socket.id, name: cleanName, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
+      matchQueues.get(n).push({ playerId, socketId: socket.id, name: cleanName, firebaseUid: verifiedUid, platform: cleanPlatform(platform), queuedAt: Date.now(), size: n });
       queueIndex.set(socket.id, n);
       ack && ack({ ok: true, queued: true, playerId });
       tryMatchQueue(n);
@@ -3985,7 +4104,7 @@ io.on('connection', (socket) => {
     if (n !== undefined) {
       const bucket = matchQueues.get(n);
       const idx = bucket.findIndex((e) => e.socketId === socket.id);
-      if (idx !== -1) bucket.splice(idx, 1);
+      if (idx !== -1) { Analytics.searchEnded(bucket[idx], 'gave-up'); bucket.splice(idx, 1); }
       queueIndex.delete(socket.id);
     }
     ack && ack({ ok: true });
@@ -4032,6 +4151,9 @@ io.on('connection', (socket) => {
       room.game = new LeastCountGame(room.order.slice(), DEFAULT_ELIMINATION_SCORE);
       resetRatingState(room);
       room.game.startRound();
+      room.mode = 'online';
+      for (const e of entries) Analytics.searchEnded(e, 'bots');
+      Analytics.gameStarted(room);
       // Per-round counters for the bots' anti-stall overrides (see
       // botDeclareThreshold). Reset with the deal, or a patient bot would
       // inherit last round's turn count and give up being patient immediately.
@@ -4170,6 +4292,7 @@ io.on('connection', (socket) => {
         room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
         room.order.push(playerId);
         rememberPlayerUid(room, verifiedUid, playerId);
+        Analytics.friendJoined(room);
         // A freshly-spun-up group room has no host yet (createRoomForGroup
         // leaves it null, since nobody was in it). repairHost also rescues
         // the case where the recorded host is an offline ghost, which is how
@@ -4837,6 +4960,12 @@ io.on('connection', (socket) => {
       const seated = kind === 'rejoin'
         ? seatRejoiner(room, entry.playerId)
         : seatAdmittedPlayer(room, entry.playerId, grant.payload);
+      // For the reports: this seat was paid for with an ad (join or rejoin).
+      if (seated) {
+        const sp = room.players.get(entry.playerId);
+        if (sp && kind === 'join') sp.joinedViaAd = true;
+        if (kind === 'rejoin') Analytics.adSeat(room, entry.playerId);
+      }
 
       // The table has been held up waiting for this ad; let it move again.
       if (!rejoinRequestsPending(room) && !adGrantsPending(room)) rearmAutoNextRound(room);
@@ -4939,6 +5068,7 @@ io.on('connection', (socket) => {
       if (room.order.length >= 10) throw new Error('Table is full (max 10 players).');
 
       addBotToRoom(room);
+      Analytics.botAdded(room);
       broadcastRoom(room);
       ack && ack({ ok: true });
     } catch (e) {
@@ -5035,6 +5165,7 @@ io.on('connection', (socket) => {
       // Rating: fresh for every game.
       resetRatingState(room);
       room.game.startRound();
+      Analytics.gameStarted(room);
       // Per-round counters for the bots' anti-stall overrides (see
       // botDeclareThreshold). Reset with the deal, or a patient bot would
       // inherit last round's turn count and give up being patient immediately.
@@ -5304,7 +5435,8 @@ io.on('connection', (socket) => {
       // walking out of an unfinished game, leave a trace. Solo rooms are
       // deleted a few lines below, so this is the last moment the evidence
       // exists at all.
-      recordPartialActivity(room, playerId);
+      recordPartialActivity(room, playerId, { leaving: true });
+      Analytics.playerLeft(room, playerId);
 
       // Only ask the game engine to remove the player if the game is still
       // going - if it already ended (e.g. because the last leave dropped the
@@ -5353,6 +5485,7 @@ io.on('connection', (socket) => {
         // nobody can come back to it now, so it is rated as it stands (each
         // person's own exit is already on record). A no-op if it was rated.
         if (room.game && !room.game.gameOver) recordRatings(room, { force: true, notifySocketId: socket.id });
+        Analytics.roomClosed(room);
         rooms.delete(roomCode);
         ack && ack({ ok: true });
         return;
@@ -5554,10 +5687,39 @@ io.on('connection', (socket) => {
       if (isRateLimited(socket, 'admin_link')) throw new Error('Too many requests. Please wait a moment.');
       const uid = await verifyFirebaseToken(firebaseIdToken);
       if (!uid || !adminUids().has(uid)) throw new Error('Not allowed.');
-      ack && ack({ ok: true, url: '/api/admin/user-analytics?t=' + makeAdminToken(uid) });
+      ack && ack({ ok: true, url: '/api/admin?t=' + makeAdminToken(uid) });
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
+  });
+
+  // Our own analytics (Nov 2026): what the app reports about itself -- app
+  // opens, tutorial, invites and ads. Numbers only (see game/analytics.js).
+  // 'hello' carries the sign-in token once per connection, so everything
+  // after it is counted per account without trusting an id the browser sends.
+  // Never answers and never throws: a lost event costs a number, nothing else.
+  socket.on('track', async (ev) => {
+    try {
+      if (!ev || typeof ev !== 'object' || typeof ev.e !== 'string') return;
+      if (isRateLimited(socket, 'track')) return;
+      const data = socket.data || (socket.data = {});
+      if (ev.e === 'hello') {
+        if (data.helloAt && Date.now() - data.helloAt < 30 * 1000) return;
+        data.helloAt = Date.now();
+        data.platform = cleanPlatform(ev.platform);
+        // Set before waiting, so events right behind the hello wait for it.
+        data.ready = verifyFirebaseToken(ev.firebaseIdToken)
+          .then((uid) => { if (uid) data.uid = uid; })
+          .catch(() => {});
+        await data.ready;
+        Analytics.opened(data.uid || null, data.platform);
+        return;
+      }
+      if (data.ready) await data.ready;
+      const entry = socketIndex.get(socket.id);
+      const room = entry ? rooms.get(entry.roomCode) : null;
+      Analytics.track(data.uid || null, data.platform || 'unknown', ev, room);
+    } catch (e) { /* analytics never gets in the way */ }
   });
 
   socket.on('get_my_stats', async ({ firebaseIdToken }, ack) => {
@@ -5623,7 +5785,7 @@ io.on('connection', (socket) => {
     if (queuedSize !== undefined) {
       const bucket = matchQueues.get(queuedSize);
       const idx = bucket.findIndex((e) => e.socketId === socket.id);
-      if (idx !== -1) bucket.splice(idx, 1);
+      if (idx !== -1) { Analytics.searchEnded(bucket[idx], 'gave-up'); bucket.splice(idx, 1); }
       queueIndex.delete(socket.id);
     }
     const entry = socketIndex.get(socket.id);
@@ -5654,6 +5816,7 @@ io.on('connection', (socket) => {
       // reaches game-over recordGameResult() writes the completed row on its
       // own separate track.
       recordPartialActivity(room, entry.playerId);
+      Analytics.lostConnection(room, entry.playerId);
       p.connected = false;
       p.socketId = null;
       // If the disconnected player was the host, hand hosting off to an
@@ -5682,6 +5845,7 @@ io.on('connection', (socket) => {
       // A solo game stops and waits for them (see soloPlayerAway).
       if (soloPlayerAway(room)) {
         clearTurnTimer(room);
+        if (!room.awayPaused) Analytics.soloPaused(room);
         room.awayPaused = true;
       }
       broadcastRoom(room);
@@ -5710,6 +5874,7 @@ setInterval(() => {
       clearAutoNextRoundTimer(room); // never leave an auto-advance armed on a torn-down/reset room
       // A game nobody came back to counts as left (last) for the rating.
       try { rateAbandonedGame(room); } catch (e) { console.error('[Rating] abandoned game:', e.message); }
+      Analytics.roomClosed(room);
       rooms.delete(code);
       console.log(`[Cleanup] Deleted abandoned room ${code} (no human connected for 10+ minutes).`);
     }
@@ -5733,6 +5898,44 @@ setInterval(() => {
     if (!anyHitsLeft) ipRateBuckets.delete(ip);
   }
 }, ROOM_CLEANUP_SWEEP_MS);
+
+// --------------------------------------------------------------------------
+// Analytics timers (Nov 2026). The day counters live in memory and are
+// written every 5 minutes (and on shutdown -- Render sends SIGTERM before a
+// deploy). Once a minute: how many people are online, playing, at how many
+// tables, and searching for a match -- for "busy hours" and today's peak.
+// --------------------------------------------------------------------------
+function liveCounts() {
+  const people = new Set();
+  const socks = io.sockets && io.sockets.sockets;
+  if (socks && typeof socks.values === 'function') {
+    for (const s of socks.values()) people.add((s.data && s.data.uid) || s.id);
+  }
+  let playing = 0;
+  let tables = 0;
+  for (const room of rooms.values()) {
+    if (!room.game || room.game.gameOver || room.phase === 'lobby' || room.phase === 'game_over') continue;
+    let here = 0;
+    for (const pid of room.order) {
+      const p = room.players.get(pid);
+      if (p && !p.isBot && p.connected) here += 1;
+    }
+    if (here) { tables += 1; playing += here; }
+  }
+  let searching = 0;
+  for (const bucket of matchQueues.values()) searching += bucket.length;
+  return { online: people.size, playing, tables, searching };
+}
+const ANALYTICS_SAMPLE_MS = 60 * 1000;
+const ANALYTICS_FLUSH_MS = 5 * 60 * 1000;
+const sampleTimer = setInterval(() => { try { Analytics.sample(liveCounts()); } catch (e) { /* nothing */ } }, ANALYTICS_SAMPLE_MS);
+const flushTimer = setInterval(() => { Analytics.flush().catch(() => {}); }, ANALYTICS_FLUSH_MS);
+if (sampleTimer.unref) sampleTimer.unref();
+if (flushTimer.unref) flushTimer.unref();
+process.once('SIGTERM', () => {
+  const bye = setTimeout(() => process.exit(0), 4000);
+  Analytics.flush().catch(() => {}).finally(() => { clearTimeout(bye); process.exit(0); });
+});
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
