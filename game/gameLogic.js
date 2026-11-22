@@ -314,17 +314,26 @@ class LeastCountGame {
    * Adds a brand-new player to an already-running game -- the "someone wants
    * to join mid-game, host admitted them" flow. Only allowed between rounds
    * (same restriction as removePlayer -- never mid-hand), and the new player
-   * enters at a score equal to the current highest score among everyone else
-   * already on the board, not 0. That's deliberate: starting them fresh at 0
+   * enters at a score equal to the current highest score among the players
+   * STILL IN the game, not 0. That's deliberate: starting them fresh at 0
    * against players who've already built up 50-100+ points would hand them
    * an unfair head start in a game about staying LOW, so instead they enter
    * exactly as "at risk" of elimination as whoever's currently doing worst.
+   *
+   * STILL IN, not "on the board" (Nov 2026). It used to be the highest score
+   * on the whole board, eliminated players included -- and anyone knocked out
+   * sits at or past the max score. So once one player was out, every
+   * newcomer started at or past the limit too and was eliminated at the end
+   * of their first round whatever they did: Mani saw a player join, win her
+   * first round, and be put out straight after it. Same number a rejoiner
+   * gets (rejoinScoreFor), which never had this problem.
    */
   addPlayer(playerId) {
     if (this.gameOver) throw new Error('Game already over');
     if (!this.roundOver) throw new Error('Cannot add a player mid-round');
     if (this.playerIds.includes(playerId)) return this.getPublicState();
-    const startingScore = Math.max(0, ...Object.values(this.scores));
+    const stillIn = this.activePlayers();
+    const startingScore = Math.max(0, ...stillIn.map((id) => this.scores[id] || 0));
     this.playerIds.push(playerId);
     this.scores[playerId] = startingScore;
     this.log.push({ type: 'joined', round: this.roundNumber, playerId, startingScore });
@@ -363,11 +372,11 @@ class LeastCountGame {
    * The score a rejoining player would come back on: the highest score among
    * players STILL IN the game.
    *
-   * Note this is deliberately different from addPlayer()'s rule, which takes
-   * the max across every score on the board including eliminated players.
-   * For a brand-new arrival that's arguably fine; for a rejoiner it would be
-   * absurd -- their own 215 is on that board, so they would return already
-   * past the limit and be eliminated again before playing a card.
+   * The same number a brand-new arrival gets (addPlayer). Counting eliminated
+   * players' scores would be absurd here -- a rejoiner's own 215 is on that
+   * board, so they would return already past the limit and be eliminated
+   * again before playing a card -- and it turned out to be just as absurd
+   * for a newcomer, which is why addPlayer now matches this (Nov 2026).
    */
   rejoinScoreFor(playerId) {
     const others = this.activePlayers().filter((id) => id !== playerId);
