@@ -8,6 +8,7 @@ const { Server } = require('socket.io');
 const admin = require('firebase-admin');
 const { LeastCountGame, MAX_SCORE_OPTIONS, handValue, cardValue, DECLARE_MAX_VALUE, deckCountForPlayers } = require('./game/gameLogic');
 const Rating = require('./game/rating');
+const UserAnalytics = require('./game/userAnalytics');
 
 const app = express();
 const server = http.createServer(app);
@@ -647,6 +648,119 @@ function addBotToRoom(room) {
 
 
 // --------------------------------------------------------------------------
+// Admin reports IN THE APP (Nov 2026): only for the account ids listed in
+// ADMIN_UIDS, a Render setting (comma-separated; empty = nobody). The app
+// asks over the socket (admin_link), the server checks the signed-in
+// account against the list and hands back a link that works for 30 minutes
+// -- so the admin key is never typed into, or stored in, the app. A link
+// stops working early if its account is taken off the list.
+// --------------------------------------------------------------------------
+function adminUids() {
+  return new Set(String(process.env.ADMIN_UIDS || '').split(/[\s,]+/).filter(Boolean));
+}
+const ADMIN_LINK_MS = 30 * 60 * 1000;
+const adminLinkTokens = new Map();   // token -> { uid, exp }
+function makeAdminToken(uid) {
+  const now = Date.now();
+  for (const [k, v] of adminLinkTokens) if (now > v.exp) adminLinkTokens.delete(k);
+  const t = crypto.randomBytes(24).toString('hex');
+  adminLinkTokens.set(t, { uid, exp: now + ADMIN_LINK_MS });
+  return t;
+}
+function adminTokenValid(t) {
+  const e = adminLinkTokens.get(t);
+  if (!e) return false;
+  if (Date.now() > e.exp) { adminLinkTokens.delete(t); return false; }
+  return adminUids().has(e.uid);
+}
+
+// --------------------------------------------------------------------------
+// The check for the admin pages below: an app link (?t=, see above), or the
+// admin key -- X-Admin-Key header or ?key=, compared in constant time, and
+// closed (not open) when ADMIN_KEY isn't set. Sends the refusal itself; true
+// means the request may go on.
+// --------------------------------------------------------------------------
+function adminRequestOk(req, res) {
+  if (typeof req.query.t === 'string') {
+    if (adminTokenValid(req.query.t)) return true;
+    res.status(403).json({ ok: false, error: 'This link has expired. Open the report again from the app.' });
+    return false;
+  }
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey) {
+    res.status(503).json({ ok: false, error: 'ADMIN_KEY is not configured on the server, so this endpoint is disabled.' });
+    return false;
+  }
+  const providedKey = req.get('X-Admin-Key') || req.query.key;
+  const keyOk = typeof providedKey === 'string'
+    && providedKey.length === adminKey.length
+    && crypto.timingSafeEqual(Buffer.from(providedKey, 'utf8'), Buffer.from(adminKey, 'utf8'));
+  if (!keyOk) {
+    res.status(403).json({ ok: false, error: 'Forbidden' });
+    return false;
+  }
+  return true;
+}
+// Links between the admin pages carry the app link or the key on, whichever
+// came in the URL.
+function adminLink(req, path, extra) {
+  const qs = [];
+  if (typeof req.query.t === 'string') qs.push('t=' + encodeURIComponent(req.query.t));
+  else if (typeof req.query.key === 'string') qs.push('key=' + encodeURIComponent(req.query.key));
+  if (extra) qs.push(extra);
+  return path + (qs.length ? '?' + qs.join('&') : '');
+}
+
+// --------------------------------------------------------------------------
+// Users, month on month (Nov 2026) -- Mani's active-users roll-forward:
+// opening active + new + came back - became inactive = closing active, and
+// churn %, per IST month. The counting is in game/userAnalytics.js. Same
+// admin key as the tester report (it lists display names too).
+//
+// It reads the WHOLE activity log and every users doc, and Firestore's free
+// tier counts each document read -- so the rows are kept for 10 minutes and a
+// reload inside that reuses them. "Read fresh data" (?refresh=1) skips that.
+//
+//   /api/admin/user-analytics?key=YOUR_KEY
+//   /api/admin/user-analytics?key=YOUR_KEY&format=json
+// --------------------------------------------------------------------------
+const USER_ANALYTICS_CACHE_MS = 10 * 60 * 1000;
+let userAnalyticsCache = null;   // { at, activity, users }
+app.get('/api/admin/user-analytics', async (req, res) => {
+  if (!adminRequestOk(req, res)) return;
+  if (!db) return res.status(500).json({ ok: false, error: 'Firestore is not initialized on the server.' });
+  try {
+    let data = userAnalyticsCache;
+    if (!data || req.query.refresh || Date.now() - data.at > USER_ANALYTICS_CACHE_MS) {
+      // Only the fields the report uses travel (reads still count per doc).
+      const pick = (q, ...fields) => (typeof q.select === 'function' ? q.select(...fields) : q);
+      const actSnap = await pick(db.collection('activity'), 'uid', 'at', 'completed', 'displayName', 'platform').get();
+      const activity = [];
+      actSnap.forEach((doc) => activity.push(doc.data()));
+      const usersSnap = await pick(db.collection('users'), 'displayName', 'gamesPlayed', 'lastPlayedAt').get();
+      const users = [];
+      usersSnap.forEach((doc) => users.push(Object.assign({ uid: doc.id }, doc.data())));
+      data = userAnalyticsCache = { at: Date.now(), activity, users };
+    }
+    const report = UserAnalytics.buildUserMonths({ activity: data.activity, users: data.users, now: Date.now() });
+    if (req.query.format === 'json') {
+      return res.json(Object.assign({ ok: true, dataAt: new Date(data.at).toISOString() }, report));
+    }
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(UserAnalytics.renderHtml(report, {
+      dataAt: data.at,
+      links: {
+        refresh: adminLink(req, '/api/admin/user-analytics', 'refresh=1'),
+        testers: adminLink(req, '/api/admin/tester-activity'),
+      },
+    }));
+  } catch (e) {
+    console.error('[admin] user analytics failed:', e.message);
+    res.status(500).json({ ok: false, error: 'Could not build the report.' });
+  }
+});
+
+// --------------------------------------------------------------------------
 // Tester-activity report -- built for the Google Play closed-testing review,
 // which requires 12+ testers opted in for 14 continuous days AND evidence
 // that they actually USED the app (Google checks real engagement, not just
@@ -665,27 +779,11 @@ function addBotToRoom(room) {
 //   /api/admin/tester-activity?key=YOUR_KEY&format=json
 // --------------------------------------------------------------------------
 app.get('/api/admin/tester-activity', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey) {
-    return res.status(503).json({ ok: false, error: 'ADMIN_KEY is not configured on the server, so this endpoint is disabled.' });
-  }
-  // Accept the key from a header as well as ?key=, and prefer the header.
-  // A query string is the worst place for a credential: it is written to
-  // Render's access logs, kept in browser history, and (before the
-  // Referrer-Policy header added above) leaked to any third-party host a
-  // resource on the page was fetched from. ?key= still works so existing
-  // bookmarks don't break, but prefer:
+  // The key from a header as well as ?key= (header preferred: a query string
+  // is the worst place for a credential -- Render's access logs, browser
+  // history), or an app link for someone on ADMIN_UIDS. See adminRequestOk.
   //   curl -H 'X-Admin-Key: <key>' https://.../api/admin/tester-activity
-  const providedKey = req.get('X-Admin-Key') || req.query.key;
-  // Constant-time compare so the key cannot be recovered byte-by-byte from
-  // response timing. Length is checked first because timingSafeEqual throws on
-  // a length mismatch, and that throw would itself leak the length.
-  const keyOk = typeof providedKey === 'string'
-    && providedKey.length === adminKey.length
-    && crypto.timingSafeEqual(Buffer.from(providedKey, 'utf8'), Buffer.from(adminKey, 'utf8'));
-  if (!keyOk) {
-    return res.status(403).json({ ok: false, error: 'Forbidden' });
-  }
+  if (!adminRequestOk(req, res)) return;
   if (!db) return res.status(500).json({ ok: false, error: 'Firestore is not initialized on the server.' });
 
   const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 14));
@@ -940,7 +1038,7 @@ app.get('/api/admin/tester-activity', async (req, res) => {
   .aka { font-size: 11px; color: #8fae9c; margin-top: 2px; font-style: italic; }
 </style></head><body>
 <h1>Tester activity — last ${days} days</h1>
-<div class="sub">Since ${esc(istKey(Date.parse(cutoff), 16).replace('T', ' '))} IST · generated ${esc(istKey(Date.now(), 16).replace('T', ' '))} IST<br>All times IST · active days counted on IST calendar days</div>
+<div class="sub">Since ${esc(istKey(Date.parse(cutoff), 16).replace('T', ' '))} IST · generated ${esc(istKey(Date.now(), 16).replace('T', ' '))} IST<br>All times IST · active days counted on IST calendar days<br><a style="color:#f2c14e" href="${esc(adminLink(req, '/api/admin/user-analytics'))}">Users, month on month &rarr;</a></div>
 
 <h2>Android app testers <span class="note">— the Play closed-test numbers</span></h2>
 <div class="cards app">
@@ -1598,6 +1696,8 @@ const RATE_LIMITS = {
   // deliberately tight -- one rejoin is allowed per game anyway.
   request_rejoin: { max: 4, windowMs: 60000 },
   im_back: { max: 10, windowMs: 10000 },
+  admin_check: { max: 10, windowMs: 60000 },
+  admin_link: { max: 10, windowMs: 60000 },
   get_my_stats: { max: 10, windowMs: 30000 },
   get_player_stats: { max: 20, windowMs: 30000 },
   // Changing the max score on the round result. A player trying a few values
@@ -5437,6 +5537,29 @@ io.on('connection', (socket) => {
   // a firebaseUid back to the browser, including the requester's own -- only
   // the two numbers (gamesPlayed, wins), so tapping an opponent's seat can
   // never hand you a stable account identifier for them, just their record.
+  // Admin reports in the app (Nov 2026): is this signed-in account on
+  // ADMIN_UIDS? Asked when the profile opens; the button shows only on yes.
+  socket.on('admin_check', async ({ firebaseIdToken } = {}, ack) => {
+    try {
+      if (isRateLimited(socket, 'admin_check')) throw new Error('Too many requests. Please wait a moment.');
+      const uid = await verifyFirebaseToken(firebaseIdToken);
+      ack && ack({ ok: true, admin: !!uid && adminUids().has(uid) });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+  // ...and the button: a 30-minute link to the reports, for that account only.
+  socket.on('admin_link', async ({ firebaseIdToken } = {}, ack) => {
+    try {
+      if (isRateLimited(socket, 'admin_link')) throw new Error('Too many requests. Please wait a moment.');
+      const uid = await verifyFirebaseToken(firebaseIdToken);
+      if (!uid || !adminUids().has(uid)) throw new Error('Not allowed.');
+      ack && ack({ ok: true, url: '/api/admin/user-analytics?t=' + makeAdminToken(uid) });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
   socket.on('get_my_stats', async ({ firebaseIdToken }, ack) => {
     try {
       if (isRateLimited(socket, 'get_my_stats')) throw new Error('Too many requests. Please wait a moment.');
