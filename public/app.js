@@ -6108,6 +6108,40 @@
   function openProfileMenu() {
     if (profileMenuPanel) profileMenuPanel.classList.remove('hidden');
     loadProfileRating();
+    checkAdminButton();
+  }
+
+  // ---- Admin reports (Nov 2026) --------------------------------------------
+  // Only for the account ids the server lists in ADMIN_UIDS (a Render
+  // setting). The server decides: the button is added only once it says yes
+  // for this signed-in account, and the admin key is never in the app --
+  // tapping asks the server for a link that works for 30 minutes and opens
+  // the reports right here ("Back to the game" on the page comes back).
+  let adminButtonShown = false;
+  async function checkAdminButton() {
+    if (adminButtonShown || !profileMenuPanel) return;
+    const token = await currentFirebaseIdToken();
+    if (!token) return;
+    socket.emit('admin_check', { firebaseIdToken: token }, (res) => {
+      if (!res || !res.ok || !res.admin || adminButtonShown) return;
+      adminButtonShown = true;
+      const close = document.getElementById('btn-close-profile-menu');
+      const btn = document.createElement('button');
+      btn.id = 'btn-admin-reports';
+      btn.type = 'button';
+      btn.className = 'secondary profile-stats-btn';
+      btn.textContent = 'Admin reports';
+      btn.onclick = async () => {
+        btn.disabled = true;
+        const t = await currentFirebaseIdToken();
+        socket.emit('admin_link', { firebaseIdToken: t }, (r) => {
+          btn.disabled = false;
+          if (r && r.ok && r.url) { window.location.href = r.url; return; }
+          setLandingError((r && r.error) || 'Could not open the reports. Try again.');
+        });
+      };
+      if (close && close.parentNode) close.parentNode.insertBefore(btn, close);
+    });
   }
   function closeProfileMenu() {
     if (profileMenuPanel) profileMenuPanel.classList.add('hidden');
