@@ -7490,6 +7490,17 @@
       // than reserve an empty row.
       if (metaEl.textContent || scoreEl.textContent || statsRow.children.length > 1) chipEl.appendChild(statsRow);
 
+      // Missed three turns in a row (Nov 2026): a bot plays this seat until
+      // they come back -- said on the chair, for everyone at the table.
+      if (p.away && !p.isBot && !dealing) {
+        seatEl.classList.add('away');
+        const awayEl = document.createElement('div');
+        awayEl.className = 'seat-away';
+        awayEl.textContent = isMe ? 'bot playing for you' : 'bot playing';
+        awayEl.style.cssText = 'font-size:10px;line-height:1.3;font-weight:700;color:#f2c14e;letter-spacing:.02em;';
+        chipEl.appendChild(awayEl);
+      }
+
       seatEl.innerHTML = '';
       seatEl.appendChild(chipEl);
 
@@ -12664,8 +12675,64 @@
     });
   }, 7000);
 
+  // ---- "I'm back" (Nov 2026) --------------------------------------------
+  // Miss three turns in a row and a bot plays your seat (a table with other
+  // people) or the game pauses (solo against bots); the server says so with
+  // `away` on your player / `idlePaused` on the room. This card is how you
+  // take it back -- a bot moving every 1.6s leaves no time to make a move
+  // yourself. Not back by the end of the round (tables with people): out.
+  function ensureAwayBannerStyle() {
+    if (document.getElementById('away-banner-style')) return;
+    const st = document.createElement('style');
+    st.id = 'away-banner-style';
+    st.textContent = '#away-banner{position:fixed;left:50%;top:44%;transform:translate(-50%,-50%);'
+      + 'width:min(320px,86vw);z-index:80;box-sizing:border-box;padding:16px 16px 14px;border-radius:16px;'
+      + 'background:rgba(10,24,19,.96);border:1px solid rgba(242,193,78,.55);'
+      + 'box-shadow:0 12px 36px rgba(0,0,0,.55);color:#fff;text-align:center;font-family:inherit}'
+      + '#away-banner .away-text b{display:block;font-size:17px;margin-bottom:4px}'
+      + '#away-banner .away-text span{display:block;font-size:13px;line-height:1.4;opacity:.85}'
+      + '#away-banner .away-btn{margin-top:12px;width:100%;padding:12px 0;border:0;border-radius:12px;'
+      + 'font:inherit;font-size:16px;font-weight:800;cursor:pointer;'
+      + 'background:var(--brand,#f2c14e);color:var(--brand-on,#241a05)}'
+      + '#away-banner .away-btn:disabled{opacity:.6}';
+    document.head.appendChild(st);
+  }
+  function renderAwayBanner() {
+    const room = latestRoom;
+    const screen = document.getElementById('screen-game');
+    const me = room && room.players ? room.players.find((p) => p.playerId === myPlayerId) : null;
+    const solo = !!(room && room.idlePaused);
+    const show = !!(screen && screen.classList.contains('active') && me && !me.isBot
+      && (me.away || solo) && latestGame && !latestGame.gameOver);
+    let bar = document.getElementById('away-banner');
+    if (!show) { if (bar && bar.parentNode) bar.parentNode.removeChild(bar); return; }
+    if (!bar) {
+      ensureAwayBannerStyle();
+      bar = document.createElement('div');
+      bar.id = 'away-banner';
+      bar.setAttribute('role', 'alert');
+      bar.innerHTML = '<div class="away-text"><b></b><span></span></div><button type="button" class="away-btn"></button>';
+      const btn = bar.querySelector('.away-btn');
+      btn.onclick = () => {
+        btn.disabled = true;
+        socket.emit('im_back', {}, (res) => {
+          btn.disabled = false;
+          if (!res || !res.ok) setGameError((res && res.error) || 'Could not reach the table. Try again.');
+        });
+      };
+      screen.appendChild(bar);
+    }
+    bar.querySelector('b').textContent = solo ? 'Game paused' : 'A bot is playing for you';
+    bar.querySelector('span').textContent = solo
+      ? 'You missed 3 turns in a row, so the game is waiting for you.'
+      : 'You missed 3 turns in a row. Come back before this round ends, or you will be out.';
+    bar.querySelector('.away-btn').textContent = solo ? 'Continue' : 'I’m back';
+  }
+
   socket.on('room_update', (room) => {
     latestRoom = room;
+    // After the rest of this handler has put the right screen up.
+    setTimeout(renderAwayBanner, 0);
     // Top up the name cache with everyone currently in the room -- see
     // knownPlayerNames/playerName() above. Cheap no-op for names already known.
     room.players.forEach((p) => { knownPlayerNames[p.playerId] = p.name; });
