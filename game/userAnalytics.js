@@ -135,6 +135,35 @@ function buildUserMonths({ activity, users, now } = {}) {
     }
   }
 
+  // A column per calendar year, after its last month (Mani: "the entire year
+  // after Nov"). Built the way a year-to-date column works in accounts: the
+  // opening is the year's first opening, the flows are the months added up,
+  // the closing is its last month's -- so opening + new + came back - became
+  // inactive = closing holds for the year too. "Played in the period" counts
+  // each user ONCE however many months they played: the number to set beside
+  // an outside tool's "total users" for the same dates.
+  const years = [];
+  for (const m of months) {
+    const y = m.month.slice(0, 4);
+    let Y = years.find((x) => x.year === y);
+    if (!Y) {
+      Y = { year: y, months: [], opening: m.opening, newUsers: 0, cameBack: 0, wentInactive: 0 };
+      years.push(Y);
+    }
+    Y.months.push(m.month);
+    Y.newUsers += m.newUsers;
+    Y.cameBack += m.cameBack;
+    Y.wentInactive += m.wentInactive || 0;
+    Y.closing = m.closing;
+    Y.totalUsers = m.totalUsers;
+    Y.inactiveUsers = m.inactiveUsers;
+    Y.inProgress = m.inProgress;
+  }
+  for (const Y of years) {
+    Y.uniquePlayers = all.filter((p) => Y.months.some((mm) => p.months.has(mm))).length;
+  }
+  for (const m of months) m.uniquePlayers = m.closing;
+
   const userRows = all.map((p) => ({
     uid: p.uid,
     name: p.name,
@@ -150,13 +179,16 @@ function buildUserMonths({ activity, users, now } = {}) {
 
   const cur = months.length ? months[months.length - 1] : null;
   const last = months.length > 1 ? months[months.length - 2] : null;
+  const thisYear = years.find((Y) => Y.year === currentMonth.slice(0, 4)) || null;
   return {
     currentMonth,
     logStart,
     months,
+    years,
     users: userRows,
     summary: {
       totalUsers: all.length,
+      playedThisYear: thisYear ? { year: thisYear.year, players: thisYear.uniquePlayers } : null,
       activeThisMonth: cur && cur.month === currentMonth ? cur.closing : 0,
       inactiveNow: all.length - (cur && cur.month === currentMonth ? cur.closing : 0),
       lastMonth: last ? { label: last.label, closing: last.closing, churnPct: last.churnPct } : null,
@@ -184,19 +216,35 @@ function renderHtml(report, { dataAt, links } = {}) {
   const M = report.months;
   const s = report.summary;
 
-  const head = M.map((m) => `<th class="n">${esc(m.label)}${m.inProgress ? '<div class="so-far">so far</div>' : ''}</th>`).join('');
-  const row = (label, cls, f) => `<tr class="${cls}"><th>${label}</th>${M.map((m) => `<td class="n">${f(m)}</td>`).join('')}</tr>`;
+  // The columns: every month, and after each year's last month that year's
+  // column (a year in progress reads "so far").
+  const years = report.years || [];
+  const cols = [];
+  M.forEach((m, i) => {
+    cols.push(m);
+    const next = M[i + 1];
+    if (!next || next.month.slice(0, 4) !== m.month.slice(0, 4)) {
+      const Y = years.find((y) => y.year === m.month.slice(0, 4));
+      if (Y) cols.push(Object.assign({ isYear: true }, Y));
+    }
+  });
+  const head = cols.map((c) => (c.isYear
+    ? `<th class="n yr">${esc(c.year)}<div class="so-far">${c.inProgress ? 'so far' : 'full year'}</div></th>`
+    : `<th class="n">${esc(c.label)}${c.inProgress ? '<div class="so-far">so far</div>' : ''}</th>`)).join('');
+  const row = (label, cls, f) => `<tr class="${cls}"><th>${label}</th>${cols.map((c) => `<td class="n${c.isYear ? ' yr' : ''}">${f(c)}</td>`).join('')}</tr>`;
+  const star = (c) => (c.inProgress ? '*' : '');
   const rollForward = M.length ? `
 <div class="scroll"><table class="rf">
   <tr><th></th>${head}</tr>
-  ${row('Opening active users', '', (m) => num(m.opening))}
-  ${row('+ New users', 'add', (m) => num(m.newUsers))}
-  ${row('+ Came back', 'add', (m) => num(m.cameBack))}
-  ${row('&minus; Became inactive', 'less', (m) => (m.wentInactive == null ? num(null) : m.wentInactive + (m.inProgress ? '*' : '')))}
-  ${row('Closing active users', 'total', (m) => num(m.closing))}
-  ${row('Churn %', 'pct', (m) => (m.churnPct == null ? num(null) : m.churnPct + '%' + (m.inProgress ? '*' : '')))}
-  ${row('Total users (ever played)', 'sub2', (m) => num(m.totalUsers))}
-  ${row('Inactive users', 'sub2', (m) => num(m.inactiveUsers))}
+  ${row('Opening active users', '', (c) => num(c.opening))}
+  ${row('+ New users', 'add', (c) => num(c.newUsers))}
+  ${row('+ Came back', 'add', (c) => num(c.cameBack))}
+  ${row('&minus; Became inactive', 'less', (c) => (c.wentInactive == null ? num(null) : c.wentInactive + star(c)))}
+  ${row('Closing active users', 'total', (c) => num(c.closing))}
+  ${row('Churn %', 'pct', (c) => (c.isYear || c.churnPct == null ? num(null) : c.churnPct + '%' + star(c)))}
+  ${row('Played in the period (each user once)', 'memo', (c) => num(c.uniquePlayers))}
+  ${row('Total users (ever played)', 'sub2', (c) => num(c.totalUsers))}
+  ${row('Inactive users', 'sub2', (c) => num(c.inactiveUsers))}
 </table></div>` : '<p class="dim">No games have been logged yet.</p>';
 
   const list = (title, arr) => {
@@ -251,6 +299,8 @@ function renderHtml(report, { dataAt, links } = {}) {
   .rf .total th, .rf .total td { font-weight: 700; border-top: 1px solid #8fae9c; border-bottom: 2px solid #8fae9c; }
   .rf .pct td { color: #f2c14e; font-weight: 600; }
   .rf .sub2 th, .rf .sub2 td { color: #8fae9c; }
+  .rf .memo th, .rf .memo td { color: #d9e8de; font-style: italic; }
+  .rf .yr { background: #143d29; border-left: 2px solid #2f7a4f; }
   .so-far { font-size: 9px; color: #d9b45c; text-transform: none; letter-spacing: 0; }
   td.n, th.n { text-align: right; }
   .users { width: 100%; }
@@ -282,6 +332,7 @@ ${L.refresh ? `<a href="${esc(L.refresh)}">Read fresh data</a> &middot; ` : ''}$
   <div class="card"><div class="v">${s.totalUsers}</div><div class="k">Total users (ever)</div></div>
   <div class="card"><div class="v">${s.activeThisMonth}</div><div class="k">Active ${nowMonth ? esc(nowMonth.label.split(' ')[0]) : 'this month'} (so far)</div></div>
   <div class="card"><div class="v">${s.inactiveNow}</div><div class="k">Inactive now</div></div>
+  ${s.playedThisYear ? `<div class="card"><div class="v">${s.playedThisYear.players}</div><div class="k">Played in ${esc(s.playedThisYear.year)}</div></div>` : ''}
   ${s.lastMonth ? `<div class="card"><div class="v">${s.lastMonth.churnPct == null ? '&ndash;' : s.lastMonth.churnPct + '%'}</div><div class="k">Churn, ${esc(s.lastMonth.label.split(' ')[0])}</div></div>` : ''}
 </div>
 
@@ -304,6 +355,11 @@ ${monthLists || '<p class="dim">Nobody yet.</p>'}
   <b>New</b> = their first game ever. <b>Came back</b> = played before, but not in the month before.<br>
   <b>Became inactive</b> = played last month, not this month. <b>Churn %</b> = became inactive &divide; opening active users.<br>
   <b>Opening + New + Came back &minus; Became inactive = Closing</b>, every month.<br>
+  <b>Year column</b>: the year's opening, its months' flows added up, and its last month's closing, so the same sum holds.
+  Churn is a monthly figure, so the year has none. A person who left and came back twice in a year is in "Came back" twice.<br>
+  <b>Played in the period</b> counts each user once. For a month it equals Closing; for a year it is everyone who played in it.
+  It is the number to set beside Google Analytics' "Total users" for the same dates. Google's is usually lower: it cannot see
+  players whose browser blocks it (ad blockers, some in-app browsers), while every game here is counted by the server.<br>
   * The current month is not over: "became inactive" here means not played yet this month, and some will still come back.<br>
   The first month of the log has no opening balance (the month before it was not logged).
   Players who only played before the log began count in Total users and as inactive.<br>
