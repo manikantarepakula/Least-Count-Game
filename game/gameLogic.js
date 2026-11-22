@@ -126,6 +126,10 @@ class LeastCountGame {
     // compare this against their last-seen value and play a reshuffle sound
     // whenever it changes.
     this.reshuffleCount = 0;
+    // Every penalty card drawn this game, for the admin reports' live
+    // card-fairness check (Nov 2026): how many, their total value, how many
+    // were 8 or higher -- plus the +2 chains resolved and the longest one.
+    this.drawStats = { cards: 0, sum: 0, eightPlus: 0, chains: 0, longestChain: 0 };
     // Recent discards per player, this round only -- see startRound().
     this.discardHistory = {};
     // How each player left the game, in order (Nov 2026) -- the final places,
@@ -566,7 +570,14 @@ class LeastCountGame {
     for (let i = 0; i < count; i++) {
       if (this.stock.length === 0) this._reshuffleDiscardIntoStock();
       if (this.stock.length === 0) break;
-      drawn.push(this.stock.pop());
+      const card = this.stock.pop();
+      drawn.push(card);
+      if (this.drawStats) {
+        const v = cardValue(card, this.roundJokerRank);
+        this.drawStats.cards += 1;
+        this.drawStats.sum += v;
+        if (v >= 8) this.drawStats.eightPlus += 1;
+      }
     }
     return drawn;
   }
@@ -690,6 +701,10 @@ class LeastCountGame {
     }
 
     const penalty = 2 * this.chainCount;
+    if (this.drawStats) {
+      this.drawStats.chains += 1;
+      this.drawStats.longestChain = Math.max(this.drawStats.longestChain, this.chainCount);
+    }
     const drawn = this._drawFromStock(penalty);
     this.hands[playerId].push(...drawn);
     this.lastDraw = { playerId, cards: drawn };
