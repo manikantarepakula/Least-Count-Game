@@ -107,6 +107,39 @@
     : REAL_INTERSTITIAL_AD_ID;
   const RECT_AD_ID = (useTestAds || !REAL_RECT_AD_ID) ? TEST_RECT_AD_ID : REAL_RECT_AD_ID;
   console.log('[AdMob] using', useTestAds ? 'TEST' : 'REAL', 'banner unit:', BANNER_AD_ID);
+
+  // ------------------------------------------------------------------------
+  // Our own analytics (Nov 2026): what happens to each ad, for the Admin
+  // "Ads" reports -- loaded, failed (and why), shown, tapped, closed, and
+  // what it earned (AdMob's impression-level revenue, in micros). Numbers
+  // only. Sent through app.js (window.LCTrack); anything before app.js is
+  // ready waits in a short queue. Never throws, never changes what an ad does.
+  // Test ads are not counted (they would mix Google's test numbers in).
+  // ------------------------------------------------------------------------
+  function adTrack(t, a, extra) {
+    try {
+      if (useTestAds) return;
+      const ev = Object.assign({ e: 'ad', t: t, a: a }, extra || {});
+      const q = window.__lcTrackQueue || (window.__lcTrackQueue = []);
+      if (typeof window.LCTrack === 'function') {
+        while (q.length) window.LCTrack(q.shift());
+        window.LCTrack(ev);
+      } else if (q.length < 100) {
+        q.push(ev);
+      }
+    } catch (e) { /* analytics only */ }
+  }
+  function adPaid(t, data) {
+    if (!data || data.valueMicros == null) return;
+    adTrack(t, 'paid', { v: Number(data.valueMicros) || 0, c: data.currencyCode || '' });
+  }
+  // AdMob's error codes: 3 = no ad to show, 2 = network, the rest = other.
+  function adFailWhy(err) {
+    const code = err && (err.code != null ? err.code : err.errorCode);
+    return code === 3 ? 'nofill' : code === 2 ? 'network' : 'other';
+  }
+  let bannerSeenAt = 0;
+  let fsShownAt = 0;
   console.log('[AdMob] interstitial unit:', INTERSTITIAL_AD_ID,
     REAL_INTERSTITIAL_AD_ID ? '' : '(TEST -- real interstitial ID not set yet)');
   console.log('[AdMob] round-result banner unit:', RECT_AD_ID,
@@ -423,9 +456,12 @@
     diagListenersAdded = true;
     addDiagListener('bannerAdLoaded', () => {
       console.log('[AdMob] BANNER LOADED -- an ad really is on screen now.');
+      bannerSeenAt = Date.now();
+      adTrack('banner', 'loaded');
     });
     addDiagListener('bannerAdFailedToLoad', (err) => {
       console.warn('[AdMob] BANNER FAILED TO LOAD:', JSON.stringify(err));
+      adTrack('banner', 'failed', { why: adFailWhy(err) });
       console.warn('[AdMob]   code 3 = NO_FILL (AdMob had no ad -- account/app' +
         ' still pending review, or unit too new). code 1 = INVALID_REQUEST' +
         ' (our ad unit / app ID is wrong). code 2 = NETWORK_ERROR.');
@@ -440,9 +476,19 @@
       invalidateBannerState(null);
       scheduleApply();
     });
-    addDiagListener('bannerAdOpened', () => console.log('[AdMob] banner opened'));
+    // Opened = the player tapped the banner (this plugin sends no separate
+    // "clicked" on Android). ms = how long the ad had been up: under a second
+    // is most likely an accidental tap.
+    addDiagListener('bannerAdOpened', () => {
+      console.log('[AdMob] banner opened');
+      adTrack('banner', 'click', { ms: bannerSeenAt ? Date.now() - bannerSeenAt : -1 });
+    });
     addDiagListener('bannerAdClosed', () => console.log('[AdMob] banner closed'));
-    addDiagListener('bannerAdImpression', () => console.log('[AdMob] banner impression recorded'));
+    addDiagListener('bannerAdImpression', () => {
+      console.log('[AdMob] banner impression recorded');
+      adTrack('banner', 'impression');
+    });
+    addDiagListener('bannerAdPaid', (data) => adPaid('banner', data));
 
     // ---- Interstitial ----
     // There were NONE of these until now, which is why "only one ad per game"
@@ -452,22 +498,38 @@
     // the log line, never the ad.
     addDiagListener('interstitialAdLoaded', () => {
       console.log('[AdMob] INTERSTITIAL LOADED -- one is in hand, ready to show.');
+      adTrack('fs', 'loaded');
     });
     addDiagListener('interstitialAdFailedToLoad', (err) => {
       console.warn('[AdMob] INTERSTITIAL FAILED TO LOAD:', JSON.stringify(err));
+      adTrack('fs', 'failload', { why: adFailWhy(err) });
       console.warn('[AdMob]   code 3 = NO_FILL, 1 = INVALID_REQUEST (our unit ID),' +
         ' 2 = NETWORK_ERROR. Same codes as the banner.');
     });
-    addDiagListener('interstitialAdShowed', () => console.log('[AdMob] interstitial showed'));
+    addDiagListener('interstitialAdShowed', () => {
+      console.log('[AdMob] interstitial showed');
+      fsShownAt = Date.now();
+      adTrack('fs', 'shown');
+    });
+    // This plugin sends the interstitial's revenue as its "impression" event.
+    addDiagListener('interstitialAdImpression', (data) => adPaid('fs', data));
     addDiagListener('interstitialAdFailedToShow', (err) => {
       console.warn('[AdMob] interstitial failed to show:', JSON.stringify(err));
+      adTrack('fs', 'failshow');
       onInterstitialFinished('failed to show');
     });
     // The one listener that is load-bearing rather than diagnostic -- it's
     // what lets the next ad start loading the moment this one closes instead
     // of waiting out the safety timer. onInterstitialFinished() is written to
     // be safe if this never fires at all.
-    addDiagListener('interstitialAdDismissed', () => onInterstitialFinished('dismissed'));
+    addDiagListener('interstitialAdDismissed', () => {
+      adTrack('fs', 'dismissed', { ms: fsShownAt ? Date.now() - fsShownAt : -1 });
+      onInterstitialFinished('dismissed');
+    });
+
+    // ---- Rewarded (join a running game / rejoin) -- for the reports only ----
+    addDiagListener('onRewardedVideoAdShowed', () => adTrack('rw', 'shown'));
+    addDiagListener('onRewardedVideoAdImpression', (data) => adPaid('rw', data));
   }
 
   function ensureInit() {
@@ -659,6 +721,7 @@
     }
     nativeKind = kind;
     nativeView = 'unknown';   // until the call answers
+    if (kind === BANNER_BOTTOM) adTrack('banner', 'request');
     await nativeCall('showBanner', () => AdMob.showBanner(options));
     nativeView = 'shown';
     return 'created';
@@ -882,13 +945,16 @@
   }
 
   async function showInterstitial() {
+    adTrack('fs', 'due');
     if (!interstitialReady) {
       // Nothing loaded -- leave silently and start loading one for next time.
       console.log('[AdMob] interstitial skipped (none loaded yet)');
+      adTrack('fs', 'skip', { why: 'notready' });
       prepareInterstitial();
       return false;
     }
     if (Date.now() - lastInterstitialAt < MIN_MS_BETWEEN_INTERSTITIALS) {
+      adTrack('fs', 'skip', { why: 'soon' });
       console.log('[AdMob] interstitial skipped (frequency floor, '
         + Math.round((MIN_MS_BETWEEN_INTERSTITIALS - (Date.now() - lastInterstitialAt)) / 1000)
         + 's to go)');
@@ -994,6 +1060,8 @@
     // Called when the player is ELIMINATED or their join goes pending -- not
     // when the host approves. Fetching a video takes seconds, and approval is
     // the one moment the player is impatient.
+    // For the reports: this is the moment an ad-for-a-seat is on offer.
+    adTrack('rw', 'offered', { k: kind === 'join' ? 'join' : 'rejoin' });
     try {
       await ensureInit();
       await AdMob.prepareRewardVideoAd({ adId: rewardedAdId(kind), isTesting: useTestAds });
@@ -1030,15 +1098,19 @@
   async function showRewarded(kind) {
     const started = Date.now();
     const timeLeft = () => Math.max(1000, REWARDED_TIMEOUT_MS - (Date.now() - started));
+    // For the reports: started (they asked and were approved); then rewarded
+    // (watched to the end), closed (stopped early) or free (no ad could play,
+    // the seat was given anyway).
+    adTrack('rw', 'started', { k: kind === 'join' ? 'join' : 'rejoin' });
     try {
       const init = await withDeadline(ensureInit(), timeLeft(), 'ensureInit');
-      if (init && init.__timedOut) return true;
+      if (init && init.__timedOut) { adTrack('rw', 'free'); return true; }
       if (rewardedReady !== kind) {
         // Not preloaded, or preloaded for the other placement.
         const prep = await withDeadline(
           AdMob.prepareRewardVideoAd({ adId: rewardedAdId(kind), isTesting: useTestAds }),
           timeLeft(), 'prepareRewardVideoAd');
-        if (prep && prep.__timedOut) { rewardedReady = null; return true; }
+        if (prep && prep.__timedOut) { rewardedReady = null; adTrack('rw', 'free'); return true; }
       }
       rewardedReady = null;
 
@@ -1056,10 +1128,11 @@
         const item = await withDeadline(AdMob.showRewardVideoAd(), timeLeft(), 'showRewardVideoAd');
         // A timeout here means the video never came back. Grant it: the host
         // has already approved the seat and the player is waiting on us.
-        if (item && item.__timedOut) earned = true;
+        if (item && item.__timedOut) { earned = true; adTrack('rw', 'free'); }
         // Some plugin versions resolve with the reward item and never emit the
         // event; treat either as proof.
         else if (item && (item.amount != null || item.type != null)) earned = true;
+        if (!(item && item.__timedOut)) adTrack('rw', earned ? 'rewarded' : 'closed');
       } finally {
         if (sub && sub.remove) { try { await sub.remove(); } catch (e) {} }
       }
@@ -1070,6 +1143,7 @@
       // far better than a player who did what we asked and got nothing.
       console.warn('[LCAds] rewarded ad unavailable, granting anyway:', e && e.message);
       rewardedReady = null;
+      adTrack('rw', 'free');
       return true;
     }
   }
