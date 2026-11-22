@@ -6165,6 +6165,22 @@
   // tapping asks the server for a link that works for 30 minutes and opens
   // the reports right here ("Back to the game" on the page comes back).
   let adminButtonShown = false;
+  // The bottom banner is a native view drawn over the page: it would stay on
+  // top of the report pages (they cannot run our ad code), hide their last
+  // lines, and invite taps on our own ad -- which AdMob counts as invalid
+  // clicks. So it is taken away before they open; coming back to the game
+  // loads the page again, and the banner with it.
+  async function takeBannerDownForReports() {
+    try {
+      const cap = window.Capacitor;
+      const AdMob = cap && cap.Plugins && cap.Plugins.AdMob;
+      if (!AdMob || !(cap.isNativePlatform && cap.isNativePlatform())) return;
+      await Promise.race([
+        Promise.resolve().then(() => AdMob.removeBanner()).catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, 1500)),
+      ]);
+    } catch (e) { /* the reports open anyway */ }
+  }
   async function checkAdminButton() {
     if (adminButtonShown || !profileMenuPanel) return;
     const token = await currentFirebaseIdToken();
@@ -6181,9 +6197,13 @@
       btn.onclick = async () => {
         btn.disabled = true;
         const t = await currentFirebaseIdToken();
-        socket.emit('admin_link', { firebaseIdToken: t }, (r) => {
+        socket.emit('admin_link', { firebaseIdToken: t }, async (r) => {
           btn.disabled = false;
-          if (r && r.ok && r.url) { window.location.href = r.url; return; }
+          if (r && r.ok && r.url) {
+            await takeBannerDownForReports();
+            window.location.href = r.url;
+            return;
+          }
           setLandingError((r && r.error) || 'Could not open the reports. Try again.');
         });
       };
