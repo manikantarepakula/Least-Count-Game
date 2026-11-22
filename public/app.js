@@ -1,12968 +1,1637 @@
-(function () {
-  const socket = io();
-
-  // ------------------------------------------------------------------
-  // DIWALI (Nov 2026). A festive theme on 7, 8 and 9 November -- Diwali is
-  // Sunday the 8th -- that switches itself on and off by the date in India,
-  // so taking it down needs no second upload. Everything it changes keys off
-  // the `diwali` class on <html> (the DIWALI section at the end of
-  // style.css) or isDiwali() here.
-  //
-  // Preview it on any day with ?theme=diwali in the address (remembered for
-  // that tab); ?theme=off clears the preview.
-  //
-  // A function declaration that reads only the URL, storage and the clock:
-  // showScreen() and the greeting can call it before the rest of this file
-  // has run.
-  // ------------------------------------------------------------------
-  function isDiwali() {
-    try {
-      const q = new URLSearchParams(window.location.search).get('theme');
-      if (q === 'diwali') sessionStorage.setItem('lc_theme_preview', 'diwali');
-      if (q === 'off') sessionStorage.removeItem('lc_theme_preview');
-      if (sessionStorage.getItem('lc_theme_preview') === 'diwali') return true;
-    } catch (e) { /* no storage: the dates alone decide */ }
-    // Today's date in India (UTC+5:30), whatever the phone's own time zone.
-    const ist = new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
-    return ist >= '2026-11-07' && ist <= '2026-11-09';
-  }
-  if (isDiwali()) document.documentElement.classList.add('diwali');
-
-  // Which build is this player actually on? The same server and the same
-  // web code back both the website and the Capacitor-wrapped Android app,
-  // so without this flag the two are indistinguishable server-side -- which
-  // made the tester-activity report unable to answer the one question it
-  // exists for: "are my PLAY STORE testers playing, or is that traffic just
-  // people on the website?". window.Capacitor only exists inside the native
-  // app (same check admob-init.js uses to decide whether to show ads).
-  const CLIENT_PLATFORM =
-    (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())
-      ? 'android-app'
-      : 'web';
-
-  // --------------------------------------------------------------------
-  // Feature flags (Sept 2026). Both of these are FINISHED, WORKING features
-  // that are deliberately hidden for launch -- flip either to true to bring
-  // it back, no other change needed. Nothing else in the app is gated on
-  // them, which is exactly why they can be hidden safely:
-  //
-  //   googleSignIn -- Firebase signs EVERY player in anonymously on load
-  //     (see firebase-init.js), and that anonymous uid is what stats, the
-  //     activity log, the tester-activity report, opponent stats and
-  //     RevenueCat all key off. Google is only an upgrade path, so that the
-  //     same uid can follow someone to a new device. Hidden for now because
-  //     native Google Sign-In returns "no credentials available" on phones
-  //     other than the dev device, and a visibly failing button on the
-  //     Profile screen is worse than no button at all. The only thing lost
-  //     while it's off: a reinstall or a new phone starts a fresh uid, so
-  //     that player's win count resets.
-  //
-  //   removeAdsPurchase -- hides the BUY button only. The entitlement check
-  //     below still runs in full, so anyone who already purchased keeps
-  //     their ad-free experience; they simply can't be sold it again, and
-  //     nobody new is offered it. Deliberate: monetisation waits until
-  //     people are playing regularly.
-  //
-  //   installPrompt -- ON. A card at the foot of the game-over scorecard
-  //     asking website players to install the Android app. Never shows inside
-  //     the app itself (the gate's first line is CLIENT_PLATFORM !== 'web')
-  //     and never on arrival, only after a FINISHED game.
-  //
-  //     Who it actually converts, while the app is in closed testing: people
-  //     already on the tester list who keep playing on the website anyway.
-  //     That is the single biggest risk to the 14-day window, so this is
-  //     aimed straight at it. Anyone NOT on the tester list who taps Install
-  //     will be told they aren't eligible -- unavoidable until the tester
-  //     list is a public Google Group, or production access is granted.
-  //
-  //     Production access granted Oct 2026: INSTALL_URL now points at the
-  //     public /store/apps/details listing, so it converts everyone.
-  // --------------------------------------------------------------------
-  const FEATURES = {
-    googleSignIn: false,
-    removeAdsPurchase: false,
-    installPrompt: true,
-  };
-
-  // Group chat sheet state. Declared HERE, at the very top, rather than with
-  // the rest of the group state further down: showScreen() reads
-  // groupChatExpanded, and showScreen is defined (and can be called) well
-  // above that point. `let` is not hoisted, so declaring it lower down would
-  // leave a temporal-dead-zone window where an early showScreen() throws.
-  let groupChatExpanded = false;
-  let groupChatSeenAt = 0;
-
-  const SUIT_SYMBOL = { S: '♠', H: '♥', D: '♦', C: '♣' };
-  const RED_SUITS = new Set(['H', 'D']);
-  const RANK_ORDER = ['A','2','3','4','5','6','7','8','9','10','J','Q','K','JOKER'];
-
-  let session = JSON.parse(localStorage.getItem('leastcount_session') || 'null');
-  let myPlayerId = session ? session.playerId : null;
-  // Restored alongside playerId: 'rejoin' needs both as of the Sept 2026
-  // security fix. A session saved by an older build carries no token --
-  // those fail the server check once and rejoin cleanly, which is the
-  // safe direction to fail.
-  let mySessionToken = session ? (session.sessionToken || null) : null;
-  let myRoomCode = session ? session.roomCode : null;
-
-  // Players this device has chosen to mute -- local only, resets on reload,
-  // never sent to the server. Hides both their chat panel messages and their
-  // seat speech-bubbles for the rest of this session.
-  const mutedPlayerIds = new Set();
-  function isMuted(playerId) { return mutedPlayerIds.has(playerId); }
-
-  // ---------------- Firebase account status (wiring check only) ----------------
-  // No UI or game behavior changes yet -- this just confirms firebase-init.js
-  // loaded and Firebase Auth is connected, logged to the console so it's easy
-  // to verify. A real "Sign in with Google" button and Firestore-backed
-  // stats/purchases come in a later step.
-  if (window.LCAuth) {
-    window.LCAuth.onUserChange((user) => {
-      if (user) {
-        console.log(`[Firebase] signed in as ${user.uid}${user.isAnonymous ? ' (anonymous/guest)' : ' (Google account)'}`);
-      } else {
-        console.log('[Firebase] no user yet, signing in...');
-      }
-      updateSigninUI(user);
-      maybeUseGoogleDisplayName(user);
-    });
-  } else {
-    console.warn('[Firebase] LCAuth not found -- check that firebase-init.js loaded before app.js.');
-  }
-
-  // If someone signs in with Google and has never typed/saved a name here
-  // before, use their Google account name as a starting point instead of
-  // leaving the field blank -- they can still change it, this is just a
-  // sensible default so "enter your name" isn't the very first thing a
-  // signed-in user hits. Never overwrites a name they already typed/saved
-  // (that always wins). Inlines the storage key rather than referencing
-  // NAME_STORAGE_KEY (declared further down) since this callback can in
-  // principle fire before that line runs.
-  function maybeUseGoogleDisplayName(user) {
-    if (!user || user.isAnonymous || !user.displayName) return;
-    const nameInput = document.getElementById('input-name');
-    if (!nameInput) return;
-    const alreadySaved = localStorage.getItem('leastcount_name');
-    if (alreadySaved || nameInput.value.trim()) return;
-    nameInput.value = user.displayName;
-    localStorage.setItem('leastcount_name', user.displayName);
-    // Home's "Good evening, ..." picks the new name up at once.
-    try { updateHomeGreeting(); } catch (e) { /* cosmetic */ }
-  }
-
-  // Current Firebase uid (if any), sent along with create/join so the server
-  // can link a room seat to a real account and later record stats against
-  // it. Safe to call anytime -- returns null before sign-in has finished,
-  // in which case that player's games just won't have stats saved (same as
-  // any guest who never gets linked to an account).
-  function currentFirebaseUid() {
-    const user = window.LCAuth && window.LCAuth.getUser();
-    return user ? user.uid : null;
-  }
-
-  // Short-lived Firebase ID token, sent instead of the raw uid on every
-  // create/join/stats call. The server independently verifies this itself
-  // (admin.auth().verifyIdToken()) instead of trusting whatever uid a client
-  // claims -- sending the uid string alone would let anyone who opens dev
-  // tools type in someone else's real uid and have stats/results attributed
-  // to that stranger's account. Resolves to null before sign-in has
-  // finished, same as currentFirebaseUid() above -- the server treats that
-  // the same as any other guest whose account isn't linked yet.
-  // Our own Firebase uid. Group payloads identify people by uid (never by
-  // playerId, which is per-room and changes every session), so the screen
-  // needs this to tell which row is us.
-  function myFirebaseUid() {
-    const user = window.LCAuth && window.LCAuth.getUser();
-    return user ? user.uid : null;
-  }
-
-  // --------------------------------------------------------------------
-  // WAIT for sign-in rather than giving up on it.
-  //
-  // Firebase's anonymous sign-in is asynchronous, and LCAuth.getUser() is
-  // null until it resolves. This function used to return null in that
-  // window -- and the server turns a null token into
-  //   "Could not identify you -- try again in a moment."
-  // for EVERY group action (join/raise hand, chat, start marathon, start
-  // game; see verifyFirebaseToken in server.js). Reported by real players
-  // who entered a group code and were refused.
-  //
-  // First-time visitors are hit hardest: they need a full anonymous
-  // SIGN-UP round trip, not a cached-token refresh -- which is exactly the
-  // person arriving from a shared WhatsApp link on mobile data. A returning
-  // player's session is already in IndexedDB and resolves almost at once,
-  // which is why this looked like "works for some people, not others".
-  //
-  // This is very likely the same root cause as the group-start deadlock
-  // hunt, where LCAuth.getUser() was found returning null inside a client
-  // that was otherwise working. That one was worked around by removing the
-  // dependency; this fixes the cause.
-  // --------------------------------------------------------------------
-  const AUTH_WAIT_MS = 8000;
-  let authReadyPromise = null;
-
-  function whenFirebaseUser() {
-    const existing = window.LCAuth && window.LCAuth.getUser();
-    if (existing) return Promise.resolve(existing);
-    if (!window.LCAuth) return Promise.resolve(null);
-    if (!authReadyPromise) {
-      authReadyPromise = new Promise((resolve) => {
-        let settled = false;
-        const finish = (u) => {
-          if (settled) return;
-          settled = true;
-          resolve(u || null);
-        };
-        // Bounded. A sign-in that never completes must not leave a button
-        // dead forever -- after the timeout we hand back null, the server
-        // refuses with its own message, and the player can retry. Clearing
-        // the cached promise is what makes that retry a FRESH wait rather
-        // than an instant replay of this null.
-        const timer = setTimeout(() => { authReadyPromise = null; finish(null); }, AUTH_WAIT_MS);
-        window.LCAuth.onUserChange((u) => {
-          if (!u) return;
-          clearTimeout(timer);
-          finish(u);
-        });
-      });
-    }
-    return authReadyPromise;
-  }
-
-  async function currentFirebaseIdToken() {
-    let user = window.LCAuth && window.LCAuth.getUser();
-    if (!user) user = await whenFirebaseUser();
-    if (!user) return null;
-    try {
-      return await user.getIdToken();
-    } catch (e) {
-      console.warn('[Firebase] Failed to get ID token:', e.message);
-      return null;
-    }
-  }
-
-  // Thin, always-safe wrapper around window.LCAnalytics.log -- so every call
-  // site below doesn't need its own existence check. A handful of funnel
-  // events only (room created/joined, solo game started, game completed,
-  // player reported) -- not every click, just enough to see whether the app
-  // is actually growing and where people drop off.
-  function logAnalytics(name, params) {
-    if (window.LCAnalytics) window.LCAnalytics.log(name, params);
-    try {
-      if (SERVER_EVENTS.has(name)) trackOnServer(params && params.via_invite ? { e: name, via: 'invite' } : { e: name });
-    } catch (e) { /* analytics only */ }
-  }
-
-  // --------------------------------------------------------------------
-  // Our own analytics (Nov 2026). The few events the Admin reports need also
-  // go to our own server -- event names and counts only, never a name or
-  // anything typed (see game/analytics.js on the server). Google Analytics
-  // keeps getting everything it got before.
-  //
-  // Once per connection the app says hello: which account this is (proved by
-  // its sign-in token, never a bare id) and app or website -- that is the
-  // "opened the app today" count. Events wait until the hello has gone, so
-  // each one is counted for the right account.
-  // --------------------------------------------------------------------
-  const SERVER_EVENTS = new Set([
-    'invite_shared', 'invite_shared_whatsapp', 'invite_link_opened', 'room_joined', 'room_joined_midgame',
-    'tutorial_started', 'tutorial_completed', 'tutorial_skipped', 'tutorial_declined',
-    'install_prompt_shown', 'install_prompt_accepted',
-  ]);
-  let helloSent = false;
-  const pendingTrack = [];
-  function trackOnServer(ev) {
-    try {
-      if (!socket.connected || !helloSent) {
-        if (pendingTrack.length < 100) pendingTrack.push(ev);
-        return;
-      }
-      socket.emit('track', ev);
-    } catch (e) { /* analytics only */ }
-  }
-  async function helloServer() {
-    helloSent = false;
-    try {
-      const firebaseIdToken = await currentFirebaseIdToken();
-      if (!socket.connected) return;     // the next connect says hello again
-      socket.emit('track', { e: 'hello', firebaseIdToken, platform: CLIENT_PLATFORM });
-    } catch (e) { /* analytics only */ }
-    helloSent = true;
-    while (pendingTrack.length && socket.connected) socket.emit('track', pendingTrack.shift());
-  }
-  socket.on('connect', helloServer);
-  socket.on('disconnect', () => { helloSent = false; });
-  if (socket.connected) helloServer();
-  // admob-init.js reports each ad through this (it queues until this exists).
-  window.LCTrack = trackOnServer;
-  if (Array.isArray(window.__lcTrackQueue)) window.__lcTrackQueue.splice(0).forEach(trackOnServer);
-
-  // ---------------- optional Google sign-in (non-blocking) ----------------
-  // Small status line + button on the landing screen only. A guest can keep
-  // playing without ever touching this -- it's purely an upgrade path so
-  // their stats can follow them to another device later, via the same
-  // linkWithPopup() flow in firebase-init.js that preserves their uid.
-  const googleSigninBtn = document.getElementById('btn-google-signin');
-  const signinStatusEl = document.getElementById('signin-status');
-
-  // Hides the whole signin row (status text AND button) rather than just the
-  // button, so the Profile panel doesn't keep a stranded "Playing as Guest"
-  // label with nothing to do about it -- and so the failed-sign-in error
-  // that was rendering into this row can't appear either.
-  const signinRowEl = document.querySelector('.signin-row');
-  if (!FEATURES.googleSignIn && signinRowEl) signinRowEl.classList.add('hidden');
-
-  function updateSigninUI(user) {
-    if (!FEATURES.googleSignIn) return;
-    if (!googleSigninBtn || !signinStatusEl) return;
-    if (user && !user.isAnonymous) {
-      const label = user.displayName || user.email || 'Google account';
-      signinStatusEl.textContent = `Signed in as ${label}`;
-      googleSigninBtn.classList.add('hidden');
-    } else {
-      signinStatusEl.textContent = 'Playing as Guest';
-      googleSigninBtn.classList.remove('hidden');
-    }
-  }
-
-  if (googleSigninBtn) {
-    googleSigninBtn.onclick = async () => {
-      googleSigninBtn.disabled = true;
-      googleSigninBtn.textContent = 'Signing in...';
-      // TEMPORARY instrumentation block (debugging native-app sign-in "shows
-      // nothing" report, Sept 2026) -- two things were true before this:
-      // (1) any error was caught and only console.warn'd, invisible without
-      // a USB debugger attached to the phone; (2) if the native call never
-      // resolves OR rejects at all (e.g. a WebView-blocked popup that just
-      // sits there forever, which is what happens if the native Capacitor
-      // Firebase plugin isn't actually wired into this build), there'd be no
-      // error to even catch -- the button would just silently sit on
-      // "Signing in..." forever with nothing to look at. The timeout race
-      // below turns THAT case into a visible message too. Safe to remove
-      // once the native sign-in issue is confirmed fixed.
-      const timeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('TIMEOUT: no response from Google sign-in after 15s -- the native call likely never started (plugin not registered in this build?) rather than failing outright.')), 15000)
-      );
-      try {
-        await Promise.race([window.LCAuth.signInWithGoogle(), timeout]);
-      } catch (e) {
-        // Most common cases: the user closed the Google popup, or the
-        // browser blocked it -- neither is a real error worth alarming
-        // anyone over, just let them try again.
-        console.warn('[Firebase] Google sign-in did not complete:', e.message);
-        if (signinStatusEl) {
-          signinStatusEl.textContent = `Sign-in failed: ${e.code || 'no code'} - ${e.message || e}`;
-        }
-      } finally {
-        googleSigninBtn.disabled = false;
-        googleSigninBtn.textContent = 'Sign in with Google';
-      }
-    };
-  }
-
-  // ---------------- RATING (Nov 2026) ----------------
-  // A chess-style number, worked out on the server after every rated game
-  // (3+ rounds, against friends, bots or both -- the rules are in
-  // game/rating.js). Shown the chess.com way, as plain text in brackets
-  // right after the name -- "Ravi (455)", the number bold in our gold -- on
-  // the chairs, the lobby and the result screen; and as a card at the top of
-  // the Profile panel. No badges and no rank names (Mani, Nov 2026: the
-  // coloured chips looked like notification stickers). Every number comes
-  // from the server; nothing is worked out here.
-  const RATING_NEW_GAMES = 10;
-  // "(455)", for after a name. The number only: a rating is never a string
-  // from the network that could carry markup.
-  function ratingBracketHtml(rating) {
-    return '<span class="rating-br">(<b>' + Math.round(Number(rating) || 0) + '</b>)</span>';
-  }
-  function ratingDeltaHtml(delta) {
-    const d = Math.round(Number(delta) || 0);
-    const cls = d > 0 ? 'up' : (d < 0 ? 'down' : 'flat');
-    const text = d > 0 ? '+' + d : (d < 0 ? '\u2212' + Math.abs(d) : '\u00b10');
-    return '<span class="rating-delta ' + cls + '">' + text + '</span>';
-  }
-  const RATING_UNRATED = {
-    people: 'Not rated: there was nobody to compare you with.',
-    short: 'Not rated: a game needs 3 or more rounds to count.',
-    error: 'Your rating could not be updated this time.',
-  };
-
-  // The changes from the current game, once the server has them: at game
-  // over -- or earlier, when you are knocked out of a game only bots are
-  // still playing, or walk out of one (Nov 2026). Arrives as rating_update,
-  // and inside every room_update, so a reconnect still finds it; the room's
-  // copy is cleared when the next game is dealt, and ours with it.
-  let latestRatingUpdate = null;
-  let ratingPendingTimer = null;
-  // Your seat in the game you just walked out of: its numbers arrive after
-  // you are back on the menu, as a short note.
-  let ratingLeftAs = null;
-  socket.on('rating_update', (u) => {
-    latestRatingUpdate = u || null;
-    try { playerStatsCache.clear(); } catch (e) { /* not built yet */ }
-    renderGameOverRatings();
-    renderRoundRating();
-    const mine = !myRoomCode && ratingLeftAs && u && u.rated && u.changes ? u.changes[ratingLeftAs] : null;
-    if (mine) { ratingLeftAs = null; showRatingToast(mine, 'You left early, so it counts as last'); }
-  });
-  socket.on('room_update', (room) => {
-    if (!room || !('ratingUpdate' in room)) return;
-    const u = room.ratingUpdate || null;
-    if (JSON.stringify(u) === JSON.stringify(latestRatingUpdate)) return;
-    latestRatingUpdate = u;
-    renderGameOverRatings();
-    renderRoundRating();
-  });
-
-  let ratingAnimRaf = 0;
-  function renderGameOverRatings() {
-    const box = document.getElementById('gameover-rating');
-    const overlay = document.getElementById('overlay-gameover');
-    if (!box || !overlay || overlay.classList.contains('hidden')) return;
-    const u = latestRatingUpdate;
-    // Everyone's change, under their name in the standings -- and a bot's
-    // fixed rating, which never changes.
-    document.querySelectorAll('#gameover-body .gameover-row').forEach((row) => {
-      const slot = row.querySelector('.go-rating');
-      if (!slot) return;
-      const pid = row.dataset.playerId;
-      const c = u && u.rated && u.changes ? u.changes[pid] : null;
-      const bot = !c && latestRoom && Array.isArray(latestRoom.players)
-        ? latestRoom.players.find((x) => x.playerId === pid && x.isBot) : null;
-      slot.innerHTML = c ? ratingBracketHtml(c.after) + ' ' + ratingDeltaHtml(c.delta)
-        : (bot && typeof bot.rating === 'number' ? ratingBracketHtml(bot.rating) : '');
-      slot.classList.toggle('hidden', !slot.innerHTML);
-    });
-    if (!u) return;   // still "Updating..." (see showGameOver)
-    clearTimeout(ratingPendingTimer);
-    fillYourRating(box, u);
-  }
-
-  // Knocked out of a game only bots are still playing (Nov 2026): your place
-  // is settled, so the rating is worked out at once and shows on that
-  // round's result -- not after the bots finish.
-  function renderRoundRating() {
-    const box = document.getElementById('round-rating');
-    if (!box) return;
-    const u = latestRatingUpdate;
-    const g = latestGame;
-    const mineOrNote = u && (u.rated ? u.changes && u.changes[myPlayerId] : currentFirebaseUid());
-    if (!u || !g || g.gameOver || u.round !== g.roundNumber || !mineOrNote) {
-      box.className = 'go-rating-card hidden';
-      box.innerHTML = '';
-      box.dataset.shown = '';
-      return;
-    }
-    fillYourRating(box, u);
-  }
-
-  // "Your rating" on either card, counted up from the old number. A game
-  // that did not count says why -- except to someone with no account, who
-  // has no rating to show.
-  function fillYourRating(box, u) {
-    if (!u.rated) {
-      box.dataset.shown = '';
-      if (!currentFirebaseUid()) { box.className = 'go-rating-card hidden'; box.innerHTML = ''; return; }
-      box.className = 'go-rating-card note';
-      box.innerHTML = '<span class="gr-note">' + escapeHtml(RATING_UNRATED[u.reason] || RATING_UNRATED.error) + '</span>';
-      return;
-    }
-    const mine = u.changes && u.changes[myPlayerId];
-    if (!mine) { box.className = 'go-rating-card hidden'; box.innerHTML = ''; return; }
-    const key = JSON.stringify(mine);
-    if (box.dataset.shown === key) return;   // already counted up
-    box.dataset.shown = key;
-    const games = Number(mine.ratedGames) || 0;
-    box.className = 'go-rating-card' + (mine.delta > 0 ? ' gain' : (mine.delta < 0 ? ' loss' : ''));
-    box.innerHTML =
-      '<div class="gr-label">Your rating</div>' +
-      '<div class="gr-main"><span class="gr-num">' + mine.before + '</span>' + ratingDeltaHtml(mine.delta) + '</div>' +
-      (mine.newPlayer
-        ? '<div class="gr-new"><span>New player \u00b7 ' + games + ' of ' + RATING_NEW_GAMES + ' games</span>' +
-          '<span class="r-bar"><i style="width:' + Math.round(games / RATING_NEW_GAMES * 100) + '%"></i></span></div>'
-        : '') +
-      (u.half ? '<div class="gr-half">Half points: 6th game with the same people today</div>' : '');
-    // Count from the old number to the new one.
-    const numEl = box.querySelector('.gr-num');
-    const t0 = performance.now();
-    const DUR = 900;
-    cancelAnimationFrame(ratingAnimRaf);
-    const step = (now) => {
-      const k = Math.min(1, (now - t0) / DUR);
-      const e = 1 - Math.pow(1 - k, 3);
-      numEl.textContent = String(Math.round(mine.before + (mine.after - mine.before) * e));
-      if (k < 1) ratingAnimRaf = requestAnimationFrame(step);
-      else box.classList.add('done');
-    };
-    ratingAnimRaf = requestAnimationFrame(step);
-  }
-
-  // The Profile panel's card. Fresh from the server each time the panel
-  // opens -- the same get_my_stats call My stats uses.
-  function renderProfileRating(box, st) {
-    const rating = Number(st.rating) || 300;
-    const games = Number(st.ratedGames) || 0;
-    const total = Number(st.newPlayerGames) || RATING_NEW_GAMES;
-    box.className = 'pr-card';
-    box.innerHTML =
-      '<div class="pr-label">Your rating</div>' +
-      '<div class="pr-main"><span class="pr-num">' + rating + '</span>' +
-        (games > 0 ? '<span class="pr-last">' + ratingDeltaHtml(st.lastRatingChange) + ' last game</span>' : '') + '</div>' +
-      '<div class="pr-meta">Best ' + Math.max(Number(st.peakRating) || rating, rating) + ' \u00b7 ' + games + ' rated game' + (games === 1 ? '' : 's') + '</div>' +
-      (games < total
-        ? '<div class="pr-new"><span>' + (games === 0 ? 'Play a game of 3+ rounds to start your rating'
-          : 'New player \u00b7 ' + games + ' of ' + total + ' games') + '</span>' +
-          '<span class="r-bar"><i style="width:' + Math.round(games / total * 100) + '%"></i></span></div>'
-        : '') +
-      '<details class="pr-how"><summary>How rating works</summary><p>Everyone starts at 300. Finish above a player and you take points from them, more for beating a stronger player. ' +
-      'Games with friends and with bots count (3 or more rounds); every bot has its own fixed rating. Leaving early counts as last. Your first 10 games move faster.</p></details>';
-  }
-  // A short note at the bottom of the menu: the rating from a game you just
-  // walked out of.
-  let ratingToastTimer = null;
-  function showRatingToast(mine, note) {
-    let el = document.getElementById('rating-toast');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'rating-toast';
-      el.setAttribute('role', 'status');
-      document.body.appendChild(el);
-    }
-    el.className = 'rating-toast';
-    el.innerHTML = '<span class="rt-label">Your rating</span><b class="rt-num">' + Math.round(Number(mine.after) || 0) + '</b>'
-      + ratingDeltaHtml(mine.delta) + (note ? '<span class="rt-note">' + escapeHtml(note) + '</span>' : '');
-    clearTimeout(ratingToastTimer);
-    ratingToastTimer = setTimeout(() => { el.className = 'rating-toast hidden'; }, 5000);
-  }
-
-  // What walking out costs, for the leave dialog -- only when it costs
-  // something: 3+ rounds in, still playing, and an account to rate.
-  function leaveRatingNote() {
-    const g = latestGame;
-    if (!g || g.gameOver || !currentFirebaseUid() || amSpectator()) return '';
-    return (g.roundHistory || []).length >= 3 ? ' It counts as last place for your rating.' : '';
-  }
-
-  async function loadProfileRating() {
-    const box = document.getElementById('profile-rating');
-    if (!box) return;
-    if (!currentFirebaseUid()) { box.classList.add('hidden'); return; }
-    let firebaseIdToken = null;
-    try { firebaseIdToken = await currentFirebaseIdToken(); } catch (e) { /* not signed in */ }
-    if (!firebaseIdToken) { box.classList.add('hidden'); return; }
-    socket.emit('get_my_stats', { firebaseIdToken }, (res) => {
-      if (!res || !res.ok || !res.stats || typeof res.stats.rating !== 'number') { box.classList.add('hidden'); return; }
-      renderProfileRating(box, res.stats);
-    });
-  }
-
-  // ---------------- "My Stats" (own games played / wins) ----------------
-  // Reads the same `users` Firestore doc recordGameResult() already writes
-  // to -- this button just exposes it. Works for guests too (they already
-  // accumulate stats on this device once anonymous sign-in finishes), not
-  // only Google-linked accounts.
-  const myStatsBtn = document.getElementById('btn-my-stats');
-  if (myStatsBtn) {
-    myStatsBtn.onclick = async () => {
-      // It lives in the profile panel now (Oct 2026): the stats replace it.
-      const profilePanel = document.getElementById('profile-menu-panel');
-      if (profilePanel) profilePanel.classList.add('hidden');
-      const body = document.getElementById('my-stats-body');
-      body.innerHTML = '<p class="hint">Loading...</p>';
-      document.getElementById('overlay-my-stats').classList.remove('hidden');
-      const uid = currentFirebaseUid();
-      if (!uid) {
-        body.innerHTML = '<p class="hint">Still signing you in -- try again in a second.</p>';
-        return;
-      }
-      const firebaseIdToken = await currentFirebaseIdToken();
-      socket.emit('get_my_stats', { firebaseIdToken }, (res) => {
-        if (!res || !res.ok) {
-          body.innerHTML = `<p class="error">${escapeHtml((res && res.error) || 'Could not load stats.')}</p>`;
-          return;
-        }
-        const gamesPlayed = Number(res.stats.gamesPlayed) || 0;
-        const wins = Number(res.stats.wins) || 0;
-        const winRate = gamesPlayed > 0 ? Math.round((wins / gamesPlayed) * 100) : 0;
-        // v2: three number tiles side by side, wins in gold.
-        body.innerHTML =
-          '<div class="stat-tiles">' +
-            `<div class="stat-tile"><b>${gamesPlayed}</b><span>Games</span></div>` +
-            `<div class="stat-tile wins"><b>${wins}</b><span>Wins</span></div>` +
-            `<div class="stat-tile"><b>${winRate}%</b><span>Win rate</span></div>` +
-          '</div>' +
-          (gamesPlayed === 0 ? '<p class="hint">Play a game to start building your stats!</p>' : '');
-      });
-    };
-  }
-  const closeMyStatsBtn = document.getElementById('btn-close-my-stats');
-  if (closeMyStatsBtn) {
-    closeMyStatsBtn.onclick = () => document.getElementById('overlay-my-stats').classList.add('hidden');
-  }
-
-  // ---------------- Remove Ads purchase (native app only) ----------------
-  // Reads whatever RevenueCat offering/package is configured server-side
-  // (see revenuecat-init.js) rather than hardcoding a product id here, so
-  // swapping from the Test Store to the real Play Store product later needs
-  // no changes on this side -- just the API key.
-  let adsRemoved = false;
-  // Rewarded-ad preload state. Declared HERE, beside the other ad flags, rather
-  // than next to the rewarded-ad code far below -- the join preload fires from
-  // the join_room callback around L3000, which is earlier in the file than that
-  // code. It would have worked (callbacks run long after this module finishes),
-  // but a `const` referenced a thousand lines above its declaration is the
-  // exact shape that has caused a silent temporal-dead-zone failure in this
-  // file before. Not worth the reasoning; move the declaration.
-  const adPreloadedFor = { rejoin: false, join: false };
-
-  // ---- Bot difficulty ----
-  // Picks WHICH characters take the seats, not how well any of them plays --
-  // the tier orders live in server.js (BOT_TIERS). Remembered per device so
-  // someone who likes Hard is not re-choosing it every session.
-  const BOT_DIFFICULTY_KEY = 'leastcount_bot_difficulty';
-  function botDifficulty() {
-    const el = document.getElementById('input-bot-difficulty');
-    const v = el && el.value;
-    return (v === 'easy' || v === 'hard') ? v : 'medium';
-  }
-  function rememberBotDifficulty(v) {
-    try { localStorage.setItem(BOT_DIFFICULTY_KEY, v); } catch (e) { /* session only */ }
-  }
-  function restoreBotDifficulty() {
-    let saved = 'medium';
-    try { saved = localStorage.getItem(BOT_DIFFICULTY_KEY) || 'medium'; } catch (e) { /* fine */ }
-    ['input-bot-difficulty', 'lobby-bot-difficulty'].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.value = saved;
-    });
-  }
-  const removeAdsBtn = document.getElementById('btn-remove-ads');
-
-  // Developer override: forces ads back on for THIS device even when the
-  // Remove Ads entitlement is active. Exists because making a test purchase
-  // permanently hides every ad on the tester's own phone, which then makes
-  // it impossible to check ad work without borrowing somebody else's device.
-  //
-  // Purely a display override -- it does not touch the purchase, the
-  // entitlement, or RevenueCat in any way, and it only affects the phone
-  // it's typed on. Turn on from the chrome://inspect console with:
-  //   localStorage.setItem('lc_force_ads','1'); location.reload();
-  // and off again with:
-  //   localStorage.removeItem('lc_force_ads'); location.reload();
-  let forceAdsForTesting = false;
-  try {
-    forceAdsForTesting = localStorage.getItem('lc_force_ads') === '1';
-  } catch (e) { /* storage blocked -- behave normally */ }
-  if (forceAdsForTesting) {
-    console.log('[AdMob] lc_force_ads is ON -- ads shown even though Remove Ads may be purchased.');
-  }
-
-  async function refreshRemoveAdsUI() {
-    if (!removeAdsBtn || !window.LCPurchases || !window.LCPurchases.isReady()) return;
-    try {
-      // Make sure RevenueCat has finished switching identity to the current
-      // Firebase uid before checking entitlements -- identify() is kicked
-      // off separately (fire-and-forget) from firebase-init.js, so without
-      // this the check can race ahead and run against the wrong (default
-      // anonymous) customer right after a fresh app launch, wrongly
-      // reporting "not purchased" even though it was.
-      if (window.LCPurchases.whenIdentified) await window.LCPurchases.whenIdentified();
-      // NOTE: confirmed directly from a live customerInfo response --
-      // entitlements.active is keyed by "remove ads" (with a literal space
-      // in it, since that's exactly how the entitlement's identifier was
-      // typed when it was created in the RevenueCat dashboard). Not
-      // "removeads" (that's actually the PRODUCT's identifier, a separate
-      // resource) and not "remove_ads" -- this exact string, space and all.
-      adsRemoved = await window.LCPurchases.isEntitled('remove ads');
-    } catch (e) {
-      adsRemoved = false;
-    }
-    // Applied after the real check, so the entitlement is still read and
-    // logged normally -- this only overrides what the UI does about it.
-    if (forceAdsForTesting) adsRemoved = false;
-    if (adsRemoved) {
-      removeAdsBtn.classList.add('hidden');
-      if (window.LCAds) window.LCAds.hideBanner();
-    } else if (FEATURES.removeAdsPurchase) {
-      removeAdsBtn.classList.remove('hidden');
-    } else {
-      // Purchase hidden for launch. Note this branch is reached only when
-      // adsRemoved is FALSE -- the entitlement check above still ran, and an
-      // existing purchaser took the branch before this one and kept their
-      // ad-free experience. Hiding the button sells to nobody new; it takes
-      // nothing away from anyone who already paid.
-      removeAdsBtn.classList.add('hidden');
-    }
-  }
-
-  if (removeAdsBtn) {
-    removeAdsBtn.onclick = async () => {
-      if (!window.LCPurchases) return;
-      removeAdsBtn.disabled = true;
-      const originalLabel = removeAdsBtn.textContent;
-      removeAdsBtn.textContent = 'Please wait...';
-      try {
-        const offering = await window.LCPurchases.getOfferings();
-        const pkg = offering && offering.availablePackages && offering.availablePackages[0];
-        if (!pkg) {
-          alert('Remove Ads is not available right now -- please try again later.');
-          return;
-        }
-        await window.LCPurchases.purchasePackage(pkg);
-        // The purchase itself always goes through; the override only decides
-        // whether THIS device then acts on it, so a tester can buy again and
-        // still keep seeing ads to check them.
-        adsRemoved = !forceAdsForTesting;
-        removeAdsBtn.classList.add('hidden');
-        if (window.LCAds) window.LCAds.hideBanner();
-        if (window.LCAnalytics) window.LCAnalytics.log('ads_removed_purchase');
-        alert('Ads removed -- thanks for supporting Least Count!');
-      } catch (e) {
-        // Most common case: the player backed out of the purchase sheet --
-        // not a real error worth alarming anyone over.
-        if (!(e && (e.userCancelled || e.code === 'PURCHASE_CANCELLED'))) {
-          console.warn('[RevenueCat] purchase failed:', e && e.message);
-          alert('Something went wrong with the purchase. Please try again.');
-        }
-      } finally {
-        removeAdsBtn.disabled = false;
-        removeAdsBtn.textContent = originalLabel;
-      }
-    };
-  }
-
-  // Re-check whenever the signed-in Firebase user becomes known (guest or
-  // Google) -- this is what actually triggers RevenueCat's identify() call
-  // over in firebase-init.js, so checking here (rather than after a fixed
-  // delay) means we're never checking entitlements before that's fired.
-  // Safe no-op on the regular website either way, since
-  // LCPurchases.isReady() just stays false there.
-  if (window.LCAuth) {
-    window.LCAuth.onUserChange(() => refreshRemoveAdsUI());
-  }
-  // Fallback in case LCAuth's user was already known before this file ran.
-  setTimeout(refreshRemoveAdsUI, 1500);
-
-  let latestRoom = null;
-  let latestGame = null;
-
-  // ==================================================================
-  // TUTORIAL (position-based)
-  //
-  // Seven hand-built positions, not a real game. Each one is a synthetic
-  // state object fed to the SAME renderGame() the live game uses, so the
-  // learner is looking at the real interface with real cards -- it is only
-  // the situation that is staged.
-  //
-  // Why positions rather than a played game, which is where this started:
-  // a real game cannot guarantee its own lessons. The +2 chain needs a bot
-  // to throw a 2 at you at the right moment, and the wild rank needs to
-  // matter in your hand. Neither is controllable without scripting the
-  // bots, and a scripted bot is a fake game with extra steps. Staging the
-  // position is the honest version of the same trick.
-  //
-  // Nothing here touches the server. No room is created, no socket message
-  // is sent, nothing is recorded, and it works with no connection at all.
-  // The only cost is that the learner is not really playing -- which is
-  // why it ends by pointing them at a real game against bots.
-  // ==================================================================
-  const Tutorial = (() => {
-    const DONE_KEY = 'leastcount_tutorial_done';
-    const ME = 'tut-me';
-    let active = false;
-    let idx = 0;            // the position (step)
-    let beat = 0;           // where we are inside it
-    let doneShown = false;  // showing the step's result line, after its move
-    let nudgeText = null;   // a correction, in place of the beat's own words
-    let lastIds = null;     // the cards the learner just played
-    let savedGame = null;
-    let savedRoom = null;
-    let savedPlayerId = null;
-
-    // A full, plausible public state. Every field renderGame() and
-    // renderOvalTable() read is present, because a missing one shows up as
-    // a blank seat or a thrown error rather than a nice default.
-    function state(o) {
-      const hand = (o.hand || []).map((r, i) => ({ id: 'tc' + i, rank: r, suit: SUIT_FOR(r, i) }));
-      return Object.assign({
-        roundNumber: 1,
-        turnOrder: [ME, 'tut-b1', 'tut-b2'],
-        currentPlayer: ME,
-        openCard: { id: 'topen', rank: o.open || '7', suit: '♦' },
-        roundJokerRank: o.wild || null,
-        chainCount: o.chain || 0,
-        stockCount: 40,
-        reshuffleCount: 0,
-        scores: { [ME]: 0, 'tut-b1': 0, 'tut-b2': 0 },
-        eliminationScore: 200,
-        eliminated: [], quit: [], rejoinsUsed: [],
-        roundOver: false, gameOver: false, winner: null,
-        lastRoundResult: null, roundHistory: [],
-        handCounts: { [ME]: hand.length, 'tut-b1': 9, 'tut-b2': 11 },
-        discardHistory: {},
-        yourHand: hand,
-        yourHandValue: hand.reduce((s, c) => s + cardPoints(c, o.wild || null), 0),
-        autoNextRoundInMs: null,
-      }, o.extra || {});
-    }
-    // Suits are cosmetic here, but a hand of all-diamonds looks wrong and
-    // distracts from the lesson.
-    function SUIT_FOR(rank, i) { return ['♠', '♥', '♦', '♣'][i % 4]; }
-
-    function room() {
-      return {
-        code: 'LEARN',
-        hostPlayerId: ME,
-        players: [
-          { playerId: ME, name: getPlayerName() || 'You', isBot: false, connected: true },
-          { playerId: 'tut-b1', name: 'Bot 1', isBot: true, connected: true },
-          { playerId: 'tut-b2', name: 'Bot 2', isBot: true, connected: true },
-        ],
-      };
-    }
-
-    // The table straight after the learner's move, so the result line can
-    // point at what really happened: the played cards are on the open pile
-    // and out of the hand (or the penalty cards are in it), and it is the
-    // next player's turn.
-    function withHand(g, hand, extra) {
-      return Object.assign({}, g, {
-        yourHand: hand,
-        handCounts: Object.assign({}, g.handCounts, { [ME]: hand.length }),
-        yourHandValue: hand.reduce((s, c) => s + cardPoints(c, g.roundJokerRank), 0),
-        currentPlayer: 'tut-b1',
-      }, extra || {});
-    }
-    function afterMove(g, ids, extra) {
-      const mine = g.yourHand || [];
-      const thrown = mine.filter((c) => ids.indexOf(c.id) !== -1);
-      return withHand(g, mine.filter((c) => ids.indexOf(c.id) === -1),
-        Object.assign({ openCard: thrown.length ? thrown[thrown.length - 1] : g.openCard }, extra || {}));
-    }
-    function tookTwo(g) {
-      const extra = [{ id: 'tp0', rank: 'Q', suit: '♥' }, { id: 'tp1', rank: '6', suit: '♣' }];
-      return withHand(g, (g.yourHand || []).concat(extra), { chainCount: 0 });
-    }
-
-    // ---- where to look ----
-    // Each returns what is on screen right now: the table is redrawn between
-    // beats, so nothing here is ever kept.
-    function el(id) { return document.getElementById(id); }
-    // The open card and the joker with their labels ("Open Card", "Joker",
-    // "Every 8 = 0"), so the words in the spotlight match the words above.
-    function pile(id) {
-      const n = el(id);
-      return [n && n.closest ? (n.closest('.pile-group') || n) : n];
-    }
-    function tilesOfRank(r) {
-      return Array.prototype.filter.call(document.querySelectorAll('#hand .card'), (c) => {
-        const k = c.querySelector && c.querySelector('.corner-rank');
-        return !!k && k.textContent === r;
-      });
-    }
-    // The cards themselves, not the tray: the tray is taller than one row of
-    // cards, and a spotlight that is half empty space points at nothing.
-    function cards() { return Array.prototype.slice.call(document.querySelectorAll('#hand .card')); }
-    const AT = {
-      hand: () => (cards().length ? cards() : [el('hand')]),
-      value: () => [el('hand-value-pill')],
-      open: () => pile('open-card-slot'),
-      joker: () => pile('joker-indicator'),
-      discard: () => [el('btn-discard')],
-      declare: () => [el('btn-declare')],
-    };
-    const rank = (r) => () => tilesOfRank(r);
-    // The rank of the cards picked right now, or null for none or a mix.
-    function pickedRank(g) {
-      const ranks = [...selectedIds].map((id) => rankOf(g, id));
-      return ranks.length && ranks.every((r) => r === ranks[0]) ? ranks[0] : null;
-    }
-
-    // ---- the seven positions, each walked through in beats ----
-    // TELLING WAS NOT ENOUGH (Nov 2026). The old lesson was a line of text
-    // per step: learners read about "the open card" and "Discard" without
-    // knowing where on the screen those were, and few came back to play.
-    // Now every beat SHOWS: a spotlight on exactly the thing it talks about
-    // (the rest of the screen dims) and, when the learner has to act, a
-    // finger on what to tap. `wait: 'pick'` waits for the right cards to be
-    // picked, `wait: 'move'` for the move itself (Discard, a 2, Least
-    // Count!); a beat without `wait` has a Got it button. `done` is the
-    // line shown once the move is made, with the table showing the result.
-    const STEPS = [
-      {
-        build: () => state({ hand: ['K', 'Q', '9', '4', 'A', '10'], open: '7' }),
-        beats: [
-          { at: AT.hand, text: 'These are your cards. Each card has points: J, Q, K are 10, A is 1, the others are their number.' },
-          // Read off the state, never typed out: an early version said 34
-          // about a hand worth 44, in the very first lesson.
-          { at: AT.value, text: (g) => 'Your cards add up to ' + g.yourHandValue + ' points. Fewest points wins, so you want this number small.' },
-        ],
-      },
-      {
-        build: () => state({ hand: ['7', 'K', '9', '4', 'A'], open: '7' }),
-        want: (ids, g) => ids.length === 1 && rankOf(g, ids[0]) === '7',
-        beats: [
-          { at: AT.open, text: 'This is the open card: a 7. Every turn you throw cards here, then pick up one new card.' },
-          { at: rank('7'), point: rank('7'), wait: 'pick', ready: (g) => pickedRank(g) === '7', text: 'You also have a 7. Tap it.' },
-          { at: AT.discard, point: AT.discard, wait: 'move', text: 'Now tap Discard.' },
-        ],
-        after: (g, ids) => afterMove(g, ids),
-        done: { at: AT.open, text: 'Your 7 matched the open card, so you did not pick up a card. Matching is free!' },
-        nudge: 'Tap your 7 first (it matches the open card), then tap Discard.',
-      },
-      {
-        build: () => state({ hand: ['10', '10', '10', '4', 'A'], open: '7' }),
-        want: (ids, g) => ids.length === 3 && rankOf(g, ids[0]) === '10',
-        beats: [
-          { at: rank('10'), point: rank('10'), wait: 'pick', ready: (g) => pickedRank(g) === '10' && selectedIds.size === 3,
-            text: 'Same cards stack together: this pile is your three 10s. Tap it and all three are picked.' },
-          { at: AT.discard, point: AT.discard, wait: 'move', text: 'Tap Discard. Three cards go out, and you pick up only one.' },
-        ],
-        nudge: 'Tap the pile of 10s, then tap Discard.',
-      },
-      {
-        build: () => state({ hand: ['4', 'A', 'K'], open: '10' }),
-        beats: [
-          { at: rank('K'), text: 'Your 10s did not match the open card, so you picked up one card: this King.' },
-          { at: AT.value, text: 'Still a great trade: 35 points went down to 15.' },
-        ],
-      },
-      {
-        build: () => state({ hand: ['8', '8', 'K', '4'], open: '10', wild: '8' }),
-        beats: [
-          { at: AT.joker, text: 'Every round has a joker. This round it is 8.' },
-          { at: rank('8'), text: 'So your 8s are worth 0 points. Keep them!' },
-        ],
-      },
-      {
-        build: () => state({ hand: ['2', 'K', '9', '4'], open: '2', chain: 1 }),
-        // Either way through is fine: pass it on with a 2, or take the cards.
-        want: (ids, g) => ids.length === 0 || (ids.length === 1 && rankOf(g, ids[0]) === '2'),
-        beats: [
-          { at: AT.open, text: 'Someone played a 2 at you! A 2 means: pick up 2 cards, unless you play a 2 back.' },
-          // No Discard here: during a +2 the button hides and tapping a 2
-          // plays it straight away (submitChainTwo).
-          { at: rank('2'), point: rank('2'), wait: 'move', text: 'You have a 2. Tap it to pass the attack to the next player.' },
-        ],
-        after: (g, ids) => (ids.length ? afterMove(g, ids, { chainCount: 2 }) : tookTwo(g)),
-        done: {
-          at: () => (lastIds && lastIds.length ? AT.open() : AT.hand()),
-          text: (g, ids) => (ids && ids.length
-            ? 'Passed! Now the next player must play a 2, or pick up 4 cards.'
-            : 'You picked up 2 cards. Next time, pass it on with your own 2!'),
-        },
-        nudge: 'Tap your 2 to pass it on.',
-      },
-      {
-        build: () => state({ hand: ['A', '3'], open: '9' }),
-        declare: true,
-        beats: [
-          { at: AT.value, text: 'Your cards add up to just 4 points. At 5 or less, you can call LEAST COUNT.' },
-          { at: AT.declare, point: AT.declare, wait: 'move',
-            text: 'Tap Least Count! Fewest points at the table: you score 0. Someone has fewer: you get 75.' },
-        ],
-        done: { at: AT.value, text: 'You had the fewest points: you score 0, the others add theirs. Lowest total wins. That is the whole game!' },
-        nudge: 'Tap Least Count!',
-      },
-    ];
-
-    function rankOf(g, id) {
-      const c = (g.yourHand || []).find((x) => x.id === id);
-      return c ? c.rank : null;
-    }
-    function clearTarget() {
-      document.querySelectorAll('.coach-target').forEach((n) => n.classList.remove('coach-target'));
-    }
-
-    // ---- the spotlight, the finger, and the words beside them ----
-    // All decoration, all wrapped: a layout surprise can lose the pointing,
-    // never the lesson.
-    const raf = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16));
-    function overlayEls() {
-      let spot = el('coach-spot');
-      if (!spot) {
-        spot = document.createElement('div');
-        spot.id = 'coach-spot';
-        spot.className = 'coach-spot hidden';
-        spot.setAttribute('aria-hidden', 'true');
-        document.body.appendChild(spot);
-      }
-      let finger = el('coach-finger');
-      if (!finger) {
-        finger = document.createElement('div');
-        finger.id = 'coach-finger';
-        finger.className = 'coach-finger hidden';
-        finger.setAttribute('aria-hidden', 'true');
-        document.body.appendChild(finger);
-      }
-      return { spot, finger };
-    }
-    function visible(list) {
-      return (list || []).filter((n) => {
-        if (!n || !n.getBoundingClientRect) return false;
-        const r = n.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      });
-    }
-    function find(f) { try { return visible(typeof f === 'function' ? f() : []); } catch (e) { return []; } }
-    function around(list) {
-      let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
-      list.forEach((n) => {
-        const x = n.getBoundingClientRect();
-        l = Math.min(l, x.left); t = Math.min(t, x.top); r = Math.max(r, x.right); b = Math.max(b, x.bottom);
-      });
-      return { left: l, top: t, width: r - l, height: b - t };
-    }
-    // The words move out of the game screen while the lesson runs: inside
-    // it (.screen is its own layer) the dimming would cover them too.
-    function floatCoach() {
-      const box = el('coach');
-      try {
-        if (box && document.body && box.parentNode !== document.body) document.body.appendChild(box);
-      } catch (e) { /* stays where it is */ }
-      if (box) box.classList.add('floating');
-      return box;
-    }
-    function hideOverlay() {
-      ['coach-spot', 'coach-finger'].forEach((id) => { const n = el(id); if (n) n.classList.add('hidden'); });
-      clearTarget();
-    }
-    function place() {
-      if (!active) return;
-      const b = currentBeat();
-      if (!b) return;
-      try {
-        const { spot, finger } = overlayEls();
-        const coach = el('coach');
-        const H = window.innerHeight;
-        clearTarget();
-        const focus = find(b.at);
-        let area = null;
-        if (focus.length) {
-          const r = around(focus);
-          const pad = 7;
-          area = { left: r.left - pad, top: r.top - pad, width: r.width + pad * 2, height: r.height + pad * 2 };
-          spot.style.left = Math.round(area.left) + 'px';
-          spot.style.top = Math.round(area.top) + 'px';
-          spot.style.width = Math.round(area.width) + 'px';
-          spot.style.height = Math.round(area.height) + 'px';
-          spot.classList.remove('hidden');
-        } else {
-          spot.classList.add('hidden');
-        }
-        // The finger: under what to tap, pointing up -- or above it,
-        // pointing down, when it sits at the foot of the screen.
-        const pts = doneShown ? [] : find(b.point);
-        let fingerAbove = false, fingerBelow = false;
-        if (pts.length) {
-          const r = around(pts);
-          fingerBelow = r.top + r.height + 58 < H;
-          fingerAbove = !fingerBelow;
-          finger.textContent = fingerBelow ? '👆' : '👇';
-          finger.classList.toggle('down', fingerAbove);
-          finger.style.left = Math.round(r.left + r.width / 2) + 'px';
-          finger.style.top = Math.round(fingerBelow ? r.top + r.height + 4 : r.top - 4) + 'px';
-          finger.classList.remove('hidden');
-          // Buttons get the gold pulse too; cards have their own lift.
-          pts.forEach((p) => { if (!p.classList.contains('card')) p.classList.add('coach-target'); });
-        } else {
-          finger.classList.add('hidden');
-        }
-        // The words go on whichever side of the spotlight has more room,
-        // clear of the finger.
-        if (coach) {
-          coach.style.top = '';
-          coach.style.bottom = '';
-          if (area) {
-            const above = area.top;
-            const below = H - (area.top + area.height);
-            if (above >= below) {
-              let edge = area.top - 10 - (fingerAbove ? 48 : 0);
-              // Discard and Least Count! sit under the hand. Words placed
-              // straight above them covered the very cards just picked, so
-              // they go above the cards instead.
-              const held = find(cards);
-              if (held.length) {
-                const h = around(held);
-                if (area.top >= h.top + h.height) edge = Math.min(edge, h.top - 8);
-              }
-              coach.style.bottom = Math.round(H - edge) + 'px';
-            } else {
-              coach.style.top = Math.round(area.top + area.height + 10 + (fingerBelow ? 48 : 0)) + 'px';
-            }
-            // Never off the top of a short screen.
-            const c = coach.getBoundingClientRect();
-            if (c.top < 8) { coach.style.bottom = ''; coach.style.top = '8px'; }
-          } else {
-            coach.style.top = '28%';
-          }
-        }
-      } catch (e) { /* the words still show; only the pointing is lost */ }
-    }
-    // Twice more after the first frame: cards that are still sliding into
-    // place would otherwise be lit where they were, not where they land.
-    function placeSoon() {
-      raf(() => raf(place));
-      setTimeout(place, 350);
-      setTimeout(place, 800);
-    }
-    function onResize() { if (active) placeSoon(); }
-
-    function currentBeat() {
-      const step = STEPS[idx];
-      if (!step) return null;
-      return doneShown ? step.done : step.beats[beat];
-    }
-
-    function showBeat() {
-      const step = STEPS[idx];
-      const b = currentBeat();
-      if (!step || !b) return;
-      const box = floatCoach();
-      if (box) box.classList.remove('hidden');
-      el('coach-step').textContent = 'Step ' + (idx + 1) + ' of ' + STEPS.length;
-      const words = nudgeText || (typeof b.text === 'function' ? b.text(latestGame, lastIds) : b.text);
-      el('coach-text').textContent = (doneShown ? '✓ ' : '') + words;
-      const next = el('coach-next');
-      const last = doneShown || beat === step.beats.length - 1;
-      next.textContent = doneShown && idx === STEPS.length - 1 ? 'Finish' : (last ? 'Next' : 'Got it');
-      next.classList.toggle('hidden', !doneShown && !!b.wait);
-      placeSoon();
-    }
-
-    function renderStep() {
-      const step = STEPS[idx];
-      selectedIds = new Set();
-      latestRoom = room();
-      latestGame = step.build();
-      renderGame(latestGame);
-      beat = 0;
-      doneShown = false;
-      nudgeText = null;
-      lastIds = null;
-      showBeat();
-    }
-
-    function advance() {
-      idx += 1;
-      if (idx >= STEPS.length) return finish(true);
-      renderStep();
-    }
-
-    // The step's move was made: show what it did, then the result line.
-    function moveMade(ids) {
-      const step = STEPS[idx];
-      lastIds = ids;
-      selectedIds = new Set();
-      if (!step.done) { advance(); return; }
-      if (step.after) {
-        latestGame = step.after(latestGame, ids);
-        renderGame(latestGame);
-      }
-      doneShown = true;
-      nudgeText = null;
-      showBeat();
-    }
-
-    // Not the move this step is about: back to the beat that asks for it,
-    // with a correction in place of its own words.
-    function nudge() {
-      const step = STEPS[idx];
-      if (!step) return;
-      const ask = step.beats.findIndex((b) => !!b.wait);
-      if (ask >= 0) beat = ask;
-      nudgeText = step.nudge || null;
-      selectedIds = new Set();
-      renderGame(latestGame);
-      showBeat();
-    }
-
-    function finish(completed) {
-      // One event per finish, logged further down WITH the step reached
-      // (tutorial_completed / tutorial_skipped). A second, duplicate line here
-      // briefly made every quit count twice in GA4 (abandoned + skipped).
-      if (!active) return;
-      active = false;
-      hideOverlay();
-      try { window.removeEventListener('resize', onResize); } catch (e) { /* none */ }
-      el('coach').classList.add('hidden');
-      try { localStorage.setItem(DONE_KEY, '1'); } catch (e) { /* session only */ }
-      try { logAnalytics(completed ? 'tutorial_completed' : 'tutorial_skipped', { step: idx + 1 }); } catch (e) { /* no */ }
-      // Put the interface back exactly as it was. Without this the synthetic
-      // hand stays on screen and the next real game renders on top of it.
-      latestGame = savedGame;
-      latestRoom = savedRoom;
-      myPlayerId = savedPlayerId;   // see start(): the lesson's seat was yours
-      selectedIds = new Set();
-      savedGame = null; savedRoom = null; savedPlayerId = null;
-      showScreen('screen-landing');
-      if (completed) el('tutorial-finished').classList.remove('hidden');
-    }
-
-    return {
-      isActive: () => active,
-      wasSeen() {
-        try { return localStorage.getItem(DONE_KEY) === '1'; } catch (e) { return true; }
-      },
-      start() {
-        savedGame = latestGame;
-        savedRoom = latestRoom;
-        // THE LESSON'S SEAT IS YOUR SEAT (Oct 2026). renderGame() decides
-        // "your turn" by comparing the state's current player with
-        // myPlayerId, and only on your turn are cards tappable and Discard
-        // and Least Count! pressable. The lesson's states name you 'tut-me',
-        // but myPlayerId stayed null (or an old game's id) -- so every card
-        // was dead and Discard stayed grey, and the lesson stopped at step 2
-        // for everyone (GA4, Oct 2026: 23 started, 0 finished). The test
-        // drove the Tutorial object directly, so it never saw the screen.
-        // Restored in finish().
-        savedPlayerId = myPlayerId;
-        myPlayerId = ME;
-        active = true;
-        idx = 0;
-        try { window.addEventListener('resize', onResize); } catch (e) { /* no window */ }
-        showScreen('screen-game');
-        renderStep();
-      },
-      // Got it / Next / Finish.
-      next() {
-        if (!active) return;
-        const step = STEPS[idx];
-        const b = currentBeat();
-        if (!step || !b) return;
-        if (doneShown) { advance(); return; }
-        if (b.wait) return;   // this beat waits for a tap on the table
-        nudgeText = null;
-        if (beat < step.beats.length - 1) { beat += 1; showBeat(); return; }
-        advance();            // the last beat of a step that only explains
-      },
-      skip() { finish(false); },
-      // After every pick on the table (toggleSelectGroup). The right cards
-      // go straight on to the next beat -- even from a beat that was still
-      // explaining -- and anything else gets a correction.
-      onSelect() {
-        if (!active || doneShown) return;
-        const step = STEPS[idx];
-        if (!step || !step.beats) return;
-        const ask = step.beats.findIndex((b) => b.wait === 'pick');
-        if (ask < 0) { placeSoon(); return; }
-        if (step.beats[ask].ready(latestGame)) { beat = ask + 1; nudgeText = null; showBeat(); return; }
-        if (selectedIds.size) { beat = ask; nudgeText = step.nudge || null; showBeat(); return; }
-        if (beat > ask) { beat = ask; nudgeText = null; showBeat(); return; }
-        placeSoon();
-      },
-
-      // Called instead of emitting to the server. Returns true if it handled
-      // the tap, so the real handlers can bail out.
-      tryDiscard(ids) {
-        if (!active) return false;
-        const step = STEPS[idx];
-        if (!step || doneShown) return true;
-        if (step.want && step.want(ids, latestGame)) moveMade(ids);
-        else nudge();
-        return true;
-      },
-      tryDeclare() {
-        if (!active) return false;
-        const step = STEPS[idx];
-        if (!step || doneShown) return true;
-        if (step.declare) moveMade([]);
-        else nudge();
-        return true;
-      },
-    };
-  })();
-  let selectedIds = new Set();
-  let chatUnread = 0;
-  let timerInterval = null;
-
-  // ---- "Help me play" (bots-mode-only assist) ----
-  const HELP_EVER_USED_KEY = 'leastcount_help_ever_used';
-  let currentHint = null; // { type, cardIds, reason } for whoever's turn it currently is
-  let hintTurnKey = null; // identifies which turn currentHint belongs to, so it clears on turn change
-
-  // Fixed max-score choices offered to the host, both at game creation and
-  // again after every round (mirrors MAX_SCORE_OPTIONS in game/gameLogic.js --
-  // the server independently validates against its own copy of this list).
-  const MAX_SCORE_OPTIONS = [100, 150, 200, 250, 300, 350, 400, 450, 500];
-  const DEFAULT_MAX_SCORE = 200;
-
-  // Fills a <select> with every option strictly greater than minExclusive
-  // (plus the current value even if it wouldn't otherwise qualify, so the
-  // dropdown always has something sensible pre-selected).
-  function populateMaxScoreSelect(selectEl, currentValue, minExclusive) {
-    selectEl.innerHTML = '';
-    MAX_SCORE_OPTIONS.filter((v) => v > minExclusive || v === currentValue).forEach((v) => {
-      const opt = document.createElement('option');
-      opt.value = String(v);
-      opt.textContent = String(v);
-      // Intentionally NOT relying on opt.selected here (see selectEl.value
-      // below) -- setting .selected on an <option> before it's attached to
-      // the DOM is unreliable on some Android WebView versions: it can
-      // silently fail to stick, leaving the <select> defaulting to its
-      // FIRST option instead. That's the actual root cause behind "I set
-      // max score to 250, and next round it's back to 200" -- 200 just
-      // happened to be the first surviving option in the filtered list at
-      // whatever score range the board was in when the bug was reported,
-      // not a value anyone actually chose or that the server reverted to.
-      selectEl.appendChild(opt);
-    });
-    // Authoritative, WebView-safe way to set the selection: assign the
-    // <select>'s own .value AFTER every <option> is already attached. This
-    // works consistently everywhere, unlike per-option .selected above.
-    selectEl.value = String(currentValue);
-    syncDropdown(selectEl);
-  }
-
-  // ---------------- custom themed dropdown (replaces native <select> UI) ----------------
-  // The underlying <select> stays in the DOM and fully functional -- every
-  // existing call site above keeps reading/writing its .value and rebuilding
-  // its <option> children exactly as before. This only adds a themed
-  // button+list on top that mirrors it, so the browser's own native popup
-  // (white background, system font -- can't be restyled to match the app)
-  // never has to appear. Call syncDropdown(select) after anything changes
-  // the select's value/options from code, since a plain `.value = x`
-  // assignment fires no DOM event this could otherwise hook into.
-  const dropdownWraps = new Map(); // selectEl -> { syncLabel }
-
-  function initDropdown(selectId) {
-    const select = document.getElementById(selectId);
-    if (!select || dropdownWraps.has(select)) return;
-
-    const wrap = document.createElement('div');
-    wrap.className = 'dd';
-    select.parentNode.insertBefore(wrap, select);
-    wrap.appendChild(select);
-    select.classList.add('dd-native-select');
-    select.tabIndex = -1;
-
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'dd-toggle';
-    toggle.setAttribute('aria-haspopup', 'listbox');
-    toggle.setAttribute('aria-expanded', 'false');
-    toggle.innerHTML = '<span class="dd-value"></span><svg class="dd-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
-    wrap.appendChild(toggle);
-
-    const list = document.createElement('ul');
-    list.className = 'dd-list hidden';
-    list.setAttribute('role', 'listbox');
-    wrap.appendChild(list);
-
-    const valueSpan = toggle.querySelector('.dd-value');
-    const isOpen = () => !list.classList.contains('hidden');
-    const closeList = () => { list.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false'); };
-    const syncLabel = () => {
-      const opt = select.options[select.selectedIndex];
-      valueSpan.textContent = opt ? opt.textContent : '';
-    };
-
-    function buildList() {
-      list.innerHTML = '';
-      Array.from(select.options).forEach((opt) => {
-        const li = document.createElement('li');
-        li.setAttribute('role', 'option');
-        li.tabIndex = -1;
-        li.dataset.value = opt.value;
-        li.textContent = opt.textContent;
-        if (opt.value === select.value) li.setAttribute('aria-selected', 'true');
-        li.addEventListener('click', () => {
-          select.value = opt.value;
-          select.dispatchEvent(new Event('change'));
-          syncLabel();
-          closeList();
-          toggle.focus();
-        });
-        list.appendChild(li);
-      });
-    }
-    function openList() {
-      buildList();
-      list.classList.remove('hidden');
-      toggle.setAttribute('aria-expanded', 'true');
-      const active = list.querySelector('[aria-selected="true"]') || list.firstElementChild;
-      if (active) active.focus();
-    }
-
-    toggle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      isOpen() ? closeList() : openList();
-    });
-    toggle.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openList();
-      } else if (e.key === 'Escape') {
-        closeList();
-      }
-    });
-    list.addEventListener('keydown', (e) => {
-      const items = Array.from(list.children);
-      const idx = items.indexOf(document.activeElement);
-      if (e.key === 'ArrowDown') { e.preventDefault(); (items[idx + 1] || items[0]).focus(); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); (items[idx - 1] || items[items.length - 1]).focus(); }
-      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); document.activeElement.click(); }
-      else if (e.key === 'Escape') { closeList(); toggle.focus(); }
-    });
-    document.addEventListener('click', (e) => {
-      if (!wrap.contains(e.target)) closeList();
-    });
-
-    syncLabel();
-    dropdownWraps.set(select, { syncLabel });
-  }
-
-  function syncDropdown(selectEl) {
-    const entry = dropdownWraps.get(selectEl);
-    if (entry) entry.syncLabel();
-    const chips = chipRenders.get(selectEl);
-    if (chips) chips();
-  }
-
-  // ------------------------------------------------------------------
-  // One-tap choices (Oct 2026). Home's "how many bots / which level / how
-  // many players" were dropdowns: two taps each, with the options hidden
-  // until you opened them. Now each is a row of buttons, the current one
-  // lit. The <select> stays in the page, hidden, as the single source of
-  // truth -- every handler that reads its .value works unchanged -- and a
-  // tap sets it and fires 'change' exactly as choosing from it did.
-  // ------------------------------------------------------------------
-  const chipRenders = new Map();
-  function initChips(selectId, labelOf) {
-    const select = document.getElementById(selectId);
-    const host = document.querySelector('.chips[data-for="' + selectId + '"]');
-    if (!select || !host) return;
-    function render() {
-      host.innerHTML = '';
-      Array.from(select.options).forEach((opt) => {
-        const on = opt.value === select.value;
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'chip' + (on ? ' on' : '');
-        b.textContent = labelOf ? labelOf(opt) : opt.textContent;
-        b.setAttribute('aria-pressed', on ? 'true' : 'false');
-        b.setAttribute('aria-label', opt.textContent);
-        b.onclick = () => {
-          if (select.value === opt.value) return;
-          select.value = opt.value;
-          select.dispatchEvent(new Event('change'));
-          render();
-        };
-        host.appendChild(b);
-      });
-    }
-    chipRenders.set(select, render);
-    select.addEventListener('change', render);
-    render();
-  }
-
-  // ---------------- your-turn visual pulse ----------------
-  // A subtle pulsing highlight at YOUR OWN seat only -- never broadcast, never
-  // shown at anyone else's seat -- that kicks in only after 5 seconds of your
-  // own turn going by with no action. The existing sound cue still plays the
-  // instant it becomes your turn; this is purely an additional, local nudge
-  // for when that gets missed. No vibration (per explicit request -- players
-  // rest their hands on the phone and constant buzzing would be irritating).
-  const TURN_PULSE_DELAY_MS = 5000;
-  let myTurnPulseTimer = null;
-  let myTurnPulseActive = false;
-
-  function updateMyTurnPulseTimer(prev, game) {
-    const isMyActiveTurn = game.currentPlayer === myPlayerId && !game.roundOver;
-    const turnJustChanged = !prev || prev.currentPlayer !== game.currentPlayer || prev.roundNumber !== game.roundNumber;
-    if (isMyActiveTurn) {
-      if (turnJustChanged) {
-        if (myTurnPulseTimer) clearTimeout(myTurnPulseTimer);
-        myTurnPulseActive = false;
-        myTurnPulseTimer = setTimeout(() => {
-          myTurnPulseActive = true;
-          renderOvalTable(latestGame);
-        }, TURN_PULSE_DELAY_MS);
-      }
-    } else {
-      if (myTurnPulseTimer) { clearTimeout(myTurnPulseTimer); myTurnPulseTimer = null; }
-      myTurnPulseActive = false;
-    }
-  }
-
-  // ---------------- chat speech bubbles at the sender's seat ----------------
-  // playerId -> { type, text, gifUrl, startedAt, durationMs }. Shown IN
-  // ADDITION to the separate chat panel (unchanged), for 5-10s scaled by
-  // message length (GIFs get a flat mid-range duration).
-  const chatBubbles = {};
-  function triggerChatBubble(playerId, msg) {
-    const isGif = msg.type === 'gif';
-    const lengthFactor = isGif ? 30 : (msg.text || '').length;
-    const durationMs = msg.durationMs || Math.max(5000, Math.min(10000, 5000 + lengthFactor * 80));
-    const startedAt = Date.now();
-    chatBubbles[playerId] = { type: msg.type, text: msg.text, gifUrl: msg.gifUrl, startedAt, durationMs, variant: msg.variant || '' };
-    renderOvalTable(latestGame);
-    setTimeout(() => {
-      if (chatBubbles[playerId] && chatBubbles[playerId].startedAt === startedAt) {
-        delete chatBubbles[playerId];
-        renderOvalTable(latestGame);
-      }
-    }, durationMs + 60);
-  }
-
-  // Game-start sequence (countdown -> live deal -> joker/open-card reveal).
-  // pendingStartReveal is set true the moment the countdown+deal animation
-  // finishes locally; the very next game_state we receive after that is the
-  // one carrying the freshly-dealt hands/joker/open-card, so that's the
-  // signal to switch the overlay into its "reveal" step -- not a fixed
-  // client-side timer, so it can never fire before the data actually exists.
-  let pendingStartReveal = false;
-  // True from the moment a start sequence begins until its reveal has run
-  // (or been force-cleared). renderGame uses it to tell "the dealing badge
-  // belongs on screen" apart from "the dealing badge is stuck on screen".
-  let startSeqActive = false;
-  let startSeqTimer = null;
-  let dealAnimationCancel = null;
-
-  // WALL-CLOCK deadlines for the start sequence, in Date.now() terms.
-  //
-  // Why these exist, and why they are not timers
-  // -------------------------------------------
-  // Everything that dismissed start-sequence UI used to be a setTimeout. On
-  // Android WebView and mobile Chrome, timers in a backgrounded page are
-  // throttled hard and can stop firing altogether -- so if a player switched
-  // apps, locked the screen, or took a call during the ~10s countdown+deal,
-  // their pending "hide the badge" timer simply never ran. The game kept
-  // going (that is socket-driven, not timer-driven), and they came back to a
-  // live table with "3" or "Dealing cards..." welded on top of it.
-  //
-  // That also explains the two things that made this look mysterious:
-  //   - It hit ONE player, never the table. Each device runs its own timers;
-  //     only the phone that actually went to the background froze.
-  //   - Force-quitting and relaunching fixed it, but backgrounding and
-  //     returning did not. A relaunch resets this module's state; a return
-  //     just ran a renderGame that refused to clean up (see below).
-  //
-  // And it is why the previous attempt at this bug did not work. That fix
-  // added a "last resort" 8-second clear -- as a setTimeout, i.e. built out
-  // of the exact mechanism that was failing. A frozen timer cannot be
-  // rescued by another frozen timer.
-  //
-  // The wall clock does not freeze. So the authority on "should this UI still
-  // be on screen" moves off the flags and onto these two instants, which
-  // sweepStaleStartUi() compares against Date.now() whenever we get a chance
-  // to look: on every game_state, and the moment the page becomes visible.
-  let startSeqDeadline = 0;     // whole countdown -> deal -> reveal handoff
-  let startRevealDeadline = 0;  // the joker/open-card hold
-
-  // Hides every piece of start-sequence chrome. Collected in one place
-  // because the stuck-UI reports covered three different elements (the
-  // countdown digit, the dealing badge, and the joker/open-card overlay) and
-  // each escape route was only hiding the one it happened to know about.
-  function hideStartSeqUi() {
-    // Also drops the class that empties the table centre. Doing it here rather
-    // than at each call site means every escape route -- normal finish, the
-    // wall-clock sweep, the awake-page backstop -- restores the open card and
-    // joker, instead of one of them leaving the table blank.
-    const scr = document.getElementById('screen-game');
-    if (scr) scr.classList.remove('deal-phase', 'round-reveal');
-    [
-      'deal-phase-badge', 'start-seq-countdown', 'deal-phase-label', 'round-intro',
-      'deal-flyer', 'overlay-start-sequence', 'start-seq-reveal',
-    ].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.classList.add('hidden');
-    });
-  }
-
-  // Clears start-sequence UI that has outlived its wall-clock deadline.
-  // Safe to call as often as we like: nothing in the game depends on this
-  // chrome, so removing it can only ever remove something already stale.
-  function sweepStaleStartUi(reason) {
-    const now = Date.now();
-    let cleared = null;
-
-    if (startSeqDeadline && now > startSeqDeadline) {
-      startSeqDeadline = 0;
-      startSeqActive = false;
-      pendingStartReveal = false;
-      if (startSeqTimer) { clearTimeout(startSeqTimer); startSeqTimer = null; }
-      // The deal animation schedules its own timers; if those froze too it
-      // may still think it is mid-flight.
-      if (dealAnimationCancel) {
-        try { dealAnimationCancel(); } catch (e) {}
-        dealAnimationCancel = null;
-      }
-      hideStartSeqUi();
-      cleared = 'sequence';
-    }
-
-    if (startRevealDeadline && now > startRevealDeadline) {
-      startRevealDeadline = 0;
-      const overlay = document.getElementById('overlay-start-sequence');
-      if (overlay) overlay.classList.add('hidden');
-      // The reveal is now an in-place turn-over on the table (Oct 2026);
-      // its class is what has to come off.
-      const scrEl = document.getElementById('screen-game');
-      if (scrEl) scrEl.classList.remove('round-reveal');
-      cleared = cleared ? 'sequence+reveal' : 'reveal';
-    }
-
-    if (cleared) console.warn('[start] cleared stale ' + cleared + ' UI (' + reason + ')');
-    return !!cleared;
-  }
-
-  // ---------------- transient overlays: generic frozen-timer guard ----------
-  //
-  // Same disease as the start sequence, same cure, generalised. An overlay
-  // that is put up and then taken down by nothing but a setTimeout will stay
-  // up forever if the page is backgrounded in between, because Android
-  // WebView throttles or stops timers in a hidden page.
-  //
-  // The correct pattern was already in this file -- seat reactions and chat
-  // bubbles (see renderOvalTable) store a startedAt and recompute
-  // `Date.now() - startedAt` every render, dropping anything expired. That
-  // works because they are re-rendered constantly. These overlays are
-  // one-shot and never re-rendered, so they get the same wall-clock idea in
-  // registry form instead: whoever shows one records when it must be gone by,
-  // and the sweep enforces it at the next opportunity.
-  //
-  // Audited callers (the only timer-dismissed elements with no other escape
-  // route -- everything else was either state-driven or rebuilt from state):
-  //   draw-reveal   "You drew N cards" -- fires on EVERY penalty draw, so by
-  //                 far the most frequent exposure in the app
-  //   chain-flash   the "+2" announcement label
-  const TRANSIENT_SLACK_MS = 4000;   // grace, so a slow-but-awake phone is never cut short
-  const transientDeadlines = new Map();   // elementId -> Date.now() instant
-
-  function holdTransient(id, ms) {
-    transientDeadlines.set(id, Date.now() + ms + TRANSIENT_SLACK_MS);
-  }
-  function releaseTransient(id) {
-    transientDeadlines.delete(id);
-  }
-  function sweepStaleTransients(reason) {
-    if (!transientDeadlines.size) return false;
-    const now = Date.now();
-    const done = [];
-    transientDeadlines.forEach((deadline, id) => {
-      if (now > deadline) done.push(id);
-    });
-    done.forEach((id) => {
-      transientDeadlines.delete(id);
-      const el = document.getElementById(id);
-      if (el) el.classList.add('hidden');
-      console.warn('[ui] cleared stale overlay #' + id + ' (' + reason + ')');
-    });
-    return done.length > 0;
-  }
-
-  // Single entry point for the call sites, so adding a guarded overlay later
-  // never means hunting down three separate places to sweep it from.
-  function sweepStaleOverlays(reason) {
-    const a = sweepStaleStartUi(reason);
-    const b = sweepStaleTransients(reason);
-    return a || b;
-  }
-
-  // ---------------- seat emoji reactions (items 9 & 10) ----------------
-  // playerId -> { emoji, startedAt }. Seats get fully torn down and rebuilt
-  // on every renderOvalTable() call, so instead of animating a persistent
-  // DOM node we just track "what's active and since when" here and have
-  // renderOvalTable() re-inject the bubble every time, using a negative
-  // animation-delay (= how long it's already been showing) so the pop/hold/
-  // fade animation looks continuous across re-renders instead of restarting.
-  const seatReactions = {};
-  const REACTION_HOLD_MS = 3000;
-  const REACTION_FADE_MS = 400;
-  const REACTION_TOTAL_MS = REACTION_HOLD_MS + REACTION_FADE_MS;
-
-  function triggerSeatReaction(playerId, emoji) {
-    const startedAt = Date.now();
-    seatReactions[playerId] = { emoji, startedAt };
-    renderOvalTable(latestGame);
-    setTimeout(() => {
-      if (seatReactions[playerId] && seatReactions[playerId].startedAt === startedAt) {
-        delete seatReactions[playerId];
-        renderOvalTable(latestGame);
-      }
-    }, REACTION_TOTAL_MS + 60);
-  }
-
-  // Big and playful on purpose -- it's fine if it briefly covers the name,
-  // since a subtle reaction nobody notices defeats the point.
-  const SEAT_REACTION_RULES = {
-    penalty6: { self: '😅', others: '😂' },
-    lowcards: { self: null, others: '👀' },
-    bigdiscard: { self: '🔥', others: null },
-    timeout: { self: '😴', others: null },
-    chainextend: { self: '😈', others: null },
-    eliminated: { self: '👋', others: null },
-  };
-
-  // ---------------- sound effects (Web Audio API, no files needed) ----------------
-  const Sound = (() => {
-    let ctx = null;
-    // Guarded: this runs at module construction, so a localStorage throw
-    // here (private mode, storage disabled) would take out the entire
-    // Sound object and with it every call site in the app.
-    let muted = (() => {
-      try { return localStorage.getItem('leastcount_muted') === '1'; } catch (e) { return false; }
-    })();
-
-    // Never throws. Constructing an AudioContext can fail outright -- some
-    // Android WebViews refuse it under autoplay policy, and a device that
-    // has hit its audio-context limit throws too. This is the bottom of
-    // the sound stack, so a throw here would escape through every cue.
-    let ctxFailed = false;
-    function ensureCtx() {
-      if (ctxFailed) return null;
-      try {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) { ctxFailed = true; return null; }
-        if (!ctx) ctx = new AC();
-        if (ctx.state === 'suspended') ctx.resume();
-        return ctx;
-      } catch (e) {
-        // Latch the failure: retrying on every single card tap would mean
-        // a throw-and-catch hundreds of times a game.
-        ctxFailed = true;
-        ctx = null;
-        console.warn('[sound] audio unavailable on this device:', e && e.message);
-        return null;
-      }
-    }
-
-    // ------------------------------------------------------------------
-    // MASTER BUS + REVERB SEND (Sept 2026 rebuild)
-    //
-    // Every voice used to connect straight to ctx.destination. That is the
-    // single biggest reason the old cues were described as "dry and
-    // lifeless": a sound that stops dead the instant its envelope closes
-    // has no space around it, and the ear reads that as cheap. Real game
-    // audio is almost never heard bone-dry -- there is always a short tail.
-    //
-    // So: everything now goes through master, and voices that want depth
-    // also feed a send into a small convolution reverb. The impulse
-    // response is generated here rather than loaded, so this still costs
-    // zero bytes of download.
-    //
-    // MASTER_GAIN is deliberately the one knob that controls overall
-    // loudness. If the whole game is too loud or too quiet after this
-    // rebuild, that is the number to move -- not the 12 individual cues.
-    // ------------------------------------------------------------------
-    const MASTER_GAIN = 0.95;
-    const REVERB_GAIN = 0.22;
-    let master = null;
-    let reverbSend = null;
-
-    // A decaying noise burst IS an impulse response -- that's all a small
-    // room is, mathematically. Stereo, slightly different per channel so
-    // the tail has a little width instead of sitting dead centre.
-    function buildImpulse(c, seconds, decay) {
-      const len = Math.max(1, Math.floor(c.sampleRate * seconds));
-      const buf = c.createBuffer(2, len, c.sampleRate);
-      for (let ch = 0; ch < 2; ch++) {
-        const data = buf.getChannelData(ch);
-        for (let i = 0; i < len; i++) {
-          // (1 - i/len)^decay gives the exponential-ish fade; the noise
-          // gives it the density that makes it read as a room.
-          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-        }
-      }
-      return buf;
-    }
-
-    // Returns { master, send } or null. Built lazily on first sound and
-    // cached. If anything in here fails (old WebView, no ConvolverNode)
-    // we fall back to a bare master gain with no send, and every cue
-    // still plays -- just dry. Never throws.
-    function ensureBus() {
-      const c = ensureCtx();
-      if (!c) return null;
-      if (master) return { master, send: reverbSend };
-      try {
-        master = c.createGain();
-        master.gain.value = MASTER_GAIN;
-        master.connect(c.destination);
-      } catch (e) {
-        master = null;
-        return null;
-      }
-      try {
-        const conv = c.createConvolver();
-        conv.buffer = buildImpulse(c, 0.45, 2.6);
-        const wet = c.createGain();
-        wet.gain.value = REVERB_GAIN;
-        reverbSend = c.createGain();
-        reverbSend.gain.value = 1;
-        reverbSend.connect(conv).connect(wet).connect(master);
-      } catch (e) {
-        // No reverb available -- dry is worse, but silent is far worse.
-        reverbSend = null;
-      }
-      return { master, send: reverbSend };
-    }
-
-    // Connect a voice's output to the master, and optionally bleed some of
-    // it into the reverb. `wet` is 0..1.
-    function routeOut(node, wet) {
-      const bus = ensureBus();
-      if (!bus) return false;
-      node.connect(bus.master);
-      if (wet > 0 && bus.send) {
-        try {
-          const c = ensureCtx();
-          const s = c.createGain();
-          s.gain.value = wet;
-          node.connect(s).connect(bus.send);
-        } catch (e) { /* dry is fine */ }
-      }
-      return true;
-    }
-
-    // Small random spread, used everywhere below. Repetition is the enemy
-    // of a good game sound: the discard cue fires hundreds of times in a
-    // single game, and byte-identical playback is precisely what makes
-    // players reach for the mute button. A few percent of pitch and timing
-    // jitter is enough for the ear to stop noticing the loop.
-    function rnd(a, b) { return a + Math.random() * (b - a); }
-
-    // Deal-tick throttle state. Lives here (module scope) rather than at the
-    // call site so the rate holds no matter who calls dealTick() or how
-    // often -- the deal animation's own pace scales with player count and
-    // must not be allowed to set the audio pace.
-    let lastDealTickAt = 0;
-    let dealTickGap = 170;
-
-    function tone(freq, duration, opts) {
-      opts = opts || {};
-      if (muted) return;
-      const c = ensureCtx();
-      if (!c) return;
-      const t0 = c.currentTime + (opts.delay || 0);
-      const osc = c.createOscillator();
-      const gain = c.createGain();
-      osc.type = opts.type || 'sine';
-      osc.frequency.setValueAtTime(freq, t0);
-      gain.gain.setValueAtTime(0.0001, t0);
-      gain.gain.linearRampToValueAtTime(opts.gain || 0.15, t0 + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
-      osc.connect(gain);
-      if (!routeOut(gain, opts.wet || 0)) return;
-      osc.start(t0);
-      osc.stop(t0 + duration + 0.03);
-    }
-
-    function seq(notes) {
-      notes.forEach((n) => tone(n[0], n[1], { delay: n[2] || 0, type: n[3], gain: n[4] }));
-    }
-
-    // A short burst of filtered white noise -- the actual building block of
-    // every card sound below. A pure tone can't sound like a card no matter
-    // how it's tuned; a snap/flick/riffle is fundamentally a noise transient,
-    // not a pitch, so this generates real noise and shapes it with a filter
-    // sweep + fast envelope instead of an oscillator.
-    function noiseBurst(opts) {
-      opts = opts || {};
-      if (muted) return;
-      const c = ensureCtx();
-      if (!c) return;
-      const duration = opts.duration || 0.08;
-      const t0 = c.currentTime + (opts.delay || 0);
-
-      const bufferSize = Math.max(1, Math.floor(c.sampleRate * duration));
-      const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
-
-      const src = c.createBufferSource();
-      src.buffer = buffer;
-
-      const filter = c.createBiquadFilter();
-      filter.type = opts.filterType || 'bandpass';
-      filter.frequency.setValueAtTime(opts.freqStart || 3000, t0);
-      if (opts.freqEnd !== undefined) {
-        filter.frequency.exponentialRampToValueAtTime(Math.max(60, opts.freqEnd), t0 + duration);
-      }
-      filter.Q.value = opts.q || 1;
-
-      const gain = c.createGain();
-      const peak = opts.gain || 0.25;
-      gain.gain.setValueAtTime(0.0001, t0);
-      gain.gain.linearRampToValueAtTime(peak, t0 + 0.004);
-      gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
-
-      src.connect(filter).connect(gain);
-      if (!routeOut(gain, opts.wet === undefined ? 0.18 : opts.wet)) return;
-      src.start(t0);
-      src.stop(t0 + duration + 0.02);
-    }
-
-    // One crisp card hitting the table: a sharp high-frequency "flick" with
-    // a touch of low-end "thud" underneath it for body.
-    function cardSnap(opts) {
-      opts = opts || {};
-      const gain = opts.gain || 0.3;
-      const delay = opts.delay || 0;
-      noiseBurst({ duration: 0.05, filterType: 'bandpass', freqStart: 4500, freqEnd: 1200, q: 1.2, gain, delay });
-      noiseBurst({ duration: 0.04, filterType: 'lowpass', freqStart: 350, gain: gain * 0.5, delay });
-    }
-
-    // Several overlapping snaps in quick succession -- a riffle/draw sound
-    // that scales with how many cards are actually moving, so drawing 1
-    // penalty card sounds like a single flick and drawing 6 (a big +2 chain
-    // penalty) sounds like a real handful being pulled off the stock.
-    function cardRiffle(count, gainScale) {
-      count = Math.max(1, count || 1);
-      const gs = gainScale === undefined ? 1 : gainScale;
-      const n = Math.min(count, 8); // cap the sound even if the draw itself is huge
-      for (let i = 0; i < n; i++) {
-        const delay = (i / n) * (0.1 + n * 0.02) + Math.random() * 0.015;
-        noiseBurst({
-          duration: 0.04, filterType: 'bandpass',
-          freqStart: 3200 + Math.random() * 1400, freqEnd: 1800, q: 1.5,
-          gain: 0.38 * gs, delay, wet: gs < 1 ? 0.55 : 0.24,
-        });
-      }
-    }
-
-    // A quick spray of tiny, high-passed noise ticks -- the flutter of a
-    // proper riffle shuffle, as opposed to the slower per-card cardRiffle().
-    function shuffleBurst(n, span, opts) {
-      opts = opts || {};
-      for (let i = 0; i < n; i++) {
-        const t = i / n;
-        const jitter = (Math.random() - 0.5) * (span / n) * 0.6;
-        noiseBurst({
-          duration: opts.dur || 0.018,
-          filterType: 'highpass',
-          freqStart: 2000 + Math.random() * (opts.freqSpread || 3000),
-          gain: (opts.gain || 0.2) * (0.7 + 0.3 * Math.sin(t * Math.PI)),
-          delay: t * span + jitter,
-        });
-      }
-    }
-
-    // The stock reshuffle sound -- two staggered, slightly different-pitched
-    // flutter layers, like someone riffling the pile with both hands. Public
-    // event (doesn't reveal any hand), so every player at the table hears it.
-    function cardReshuffle() {
-      shuffleBurst(35, 0.4, { gain: 0.2, dur: 0.016 });
-      shuffleBurst(35, 0.4, { gain: 0.16, dur: 0.016, freqSpread: 2500 });
-    }
-
-    // ==================================================================
-    // RECORDED SAMPLES
-    //
-    // Every cue goes through play(name, fallback). If recorded audio has
-    // been loaded for that cue it plays; otherwise the synthesised
-    // fallback runs. So a pack can replace ONE cue or ALL of them, in any
-    // order, and a missing file is never an error -- it just means that
-    // particular cue stays synthesised.
-    //
-    // Synthesis got the CHARACTER right (layering, levels, space). What it
-    // can't produce is the TEXTURE of real cardstock -- that needs a
-    // recording. This is the path for that.
-    //
-    // Install: drop files into public/sounds/ and list them in
-    // public/sounds/manifest.json. Nothing else in the app changes.
-    //
-    // Three things this deliberately does:
-    //
-    //  1. VARIANTS. A cue can have several files and picks one at random
-    //     per play. The discard fires hundreds of times a game -- a single
-    //     recorded file repeated identically is far MORE fatiguing than
-    //     synthesis was, because a real recording has no natural jitter.
-    //     This is the most common way a sample pack makes a game worse.
-    //
-    //  2. PER-CUE GAIN. Packs are mastered at wildly different levels.
-    //     Trim in the manifest rather than re-encoding audio.
-    //
-    //  3. THE MASTER BUS. Samples route through the same gain and reverb
-    //     send as the synth (the old code here connected straight to
-    //     ctx.destination, which would have made recorded cues bypass both
-    //     and sit oddly dry and loud next to the synthesised ones).
-    // ==================================================================
-    const SAMPLES = Object.create(null);   // name -> { buffers: [], gain, wet }
-    let samplesReady = false;
-
-    function play(name, fallback) {
-      if (muted) return;
-      const entry = SAMPLES[name];
-      if (!entry || !entry.buffers.length) { fallback(); return; }
-      const c = ensureCtx();
-      if (!c) { fallback(); return; }
-      try {
-        const buf = entry.buffers.length === 1
-          ? entry.buffers[0]
-          : entry.buffers[Math.floor(Math.random() * entry.buffers.length)];
-        const src = c.createBufferSource();
-        const g = c.createGain();
-        g.gain.value = entry.gain;
-        // Small random detune on every play. Costs nothing and is most of
-        // what stops a repeated sample from sounding mechanical.
-        src.playbackRate.value = rnd(0.97, 1.03);
-        src.buffer = buf;
-        src.connect(g);
-        if (!routeOut(g, entry.wet)) { fallback(); return; }
-        src.start();
-      } catch (e) {
-        // A decoded buffer that won't play is still better handled by the
-        // synth than by silence.
-        fallback();
-      }
-    }
-
-    // Reads public/sounds/manifest.json, if it exists. Absent manifest =
-    // exactly one 404 and then pure synthesis, forever, silently -- which
-    // is the state the app ships in today.
-    //
-    // Manifest shape:
-    //   { "discard": { "files": ["card_a.wav","card_b.wav"], "gain": 0.9 },
-    //     "opponentDiscard": { "sameAs": "discard", "gain": 0.4, "wet": 0.6 } }
-    //
-    // "sameAs" reuses another cue's already-decoded audio at a different
-    // level -- that is how an opponent's discard becomes the same card at
-    // a distance without shipping the file twice.
-    async function loadSamples() {
-      if (samplesReady) return;
-      samplesReady = true;
-      const c = ensureCtx();
-      if (!c || !window.fetch) return;
-
-      let manifest = null;
-      try {
-        const res = await fetch('sounds/manifest.json', { cache: 'force-cache' });
-        if (!res.ok) return;              // no pack installed
-        manifest = await res.json();
-      } catch (e) {
-        return;                            // offline, malformed JSON, whatever
-      }
-      if (!manifest || typeof manifest !== 'object') return;
-
-      const direct = Object.keys(manifest).filter((k) => !manifest[k].sameAs);
-      const aliases = Object.keys(manifest).filter((k) => manifest[k].sameAs);
-
-      await Promise.all(direct.map(async (cue) => {
-        const spec = manifest[cue] || {};
-        const files = Array.isArray(spec.files) ? spec.files : (spec.file ? [spec.file] : []);
-        const buffers = [];
-        await Promise.all(files.map(async (f) => {
-          try {
-            const r = await fetch('sounds/' + f, { cache: 'force-cache' });
-            if (!r.ok) return;
-            const bytes = await r.arrayBuffer();
-            // decodeAudioData is promise-based in modern engines but
-            // callback-only in older WebViews -- support both.
-            const buf = await new Promise((resolve, reject) => {
-              const p = c.decodeAudioData(bytes, resolve, reject);
-              if (p && typeof p.then === 'function') p.then(resolve, reject);
-            });
-            if (buf) buffers.push(buf);
-          } catch (e) {
-            console.warn('[sound] could not load sounds/' + f + ':', e && e.message);
-          }
-        }));
-        if (buffers.length) {
-          SAMPLES[cue] = {
-            buffers,
-            gain: typeof spec.gain === 'number' ? spec.gain : 0.9,
-            wet: typeof spec.wet === 'number' ? spec.wet : 0.25,
-          };
-        }
-      }));
-
-      aliases.forEach((cue) => {
-        const spec = manifest[cue];
-        const base = SAMPLES[spec.sameAs];
-        if (!base) return;                 // source cue had no usable files
-        SAMPLES[cue] = {
-          buffers: base.buffers,
-          gain: typeof spec.gain === 'number' ? spec.gain : base.gain,
-          wet: typeof spec.wet === 'number' ? spec.wet : base.wet,
-        };
-      });
-
-      const loaded = Object.keys(SAMPLES);
-      if (loaded.length) {
-        console.log('[sound] recorded audio active for: ' + loaded.join(', ')
-          + ' (all other cues remain synthesised)');
-      }
-    }
-
-    // Two-oscillator voice with a soft attack. The old cues were bare sine
-    // and sawtooth tones with an instant onset, which is exactly what makes
-    // a sound read as a "beep" -- a detuned second voice and a few ms of
-    // attack are most of the difference between a beep and a note.
-    function warm(freq, duration, opts) {
-      opts = opts || {};
-      if (muted) return;
-      const c = ensureCtx();
-      if (!c) return;
-      const t0 = c.currentTime + (opts.delay || 0);
-      const g = c.createGain();
-      const peak = opts.gain || 0.16;
-      g.gain.setValueAtTime(0.0001, t0);
-      g.gain.linearRampToValueAtTime(peak, t0 + 0.018);
-      g.gain.exponentialRampToValueAtTime(0.0008, t0 + duration);
-      const filt = c.createBiquadFilter();
-      filt.type = 'lowpass';
-      filt.frequency.setValueAtTime(opts.cutoff || 2600, t0);
-      [0, opts.detune || 7].forEach((cents, i) => {
-        const o = c.createOscillator();
-        o.type = i === 0 ? (opts.type || 'triangle') : 'sine';
-        o.frequency.setValueAtTime(freq, t0);
-        o.detune.setValueAtTime(cents, t0);
-        o.connect(filt);
-        o.start(t0);
-        o.stop(t0 + duration + 0.05);
-      });
-      filt.connect(g);
-      routeOut(g, opts.wet === undefined ? 0.3 : opts.wet);
-    }
-    function warmSeq(notes) {
-      notes.forEach((n) => warm(n[0], n[1], { delay: n[2], gain: n[3], type: n[4] }));
-    }
-
-    // ------------------------------------------------------------------
-    // LAYERING HELPERS (Sept 2026 rebuild)
-    //
-    // "Juicy" game audio is not a property of any single recording -- it is
-    // a stack. A satisfying discard in a polished card game is typically
-    // four things fired within ~20ms of each other:
-    //
-    //   1. a swoosh   (the card moving through air)
-    //   2. a transient (the snap of it landing)
-    //   3. a thump     (low-end body, so it has weight on a phone speaker)
-    //   4. a blip      (a PITCHED element -- the part that makes it feel
-    //                   designed rather than recorded)
-    //
-    // The old cues had exactly one of those four, which is why they read as
-    // thin no matter how the noise was filtered. Layer 4 in particular was
-    // completely absent from every card sound.
-    // ------------------------------------------------------------------
-
-    // A pitched tone that glides from one frequency to another. Short
-    // downward glides feel like something landing; upward feels like
-    // something being picked up or confirmed.
-    function blip(from, to, duration, opts) {
-      opts = opts || {};
-      if (muted) return;
-      const c = ensureCtx();
-      if (!c) return;
-      const t0 = c.currentTime + (opts.delay || 0);
-      const osc = c.createOscillator();
-      const g = c.createGain();
-      osc.type = opts.type || 'triangle';
-      osc.frequency.setValueAtTime(from, t0);
-      if (to && to !== from) {
-        osc.frequency.exponentialRampToValueAtTime(Math.max(40, to), t0 + duration);
-      }
-      const peak = opts.gain || 0.12;
-      g.gain.setValueAtTime(0.0001, t0);
-      g.gain.linearRampToValueAtTime(peak, t0 + 0.008);
-      g.gain.exponentialRampToValueAtTime(0.0008, t0 + duration);
-      osc.connect(g);
-      if (!routeOut(g, opts.wet === undefined ? 0.25 : opts.wet)) return;
-      osc.start(t0);
-      osc.stop(t0 + duration + 0.04);
-    }
-
-    // Air movement. A wide bandpass swept across the spectrum -- downward
-    // for something arriving, upward for something leaving.
-    function swoosh(opts) {
-      opts = opts || {};
-      noiseBurst({
-        duration: opts.duration || 0.13,
-        filterType: 'bandpass',
-        freqStart: opts.from || 5200,
-        freqEnd: opts.to || 1100,
-        q: 0.8,
-        gain: opts.gain || 0.18,
-        delay: opts.delay || 0,
-        wet: opts.wet === undefined ? 0.3 : opts.wet,
-      });
-    }
-
-    // Low-end weight. Phone speakers can barely reproduce this, but the
-    // little they do produce is the difference between a sound that feels
-    // like an object and one that feels like a notification.
-    function thump(freq, duration, gain, delay) {
-      blip(freq, freq * 0.6, duration, { gain, delay, type: 'sine', wet: 0.15 });
-    }
-
-    // Ascending high blips -- the "reward" garnish on good outcomes.
-    // Intervals widen as it climbs so it reads as a flourish, not a scale.
-    function sparkle(n, base, gain, delay) {
-      for (let i = 0; i < n; i++) {
-        const f = base * Math.pow(1.5, i) * rnd(0.97, 1.03);
-        blip(f, f * 1.06, 0.09, {
-          gain: Math.max(0.02, (gain || 0.07) * (1 - i * 0.12)),
-          delay: (delay || 0) + i * 0.045,
-          type: 'sine',
-          wet: 0.42,
-        });
-      }
-    }
-
-    // A cue must NEVER be able to throw. A sound bug took the live game
-    // down once already (the flourish ran before socket.emit and an
-    // exception ate the turn). Wrapping here means that class of bug can
-    // no longer escape this module, regardless of what the call site does.
-    function safe(fn) {
-      try { fn(); } catch (e) {
-        console.warn('[sound] cue failed (ignored):', e && e.message);
-      }
-    }
-
-    return {
-      isMuted: () => muted,
-      setMuted(v) {
-        muted = v;
-        // localStorage throws in private-mode WebViews and when storage is
-        // full. Muting must still work for the session even if it can't be
-        // remembered for the next one.
-        try { localStorage.setItem('leastcount_muted', v ? '1' : '0'); } catch (e) { /* session-only */ }
-      },
-      // Runs on the first tap (audio can't start before a user gesture
-      // anyway), so sample loading piggybacks on a moment the player is
-      // already waiting through. Everything stays synthesised until the
-      // files finish decoding -- there is no silent window.
-      // Silence everything without touching the player's mute setting.
-      // Suspending the AudioContext stops output at the hardware level, so
-      // anything already scheduled dies with it -- which matters because
-      // cues are scheduled ahead of time and would otherwise keep firing
-      // from a backgrounded app.
-      suspend() {
-        safe(() => { if (ctx && ctx.state === 'running' && ctx.suspend) ctx.suspend(); });
-      },
-      resume() {
-        safe(() => { if (ctx && ctx.state === 'suspended' && ctx.resume) ctx.resume(); });
-      },
-
-      init() {
-        safe(() => {
-          ensureCtx();
-          ensureBus();
-          const p = loadSamples();
-          if (p && p.catch) p.catch(() => { /* synth-only is a fine outcome */ });
-        });
-      },
-      // Manual install, e.g. from the console while tuning:
-      //   Sound.useSample('discard', decodedAudioBuffer, 0.9)
-      useSample(name, buffer, gain, wet) {
-        safe(() => {
-          if (!buffer) return;
-          if (!SAMPLES[name]) SAMPLES[name] = { buffers: [], gain: 0.9, wet: 0.25 };
-          SAMPLES[name].buffers.push(buffer);
-          if (typeof gain === 'number') SAMPLES[name].gain = gain;
-          if (typeof wet === 'number') SAMPLES[name].wet = wet;
-        });
-      },
-
-      // ---- your own actions ----
-      // Selecting a card fires constantly, so it stays small and dry on
-      // purpose: a big sound here would be exhausting inside two minutes.
-      // Up for select, down for deselect, so the two are distinguishable
-      // without looking at the screen.
-      select() {
-        safe(() => play('select', () => {
-          const p = rnd(0.97, 1.03);
-          cardSnap({ gain: 0.2 });
-          blip(660 * p, 820 * p, 0.06, { gain: 0.07, type: 'sine', wet: 0.12 });
-        }));
-      },
-      deselect() {
-        safe(() => play('deselect', () => {
-          const p = rnd(0.97, 1.03);
-          cardSnap({ gain: 0.14 });
-          blip(700 * p, 520 * p, 0.06, { gain: 0.055, type: 'sine', wet: 0.12 });
-        }));
-      },
-      declareTap() {
-        safe(() => play('declareTap', () => {
-          warmSeq([[440, 0.1, 0, 0.18], [660, 0.14, 0.07, 0.18]]);
-          sparkle(2, 1180, 0.05, 0.12);
-        }));
-      },
-
-      // THE most important sound in the game -- it fires on every single
-      // turn, hundreds of times a session. All four layers, and jittered
-      // so the hundredth one doesn't sound like the first.
-      discard() {
-        safe(() => play('discard', () => {
-          const p = rnd(0.94, 1.06);
-          swoosh({ duration: 0.1, from: 5200, to: 1100, gain: 0.2 });
-          cardSnap({ gain: 0.62 });
-          thump(180 * p, 0.09, 0.16, 0.005);
-          blip(880 * p, 520 * p, 0.13, { gain: 0.1, delay: 0.015, wet: 0.35 });
-        }));
-      },
-
-      // ------------------------------------------------------------------
-      // Penalty draw, WITH VALENCE.
-      //
-      // The old version knew only how many cards arrived, so dumping three
-      // 10s and drawing a 2 (an excellent turn) sounded exactly like
-      // shedding a 3 and drawing a King (a terrible one). Same cue, opposite
-      // feelings -- which is precisely the complaint.
-      //
-      // `band` is decided by the caller from the net change in hand points
-      // (see penaltyValence() further down). The riffle is common to all
-      // bands -- cards physically arrive either way -- and the VERDICT is a
-      // tonal phrase that lands just after it. Rising means you came out
-      // ahead, falling means you didn't.
-      //
-      // Defaults to 'neutral' if no band is passed, so nothing breaks.
-      // ------------------------------------------------------------------
-      penaltyDraw(count, band) {
-        safe(() => play('penaltyDraw', () => {
-          const n = Math.max(1, count || 1);
-          cardRiffle(n);
-          const t = Math.min(n, 8) * 0.045;   // verdict lands after the riffle
-          switch (band) {
-            case 'jackpot':
-              // Drew a Joker or this round's wild rank -- worth zero points.
-              // You shed real value and picked up nothing. The one "penalty"
-              // that is genuinely good news, and it should sound like it.
-              blip(660, 990, 0.16, { gain: 0.14, delay: t, wet: 0.4 });
-              sparkle(4, 1180, 0.085, t + 0.1);
-              break;
-            case 'good':
-              blip(523, 784, 0.22, { gain: 0.13, delay: t, wet: 0.4 });
-              sparkle(2, 1046, 0.06, t + 0.14);
-              break;
-            case 'bad':
-              blip(520, 300, 0.32, { gain: 0.14, delay: t, wet: 0.4 });
-              thump(140, 0.24, 0.15, t + 0.02);
-              break;
-            case 'brutal':
-              // Reserved for a big net loss, or any multi-card +2 chain
-              // penalty. Two falling layers and a double thump so it reads
-              // as heavier than 'bad' rather than merely lower.
-              blip(420, 190, 0.5, { gain: 0.16, delay: t, wet: 0.45 });
-              blip(210, 130, 0.55, { gain: 0.1, delay: t + 0.05, type: 'sawtooth', wet: 0.35 });
-              thump(120, 0.4, 0.2, t + 0.02);
-              thump(100, 0.3, 0.14, t + 0.22);
-              break;
-            default: // neutral -- roughly a fair swap
-              blip(560, 430, 0.26, { gain: 0.12, delay: t, wet: 0.4 });
-              thump(150, 0.2, 0.12, t + 0.02);
-          }
-        }));
-      },
-
-      reshuffle() { safe(() => play('reshuffle', () => cardReshuffle())); },
-
-      // Someone extended the +2 chain at you. Rising and tense, with real
-      // low-end -- this is the one moment that should make you look up.
-      chainAlert() {
-        safe(() => play('chainAlert', () => {
-          cardSnap({ gain: 0.7 });
-          thump(150, 0.26, 0.2, 0.01);
-          blip(300, 460, 0.28, { gain: 0.14, delay: 0.05, type: 'sawtooth', wet: 0.35 });
-        }));
-      },
-
-      yourTurn() {
-        safe(() => play('yourTurn', () => {
-          warmSeq([[587, 0.12, 0, 0.2], [880, 0.2, 0.09, 0.2]]);
-          sparkle(2, 1320, 0.05, 0.1);
-        }));
-      },
-
-      declareCorrect() {
-        safe(() => play('declareCorrect', () => {
-          warmSeq([[523, 0.14, 0, 0.2], [659, 0.14, 0.1, 0.2], [784, 0.3, 0.2, 0.22]]);
-          sparkle(4, 1046, 0.075, 0.24);
-        }));
-      },
-
-      // Wrong declare. Falling, with a slight buzz underneath -- the
-      // sawtooth is what makes it read as a mistake rather than just a
-      // quieter success.
-      declareWrong() {
-        safe(() => play('declareWrong', () => {
-          warmSeq([[311, 0.24, 0, 0.2, 'triangle'], [233, 0.38, 0.14, 0.19, 'triangle']]);
-          blip(180, 120, 0.4, { gain: 0.1, delay: 0.06, type: 'sawtooth', wet: 0.3 });
-        }));
-      },
-
-      // ---- Diwali patakas (Nov 2026) -- synthesized here, no files ----
-      // The fuse on a LEAST COUNT call: a dry, crackling sizzle for `ms`.
-      diwaliFuse(ms) {
-        safe(() => {
-          const n = Math.max(6, Math.round((ms || 2600) / 85));
-          for (let i = 0; i < n; i++) {
-            noiseBurst({ duration: rnd(0.025, 0.05), filterType: 'highpass', freqStart: rnd(4200, 7600),
-              gain: rnd(0.035, 0.085), delay: i * 0.085 + rnd(0, 0.04), wet: 0.04 });
-          }
-        });
-      },
-      // A right call: the bomb goes off -- a deep boom, then a crackle.
-      diwaliBoom() {
-        safe(() => {
-          noiseBurst({ duration: 1.2, filterType: 'lowpass', freqStart: 2600, freqEnd: 70, q: 0.7, gain: 0.9, wet: 0.55 });
-          thump(72, 0.7, 0.55, 0);
-          for (let i = 0; i < 9; i++) {
-            noiseBurst({ duration: rnd(0.02, 0.05), filterType: 'highpass', freqStart: rnd(3000, 6500),
-              gain: rnd(0.06, 0.14), delay: 0.22 + i * rnd(0.05, 0.1), wet: 0.3 });
-          }
-        });
-      },
-      // A wrong call: a dud. "Phusss..." and a sad little drop.
-      diwaliDud() {
-        safe(() => {
-          noiseBurst({ duration: 0.85, filterType: 'bandpass', freqStart: 3200, freqEnd: 600, q: 0.9, gain: 0.24, wet: 0.2 });
-          blip(440, 150, 0.55, { gain: 0.08, delay: 0.3, type: 'triangle', wet: 0.25 });
-        });
-      },
-      // A +2 rocket: a rising whoosh, then a pop where it lands.
-      diwaliRocket(flightMs) {
-        safe(() => {
-          const f = (flightMs || 900) / 1000;
-          noiseBurst({ duration: f, filterType: 'bandpass', freqStart: 600, freqEnd: 4800, q: 2.2, gain: 0.28, wet: 0.2 });
-          noiseBurst({ duration: 0.3, filterType: 'lowpass', freqStart: 3200, freqEnd: 160, gain: 0.55, delay: f, wet: 0.4 });
-          thump(110, 0.25, 0.25, f);
-        });
-      },
-      // A +2 penalty landing on a chair: a short, heavy blast and a crackle.
-      diwaliHit() {
-        safe(() => {
-          noiseBurst({ duration: 0.55, filterType: 'lowpass', freqStart: 2200, freqEnd: 120, gain: 0.6, wet: 0.4 });
-          thump(90, 0.35, 0.4, 0);
-          for (let i = 0; i < 6; i++) {
-            noiseBurst({ duration: 0.025, filterType: 'highpass', freqStart: rnd(4000, 7500),
-              gain: rnd(0.05, 0.1), delay: 0.12 + i * rnd(0.06, 0.12), wet: 0.25 });
-          }
-        });
-      },
-      // A phuljhadi: a bright, busy crackle for `ms`.
-      diwaliSparkler(ms) {
-        safe(() => {
-          const n = Math.max(8, Math.round((ms || 2200) / 55));
-          for (let i = 0; i < n; i++) {
-            noiseBurst({ duration: rnd(0.012, 0.03), filterType: 'highpass', freqStart: rnd(5500, 9000),
-              gain: rnd(0.03, 0.07), delay: i * 0.055 + rnd(0, 0.03), wet: 0.08 });
-          }
-        });
-      },
-      // One sky shot opening up.
-      diwaliSkyShot() {
-        safe(() => {
-          noiseBurst({ duration: 0.6, filterType: 'lowpass', freqStart: 2000, freqEnd: 120, gain: 0.45, wet: 0.5 });
-          for (let i = 0; i < 5; i++) {
-            noiseBurst({ duration: 0.03, filterType: 'highpass', freqStart: rnd(3500, 7000), gain: rnd(0.04, 0.09),
-              delay: 0.15 + i * rnd(0.05, 0.09), wet: 0.3 });
-          }
-        });
-      },
-
-      win() {
-        safe(() => play('win', () => {
-          warmSeq([[523, 0.17, 0, 0.2], [659, 0.17, 0.12, 0.2], [784, 0.17, 0.24, 0.21], [1046, 0.45, 0.36, 0.23]]);
-          sparkle(5, 1046, 0.085, 0.4);
-          thump(160, 0.4, 0.16, 0.36);
-        }));
-      },
-
-      // ==================================================================
-      // OTHER PLAYERS' MOVES
-      //
-      // Until now only YOUR actions made any sound. In a six-player game
-      // that means five of every six events at the table were silent --
-      // the opponent's card visibly flew to the pile making no noise at
-      // all. That is the single biggest reason the audio felt patchy.
-      //
-      // These are the same sounds as your own, but quieter and much wetter.
-      // More reverb with less direct signal is how the ear judges distance,
-      // so an opponent's discard lands as "across the table" rather than
-      // "in my hands" -- you can tell whose turn it just was without
-      // looking up, and your own moves stay unambiguously front and centre.
-      // ==================================================================
-      opponentDiscard() {
-        safe(() => play('opponentDiscard', () => {
-          const p = rnd(0.94, 1.06);
-          swoosh({ duration: 0.11, from: 4200, to: 900, gain: 0.075, wet: 0.6 });
-          cardSnap({ gain: 0.26 });
-          blip(820 * p, 500 * p, 0.12, { gain: 0.042, delay: 0.015, wet: 0.6 });
-        }));
-      },
-
-      // No valence here, and it isn't an oversight: the server only tells
-      // you privately what YOU drew. For everyone else it broadcasts the
-      // count and nothing more, so the value of their card is genuinely
-      // unknown to this client. Making it valenced needs a server change.
-      opponentDraw(count) {
-        safe(() => play('opponentDraw', () => {
-          cardRiffle(Math.max(1, count || 1), 0.4);
-        }));
-      },
-
-      // ==================================================================
-      // MOVES THAT USED TO BE SILENT
-      // ==================================================================
-
-      // Playing a 2 to push the chain on to the next player. The most
-      // aggressive thing you can do in this game, and it made no sound
-      // whatsoever. Rising and biting -- the mirror of chainAlert(), which
-      // is what the victim hears.
-      chainTwoPlay() {
-        safe(() => play('chainTwoPlay', () => {
-          cardSnap({ gain: 0.55 });
-          blip(330, 620, 0.26, { gain: 0.15, delay: 0.02, type: 'sawtooth', wet: 0.3 });
-          blip(660, 990, 0.18, { gain: 0.08, delay: 0.1, wet: 0.45 });
-        }));
-      },
-
-      // Giving up and accepting the +2/+4/+6. Fires on the TAP, so the
-      // button responds immediately; the cards themselves arrive a moment
-      // later with their own (always brutal) penaltyDraw. Resigned, heavy,
-      // no tonal rise at all.
-      takePenalty() {
-        safe(() => play('takePenalty', () => {
-          thump(190, 0.2, 0.2, 0);
-          blip(300, 180, 0.3, { gain: 0.12, delay: 0.02, type: 'triangle', wet: 0.35 });
-        }));
-      },
-
-      // Somebody is out of the game. Heavier and lower when it's you.
-      eliminated(isMe) {
-        safe(() => play('eliminated', () => {
-          const g = isMe ? 1 : 0.5;
-          const base = isMe ? 330 : 392;
-          warmSeq([[base, 0.3, 0, 0.19 * g, 'triangle'], [base * 0.75, 0.42, 0.18, 0.18 * g, 'triangle']]);
-          blip(base * 0.5, base * 0.32, 0.6, { gain: 0.12 * g, delay: 0.1, type: 'sawtooth', wet: 0.4 });
-          if (isMe) thump(110, 0.5, 0.18, 0.3);
-        }));
-      },
-
-      // ------------------------------------------------------------------
-      // DEALING. Rebuilt -- the first version was machine-gun clicking.
-      //
-      // The deal animation fires one card every 90ms, i.e. ELEVEN per
-      // second, for 13 passes: 78 flights in a six-player game, 130 in a
-      // ten-player one. A cue on every flight is a buzzsaw, not a deal. A
-      // real dealer puts out three or four cards a second.
-      //
-      // Two changes. First, this throttles ITSELF rather than trusting the
-      // call site, so the rate is right at any table size: extra calls
-      // inside the window are dropped. Second, the pitched layer is gone.
-      // Dealing has no pitch -- 78 rising tones read as a broken arpeggio,
-      // and that was most of what made it grate.
-      //
-      // The interval is jittered so it lands like a hand, not a metronome.
-      // ------------------------------------------------------------------
-      dealTick() {
-        safe(() => {
-          const now = Date.now();
-          if (now - lastDealTickAt < dealTickGap) return;
-          lastDealTickAt = now;
-          dealTickGap = rnd(140, 205);   // next gap: never mechanical
-          play('dealTick', () => {
-            // Flick only -- no low thud. A card leaving a dealer's hand is
-            // all high-frequency transient; the body belongs to the card
-            // LANDING, which is a different sound (discard).
-            noiseBurst({
-              duration: rnd(0.022, 0.032),
-              filterType: 'bandpass',
-              freqStart: rnd(3600, 5200),
-              freqEnd: rnd(1600, 2300),
-              q: 1.4,
-              gain: rnd(0.085, 0.135),
-              wet: 0.4,
-            });
-          });
-        });
-      },
-
-      // Played once when the deal finishes: the dealer squaring the pile.
-      // Gives the sequence an ending instead of the ticks just stopping.
-      dealSettle() {
-        safe(() => play('dealSettle', () => {
-          cardSnap({ gain: 0.2 });
-          thump(150, 0.14, 0.1, 0.01);
-          shuffleBurst(7, 0.09, { gain: 0.07, dur: 0.012 });
-        }));
-      },
-
-      // The deck-intro riffle. The visual shuffle (two halves zippering
-      // together) played in silence, so the sequence opened with a moving
-      // picture and no sound at all. Softer than the mid-game reshuffle --
-      // this is scene-setting, not an event you need to notice.
-      deckShuffle() {
-        safe(() => play('deckShuffle', () => {
-          shuffleBurst(26, 0.5, { gain: 0.13, dur: 0.015 });
-          shuffleBurst(22, 0.5, { gain: 0.1, dur: 0.014, freqSpread: 2400 });
-        }));
-      },
-
-      // Quiet, high and short. Chat must never compete with the table.
-      chatMessage() {
-        safe(() => play('chatMessage', () => {
-          blip(880, 1170, 0.07, { gain: 0.055, wet: 0.45 });
-          blip(1170, 1170, 0.09, { gain: 0.04, delay: 0.06, wet: 0.5 });
-        }));
-      },
-
-      // Pairs with the existing 5-second vibration. Haptics alone reached
-      // only the players whose phones vibrate -- a phone on loud-with-
-      // vibration-off got no warning at all, and one on silent got no
-      // sound. Two channels, so the warning actually lands either way.
-      timerWarning() {
-        safe(() => play('timerWarning', () => {
-          blip(980, 980, 0.07, { gain: 0.13, type: 'square', wet: 0.2 });
-          blip(980, 980, 0.07, { gain: 0.13, delay: 0.14, type: 'square', wet: 0.2 });
-        }));
-      },
-    };
-  })();
-
-  // ------------------------------------------------------------------
-  // PENALTY VALENCE
-  //
-  // A penalty draw is not one feeling. Shedding three 10s and picking up a
-  // 2 is a great turn; shedding a single 3 and picking up a King is a
-  // miserable one. Both currently cost you exactly one penalty card, and
-  // both used to make exactly the same noise.
-  //
-  // What actually matters is the NET change in your hand's point total:
-  //
-  //     net = (points drawn) - (points discarded)
-  //
-  // Negative is good (your hand got lighter), positive is bad. This also
-  // correctly rewards the big play: releasing three 10s for one penalty
-  // card is a huge negative swing and should sound like a triumph.
-  //
-  // Jokers and the round's wild rank are worth ZERO, so drawing one is the
-  // best possible outcome -- you gave up real points and took on none.
-  // That gets its own band rather than being lumped in with "good".
-  // ------------------------------------------------------------------
-  function cardPoints(card, jokerRank) {
-    if (!card) return 0;
-    if (card.rank === 'JOKER') return 0;
-    if (jokerRank && card.rank === jokerRank) return 0;
-    if (card.rank === 'A') return 1;
-    if (card.rank === 'J' || card.rank === 'Q' || card.rank === 'K') return 10;
-    const n = parseInt(card.rank, 10);
-    return isNaN(n) ? 0 : n;   // never NaN -- a NaN here would poison every comparison below
-  }
-
-  // What the player just put down, remembered only long enough to compare
-  // it against what comes back. Cleared after use and time-limited, so a
-  // stale discard can never be paired with an unrelated later draw.
-  let lastDiscardInfo = null;
-  const DISCARD_PAIRING_MS = 6000;
-
-  function noteDiscardForValence(cards, jokerRank) {
-    if (!cards || !cards.length) { lastDiscardInfo = null; return; }
-    lastDiscardInfo = {
-      points: cards.reduce((s, c) => s + cardPoints(c, jokerRank), 0),
-      at: Date.now(),
-    };
-  }
-
-  function penaltyValence(drawnCards, jokerRank) {
-    const cards = drawnCards || [];
-    if (!cards.length) return 'neutral';
-
-    // Multi-card draws are ALWAYS a +2 chain penalty, and a chain penalty is
-    // always bad news regardless of arithmetic: you take cards and give up
-    // nothing in exchange, so there is no trade to evaluate.
-    if (cards.length > 1) return 'brutal';
-
-    const drawnPts = cardPoints(cards[0], jokerRank);
-
-    // A zero-point card (Joker or this round's wild rank) is a free card.
-    // Worth calling out even when you discarded almost nothing for it.
-    if (drawnPts === 0) return 'jackpot';
-
-    // No paired discard -- e.g. taking the penalty outright, or the draw
-    // arriving late enough that pairing it would be a guess. Judge the card
-    // on its own merits instead of inventing a comparison.
-    const fresh = lastDiscardInfo && (Date.now() - lastDiscardInfo.at) < DISCARD_PAIRING_MS;
-    if (!fresh) return drawnPts >= 10 ? 'bad' : 'neutral';
-
-    const net = drawnPts - lastDiscardInfo.points;
-    lastDiscardInfo = null;   // consume it: one discard pairs with one draw
-
-    // Thresholds are deliberately SYMMETRIC around zero. An earlier cut had
-    // 'good' at net <= -8, which made "discard a 10, draw a 4" (net -6) come
-    // out neutral even though "discard a 4, draw a 10" (net +6) came out bad
-    // -- the exact pair of moves that has to sound opposite. Mirror them.
-    if (net <= -15) return 'jackpot';  // a huge swing: dumped a big group, took back almost nothing
-    if (net <= -3) return 'good';      // came out ahead
-    if (net < 3) return 'neutral';     // roughly a fair swap
-    if (net < 12) return 'bad';        // the 4-for-a-10 case
-    return 'brutal';
-  }
-
-  // ------------------------------------------------------------------
-  // The intro splash is dismissed by a CSS animation ALONE (introFadeOut,
-  // 2.2s delay, forwards). The markup says a JS timer isn't needed so it
-  // "can never get stuck open" -- that is backwards: with no JS path, an
-  // animation that never runs or never completes leaves a full-screen
-  // element at z-index 999 with pointer-events on, and nothing in the app
-  // can remove it.
-  //
-  // Observed stuck at opacity 1 during the audit, after the tab was
-  // backgrounded during load -- on a phone that is just "the screen locked
-  // while the game was opening". An OS-level "remove animations" setting
-  // would do the same.
-  //
-  // Removing the node outright is the safe way out: the animation has run
-  // its course by 2.8s (2.2 delay + 0.6 duration) and the splash has no
-  // other job afterwards.
-  // ------------------------------------------------------------------
-  setTimeout(() => {
-    const intro = document.getElementById('screen-intro');
-    if (intro && intro.parentNode) intro.parentNode.removeChild(intro);
-  }, 3200);
-
-  // Deferred by one tick, deliberately.
-  //
-  // This used to call buildCardBackdrop() directly here -- and it threw on
-  // EVERY page load: "Cannot access 'BACKDROP_CARDS' before initialization".
-  // The card array is a `const` declared ~3000 lines further down, so at this
-  // point in module execution it is still in its temporal dead zone. The
-  // function itself is hoisted, which is why the call looked fine.
-  //
-  // The try/catch below then swallowed it as "cosmetic only", so the scattered
-  // card backdrop silently never appeared on any screen, in any build, since
-  // the day it shipped. Nothing logged louder than a console warning.
-  //
-  // setTimeout(0) runs it after this module has finished executing, by which
-  // point every const in the file is initialised. The backdrop is purely
-  // decorative and hidden during play, so a one-tick delay is invisible.
-  setTimeout(() => {
-    try { buildCardBackdrop(); } catch (e) {
-      console.warn('[bg] card backdrop failed (cosmetic only):', e && e.message);
-    }
-  }, 0);
-
-  document.addEventListener('click', function initAudioOnce() {
-    Sound.init();
-    document.removeEventListener('click', initAudioOnce);
-  }, { once: true });
-
-  // ------------------------------------------------------------------
-  // Silence the app the moment it leaves the screen.
-  //
-  // The GAME keeps running -- the server owns the turn timer and will
-  // auto-play for you, which is correct and must not change. What is not
-  // correct is a phone in your pocket playing card snaps and turn chimes
-  // for a table you are no longer looking at.
-  //
-  // visibilitychange covers backgrounding, the recents switcher, and the
-  // screen locking. pagehide covers the WebView being torn down, which on
-  // Android does not always fire visibilitychange first.
-  //
-  // Deliberately NOT using the mute setting: this is temporary silence,
-  // and flipping mute would persist to localStorage and leave the player
-  // muted next time they open the app with no idea why.
-  // ------------------------------------------------------------------
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') Sound.suspend();
-    else Sound.resume();
-  });
-  window.addEventListener('pagehide', () => Sound.suspend());
-  // Coming back from the recents switcher fires pageshow but not always
-  // visibilitychange, so resume from both.
-  window.addEventListener('pageshow', () => Sound.resume());
-
-  // Sound toggle button was removed from the game screen's top bar by
-  // request; Sound.isMuted()/setMuted() are still available if a toggle is
-  // reintroduced elsewhere later.
-
-  // ---------------- screen management ----------------
-  function showScreen(id) {
-    const prevActive = document.querySelector('.screen.active');
-    const prevId = prevActive ? prevActive.id : null;
-    // A popover floating over the table must not follow you to another screen.
-    if (prevId && prevId !== id) { try { closePlayerActionPopover(); } catch (e) { /* not ready */ } }
-    // Lobby chat (Oct 2026) uses the same sheet as the table chat. When the
-    // game starts under it, close it: the countdown and the deal need the
-    // table, and anything said after this shows up on the chat button's
-    // unread badge at the table. Only on the actual lobby -> game switch --
-    // showScreen('screen-game') also runs on every game_state, and must not
-    // shut a sheet someone opened mid-game.
-    // Also on the way back to the home screen: a table chat has no business
-    // floating over it.
-    if ((prevId === 'screen-lobby' && id === 'screen-game') || (id === 'screen-landing' && prevId !== id)) {
-      const tablePanel = document.getElementById('chat-panel');
-      if (tablePanel && !tablePanel.classList.contains('hidden')) closeTableChat();
-    }
-    document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
-    document.getElementById(id).classList.add('active');
-    // Home's sheets belong to Home. Whatever takes you elsewhere -- a game
-    // starting, a lobby, a group -- closes them, so you never come back to
-    // Home with one still up.
-    if (id !== 'screen-landing') {
-      try { closeHomeSheet(); } catch (e) { /* never block navigation */ }
-    }
-    // Offer the tutorial whenever the landing screen comes up, not only on
-    // the very first paint: a player who lands here after their first game
-    // still gets one chance at it, and wasSeen() makes sure it is only ever
-    // one chance.
-    if (id === 'screen-landing') {
-      try { updateHomeGreeting(); } catch (e) { /* cosmetic */ }
-      try { maybeOfferTutorial(); } catch (e) { /* never block navigation */ }
-      try { maybeAskNameAfterFirstGame(); } catch (e) { /* never block navigation */ }
-    }
-    // The group chat button belongs to the group screen only. Handled here
-    // rather than in each navigation path because there are several ways off
-    // that screen (back, joining a room, a game starting under you), and a
-    // chat button left floating over the table or the landing screen would
-    // open a sheet for a group you're no longer looking at.
-    (function syncGroupChatChrome() {
-      const onGroup = id === 'screen-group';
-      const fab = document.getElementById('group-chat-fab');
-      const panel = document.getElementById('group-chat-panel');
-      const backdrop = document.getElementById('group-chat-backdrop');
-      if (!fab || !panel || !backdrop) return;
-      if (!onGroup) {
-        // Release the held screen and the scroll lock if the sheet was open
-        // when we navigated away (see chatSheetOpened).
-        if (!panel.classList.contains('hidden')) chatSheetClosed();
-        panel.classList.add('hidden');
-        backdrop.classList.add('hidden');
-        groupChatExpanded = false;
-      }
-      // Never show the button while the sheet itself is open.
-      fab.classList.toggle('hidden', !onGroup || !panel.classList.contains('hidden'));
-    })();
-    // The game screen locks the page to one viewport (no drag/scroll needed);
-    // other screens (lobby, overlays) are allowed to scroll normally.
-    document.body.classList.toggle('game-active', id === 'screen-game');
-    // Banner ad (native Android app only -- see admob-init.js) now shows on
-    // every screen including the game table -- the game screen's layout was
-    // reworked (fixed-height hand tray, merged joker/normal cards, reserved
-    // --ad-safe-bottom padding) specifically to make room for it here too,
-    // instead of the banner being the one thing hidden during actual play.
-    if (window.LCAds) {
-      // adsRemoved (see the Remove Ads purchase block above) overrides
-      // everything else -- once someone's paid to remove ads, the banner
-      // should never come back, on any screen.
-      if (adsRemoved) window.LCAds.hideBanner();
-      else {
-        window.LCAds.showBanner();
-        // Start loading the leave-room interstitial as soon as a room is
-        // entered. An interstitial takes a few seconds to fetch and can
-        // only be shown once loaded, so waiting until the player actually
-        // taps Leave would mean there's nothing ready to show. Preparing it
-        // here -- minutes ahead of the moment it's needed -- is what makes
-        // the ad appear instantly instead of not at all. Safe to call
-        // repeatedly: it no-ops if one is already loaded or in flight.
-        if (id === 'screen-game' || id === 'screen-lobby') {
-          window.LCAds.prepareInterstitial();
-        }
-      }
-    }
-    // "Get the app" bars on Home and in the lobby (website on Android only).
-    if (id === 'screen-landing' || id === 'screen-lobby') updateAppPromos();
-    if (id === 'screen-game') {
-      applyKeyboardSafeLayout();
-    } else {
-      // Leaving the game screen -- release the inline pixel height back to
-      // CSS, since landing/lobby are meant to scroll normally and were never
-      // part of this problem.
-      document.body.style.height = '';
-      const screenGameEl = document.getElementById('screen-game');
-      if (screenGameEl) screenGameEl.style.height = '';
-      const chatPanelEl = document.getElementById('chat-panel');
-      // Only when actually LEAVING the game screen (Oct 2026). This branch
-      // runs on every showScreen() call for another screen -- and the lobby
-      // calls showScreen('screen-lobby') on every room_update (someone
-      // joins, a bot is added...). With chat now open in the lobby, that was
-      // wiping the sheet's position and its keyboard yardstick each time, so
-      // a player joining while you typed knocked the sheet out of typing
-      // mode.
-      if (chatPanelEl && prevId === 'screen-game') {
-        // Hand every edge back to CSS. `top` matters as much as `bottom`
-        // now that both are set inline on the game screen -- leaving a
-        // stale pixel top behind would strand the lobby's sheet at a
-        // game-screen position.
-        chatPanelEl.style.top = '';
-        chatPanelEl.style.bottom = '';
-        chatPanelEl.style.height = '';
-        chatPanelEl.style.maxHeight = '';
-        chatSheetTopPx = null;
-        chatSheetOpenVisibleH = null;
-        // Still open (the game ended back into the lobby with the chat up):
-        // place it again for this screen rather than leave it on CSS defaults.
-        if (!chatPanelEl.classList.contains('hidden')) positionChatSheet();
-      }
-      // No round can be counting down once we're off the game screen (left
-      // the room, game reset to lobby) -- don't leave the ticker running.
-      setAutoNextRoundDeadline(null);
-    }
-  }
-
-  // --------------------------------------------------------------------
-  // Keyboard-safe game screen height. Neither CSS viewport units
-  // (100vh/100dvh/100svh) nor the native Android windowSoftInputMode /
-  // interactive-widget settings reliably stopped the on-screen keyboard
-  // from shrinking the visible area on the actual test device -- both were
-  // tried and confirmed still squishing the oval table. This sidesteps the
-  // whole question of which browser/OS viewport mechanism the current
-  // device happens to respect, by taking manual control via the
-  // VisualViewport API instead (supported on Android Chrome/WebView since
-  // 2017, far broader than the newer CSS-only tools):
-  //   - CORRECTION (Sept 2026, after the fix below made things visibly
-  //     WORSE on a real device -- table squishing live while typing):
-  //     window.innerHeight is NOT actually keyboard-immune on this device,
-  //     despite interactive-widget=overlays-content being set (see the meta
-  //     tag in index.html) -- that's the exact same unreliability the
-  //     original comment above already warned about ("neither CSS viewport
-  //     units nor the native interactive-widget settings reliably stopped
-  //     the keyboard from shrinking the visible area"). A brief attempt to
-  //     replace the tracking below with a live window.innerHeight read
-  //     caused the whole oval table to visibly compress into a tiny strip
-  //     the instant the keyboard opened, because window.innerHeight shrinks
-  //     right along with it here. Reverted back to the tracking approach:
-  //   - Tracks the tallest visualViewport.height seen since page load --
-  //     that's "keyboard closed", since the keyboard only ever shrinks the
-  //     visible area, never grows it past the real full-screen value.
-  //     Seeded once at script load (nothing can have focus yet, so no
-  //     keyboard can be open), and ONLY EVER GROWS from there -- it must
-  //     never be reset back down just because the game screen re-renders,
-  //     which is exactly the bug fixed separately below.
-  //   - Pins #screen-game and body to exactly that many pixels via inline
-  //     style, which wins over any CSS vh/dvh/svh rule regardless of
-  //     whether THIS device's browser/OS actually respects those units for
-  //     the keyboard case.
-  //   - Separately computes the keyboard's own height (baseline minus
-  //     current visible height) to lift the chat panel above it, instead of
-  //     relying on env(keyboard-inset-height) support.
-  //   - The ONE legitimate reason to reset this baseline is a genuine
-  //     device rotation (width/height actually swap) -- handled in the
-  //     orientationchange listener below, not here. Round transitions,
-  //     game-state pushes, and every other routine re-render must leave it
-  //     alone -- resetting it there was the earlier, now-fixed bug where a
-  //     round starting while chat+keyboard were still open baked the
-  //     keyboard-shrunk height in as "full screen" for the rest of the
-  //     session (matches the "Setting up decks.../Shuffling.../Dealing
-  //     cards..." flicker from the previous report).
-  // --------------------------------------------------------------------
-  // --------------------------------------------------------------------
-  // ...BUT "ONLY EVER GROWS" WAS TOO STRONG (Nov 2026). It latched onto any
-  // moment the view was briefly TALLER than the phone really is -- coming
-  // back from WhatsApp after sending an invite, or the moment around a
-  // full-screen ad -- and kept the game that many pixels taller for the rest
-  // of the session. The extra height went to the table and pushed Discard
-  // and Least Count! down under the ad. Friends games were where people
-  // hopped out to WhatsApp, so friends games were where it showed; bot games
-  // looked fine (Mani, both screenshots: the table ~70px taller -- the
-  // phone's two bars -- and the buttons gone).
-  //
-  // So: while a text box has focus (the keyboard's doing) it still only
-  // grows, exactly as before. Otherwise the view's own height IS the screen:
-  // taller is taken at once (a keyboard closing), shorter after it has held
-  // for a moment (a bar coming back), so nothing jumps mid-animation.
-  // --------------------------------------------------------------------
-  let maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-  let viewportShrinkTimer = null;
-  function textBoxFocused() {
-    const a = document.activeElement;
-    if (!a) return false;
-    if (a.tagName === 'TEXTAREA' || a.isContentEditable) return true;
-    return a.tagName === 'INPUT' && /^(text|search|email|tel|url|number|password)?$/i.test(a.type || '');
-  }
-  function applyKeyboardSafeLayout() {
-    if (!window.visualViewport || !document.body.classList.contains('game-active')) return;
-    const vv = window.visualViewport;
-    if (vv.height >= maxViewportHeight || textBoxFocused()) {
-      clearTimeout(viewportShrinkTimer);
-      viewportShrinkTimer = null;
-      maxViewportHeight = Math.max(maxViewportHeight, vv.height);
-    } else if (!viewportShrinkTimer) {
-      viewportShrinkTimer = setTimeout(() => {
-        viewportShrinkTimer = null;
-        const now = window.visualViewport;
-        if (!now || textBoxFocused() || now.height >= maxViewportHeight) return;
-        maxViewportHeight = now.height;
-        applyKeyboardSafeLayout();
-      }, 400);
-    }
-
-    document.body.style.height = maxViewportHeight + 'px';
-    const screenGameEl = document.getElementById('screen-game');
-    if (screenGameEl) screenGameEl.style.height = maxViewportHeight + 'px';
-  }
-  // --------------------------------------------------------------------
-  // Chat sheet positioning -- REWRITTEN Sept 2026 (see style.css for the
-  // matching CSS rationale). This replaces applyChatPanelKeyboardOffset(),
-  // which had two defects that between them produced every symptom in the
-  // user's screen recording ("once I start typing it breaks down and goes
-  // up and I can't see what I'm typing"):
-  //
-  //   DEFECT 1 -- DOUBLE LIFT. The old code did:
-  //       bottom = (maxViewportHeight - visualViewport.height) + adSafe
-  //   i.e. it manually pushed the sheet up by the keyboard's height. That
-  //   is only correct if the browser leaves the LAYOUT viewport at full
-  //   size when the keyboard opens (interactive-widget=overlays-content).
-  //   On the actual device it does NOT -- the layout viewport shrinks,
-  //   which was already established earlier when window.innerHeight was
-  //   observed shrinking along with the keyboard. And when the layout
-  //   viewport shrinks, a position:fixed element with bottom:0 is ALREADY
-  //   resting on top of the keyboard, because the initial containing block
-  //   for fixed positioning IS the layout viewport. So the manual offset
-  //   was a second lift on top of the browser's own, launching the sheet
-  //   a full keyboard-height off the top of the screen -- header, close
-  //   button and message list all above y=0, only the input row left, and
-  //   the caret sitting somewhere invisible.
-  //
-  //   The fix is to stop *assuming* which mode the browser is in and
-  //   instead MEASURE the discrepancy:
-  //       anchorBottom  = document.documentElement.clientHeight
-  //                       (layout viewport height == where the browser
-  //                        actually places `bottom: 0`)
-  //       visibleBottom = visualViewport.offsetTop + visualViewport.height
-  //                       (where the genuinely visible area ends)
-  //       lift          = max(0, anchorBottom - visibleBottom)
-  //   In resizes-content behaviour those two are equal, so lift is 0 and
-  //   we add nothing -- no double lift. In overlays-content behaviour
-  //   anchorBottom stays full-height, so lift comes out as exactly the
-  //   keyboard height and we lift by precisely that much. One expression,
-  //   correct in both worlds, and self-correcting if a future WebView
-  //   update changes which one this device uses. Nothing here depends on
-  //   maxViewportHeight, which is a heuristic (tallest height ever seen)
-  //   and was the thing quietly going stale.
-  //
-  //   DEFECT 2 -- THE TOP EDGE WAS AN OUTPUT, NOT AN INPUT. The sheet was
-  //   anchored only at the bottom with a height/max-height, so its top
-  //   edge landed wherever `bottom + height` happened to fall. Every
-  //   earlier attempt at this bug was an attempt to keep that derived
-  //   number inside the screen (a 480px ceiling, then a 160px floor, then
-  //   removing the floor again). It cannot be made safe, because height
-  //   and bottom are computed from different, occasionally-disagreeing
-  //   sources. Now BOTH edges are set explicitly and each is independently
-  //   clamped into the visible area, so the sheet physically cannot spill
-  //   past the top: its height is a *consequence* of two known-good
-  //   points. The flex column then does the rest -- .chat-messages has
-  //   flex:1/min-height:0 so it, and only it, absorbs the squeeze, exactly
-  //   like Instagram's comment sheet shrinking its list while the composer
-  //   stays glued above the keyboard.
-  // --------------------------------------------------------------------
-
-  // Fraction of the visible screen the sheet covers with no keyboard up.
-  // 0.60 keeps the oval table, seats, turn indicator and timer readable
-  // above it -- the whole reason the backdrop is no longer dimmed.
-  const CHAT_SHEET_FRACTION = 0.60;
-  // Below this the sheet is useless (header + composer alone are ~110px),
-  // so we start moving the TOP edge up rather than squeezing further.
-  const CHAT_SHEET_MIN_HEIGHT = 210;
-  // Absolute floor: never leave less than the composer + a sliver of list.
-  const CHAT_SHEET_HARD_MIN = 120;
-  // Captured when the sheet is opened -- at that instant the keyboard is
-  // guaranteed closed (we deliberately don't autofocus the input), so it's
-  // the one moment a clean full-height reading is available. Keeping the
-  // top edge pinned to this value is what makes the keyboard squeeze the
-  // list instead of sliding the whole sheet around under your thumb.
-  let chatSheetTopPx = null;
-
-  // ------------------------------------------------------------------
-  // Typing mode (Oct 2026). Reported: "once we click chat and the keyboard
-  // opens, it shows just one or two messages, and it affects the
-  // background".
-  //
-  // One or two messages: the top edge above stayed pinned at 40% of the
-  // screen while the keyboard pushed the bottom edge up, so on a 780px phone
-  // with a ~300px keyboard the sheet was left ~210px tall -- header and
-  // composer took ~110 of that and the conversation got the rest. While the
-  // keyboard is up the sheet now takes the whole visible area above it
-  // instead (on the game screen it stops short of the top bar, so the round
-  // and the turn timer stay in view). With the keyboard down it is the same
-  // 60% sheet as before, so the table is still watchable.
-  //
-  // The background: on the app the keyboard can shrink the whole WebView,
-  // which reflowed whatever screen was behind the sheet, and the WebView
-  // could scroll the page to "reveal" the input, leaving it shifted after
-  // the keyboard closed. While a chat sheet is open the screen behind it is
-  // now held at the height it had when the sheet opened, and the page is
-  // kept at scroll 0. Both are released the moment the sheet closes.
-  // ------------------------------------------------------------------
-  const CHAT_TYPING_GAP_GAME = 56;   // keeps .game-top (round + timer) visible
-  const CHAT_TYPING_GAP = 8;
-  // Visible height when the sheet was opened -- the keyboard is
-  // definitionally down then (the input is never auto-focused), so this is
-  // the yardstick for "the keyboard has taken a real bite out of the screen".
-  let chatSheetOpenVisibleH = null;
-  let chatFrozenScreen = null;
-
-  function chatInputFocused() {
-    const a = document.activeElement;
-    return !!a && (a.id === 'chat-input' || a.id === 'input-group-chat');
-  }
-  function keepPageAtTop() {
-    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
-  }
-  // Called by every path that opens a chat sheet (table chat on the lobby or
-  // the table, group chat on the group screen).
-  function chatSheetOpened() {
-    chatSheetTopPx = null;
-    chatSheetOpenVisibleH = null;
-    const scr = document.querySelector('.screen.active');
-    // The game screen already pins its own height (applyKeyboardSafeLayout).
-    if (scr && scr.id !== 'screen-game' && !chatFrozenScreen) {
-      scr.style.height = Math.round(scr.getBoundingClientRect().height) + 'px';
-      chatFrozenScreen = scr;
-    }
-    window.addEventListener('scroll', keepPageAtTop, { passive: true });
-  }
-  // ...and every path that closes one. Safe to call twice.
-  function chatSheetClosed() {
-    chatSheetTopPx = null;
-    chatSheetOpenVisibleH = null;
-    if (chatFrozenScreen) {
-      chatFrozenScreen.style.height = '';
-      chatFrozenScreen = null;
-    }
-    window.removeEventListener('scroll', keepPageAtTop);
-    keepPageAtTop();
-  }
-
-  function chatAdSafeBottom() {
-    return parseFloat(
-      getComputedStyle(document.documentElement).getPropertyValue('--ad-safe-bottom')
-    ) || 0;
-  }
-
-  // Which sheet the positioner below is currently driving. There are two
-  // chat sheets -- the table chat (#chat-panel) and the group chat
-  // (#group-chat-panel) -- but they live on different screens and only one
-  // can ever be open, so they share this one implementation rather than
-  // carrying two copies of the keyboard maths. Everything below was tuned
-  // against a real Android WebView over several rounds; duplicating it would
-  // mean every future fix has to be made twice and one copy would drift.
-  let activeChatPanelId = 'chat-panel';
-  let activeChatListId = 'chat-messages';
-
-  function positionChatSheet() {
-    const panel = document.getElementById(activeChatPanelId);
-    if (!panel || panel.classList.contains('hidden')) return;
-
-    const vv = window.visualViewport;
-    const adSafe = chatAdSafeBottom();
-    // Layout viewport == the containing block for position:fixed. In
-    // standards mode documentElement.clientHeight is exactly that.
-    const anchorBottom = document.documentElement.clientHeight;
-    const visibleTop = vv ? vv.offsetTop : 0;
-    const visibleH = vv ? vv.height : window.innerHeight;
-    const lift = Math.max(0, Math.round(anchorBottom - (visibleTop + visibleH)));
-
-    const bottom = lift + adSafe;
-    const bottomEdge = anchorBottom - bottom; // y of the sheet's bottom, in fixed coords
-
-    if (chatSheetTopPx === null) {
-      chatSheetTopPx = Math.round(visibleTop + visibleH * (1 - CHAT_SHEET_FRACTION));
-      chatSheetOpenVisibleH = visibleH;
-    }
-    // Typing mode (see chatSheetOpened above): the input has focus AND the
-    // keyboard has visibly taken space -- either the visible area shrank
-    // (the WebView was resized) or the bottom had to be lifted (the keyboard
-    // overlays the page). A hardware keyboard on a desktop does neither, so
-    // there the sheet stays at 60% and the table stays in view.
-    const keyboardUp = chatInputFocused() &&
-      ((chatSheetOpenVisibleH !== null && chatSheetOpenVisibleH - visibleH > 120) || lift > 80);
-    let top = keyboardUp
-      ? visibleTop + (document.body.classList.contains('game-active') ? CHAT_TYPING_GAP_GAME : CHAT_TYPING_GAP)
-      : chatSheetTopPx;
-    // Keyboard ate the room: raise the top edge rather than clip the sheet.
-    top = Math.min(top, bottomEdge - CHAT_SHEET_MIN_HEIGHT);
-    // ...but never above the visible area (this is the clamp the old code
-    // had no way to express, because it never knew where its top was).
-    top = Math.max(visibleTop + 8, top);
-    // Degenerate case (absurdly tall keyboard on a short screen): give up
-    // height before giving up being on-screen.
-    if (bottomEdge - top < CHAT_SHEET_HARD_MIN) {
-      top = Math.max(visibleTop, bottomEdge - CHAT_SHEET_HARD_MIN);
-    }
-
-    panel.style.top = Math.round(top) + 'px';
-    panel.style.bottom = Math.round(bottom) + 'px';
-    // Explicitly cleared: any leftover from the old implementation would
-    // silently override the top/bottom pair and reintroduce defect 2.
-    panel.style.height = '';
-    panel.style.maxHeight = '';
-  }
-
-  // Keeps the newest message in view when the keyboard steals list height
-  // -- otherwise opening the keyboard scrolls the conversation "away".
-  function scrollChatToLatest() {
-    const container = document.getElementById(activeChatListId);
-    if (container) container.scrollTop = container.scrollHeight;
-  }
-
-  if (window.visualViewport) {
-    // 'resize' fires on keyboard open/close; 'scroll' fires when the
-    // browser pans the visual viewport to reveal a focused input (which
-    // changes offsetTop and therefore where "visible" actually is).
-    const onViewportChange = () => {
-      applyKeyboardSafeLayout();
-      positionChatSheet();
-    };
-    window.visualViewport.addEventListener('resize', onViewportChange);
-    window.visualViewport.addEventListener('scroll', onViewportChange);
-  }
-  // A genuine device rotation (not just the keyboard) should get a fresh
-  // baseline instead of staying pinned to the previous orientation's height
-  // -- re-read immediately (best-effort) and again after a short delay,
-  // since visualViewport doesn't always settle to the new orientation's
-  // real value instantly. The sheet's own top anchor is dropped too, so it
-  // re-derives from the new orientation rather than keeping a portrait
-  // percentage on a landscape screen.
-  window.addEventListener('orientationchange', () => {
-    maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    chatSheetTopPx = null;
-    // A screen held at the old orientation's height while a chat sheet is
-    // open would be the wrong shape now -- let it go, and re-hold it below
-    // once the rotation has settled.
-    const heldScreen = chatFrozenScreen;
-    if (heldScreen) { heldScreen.style.height = ''; chatFrozenScreen = null; }
-    setTimeout(() => {
-      maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-      chatSheetTopPx = null;
-      chatSheetOpenVisibleH = null;
-      if (heldScreen && heldScreen.classList.contains('active') && !chatFrozenScreen) {
-        heldScreen.style.height = Math.round(heldScreen.getBoundingClientRect().height) + 'px';
-        chatFrozenScreen = heldScreen;
-      }
-      applyKeyboardSafeLayout();
-      positionChatSheet();
-    }, 300);
-  });
-
-  // ---------------- game-start sequence ----------------
-  // 3-2-1 countdown, then a "dealing cards" animation, then the round's
-  // joker rank + open card are revealed and held for a few seconds. The
-  // real turn timer quietly starts partway into that reveal (server-driven,
-  // see game_state handler below) -- this function only owns the visuals.
-  function runStartSequence(data) {
-    if (startSeqTimer) { clearTimeout(startSeqTimer); startSeqTimer = null; }
-    if (dealAnimationCancel) { dealAnimationCancel(); dealAnimationCancel = null; }
-    document.getElementById('overlay-gameover').classList.add('hidden');
-    document.getElementById('overlay-round-result').classList.add('hidden');
-    document.getElementById('overlay-scorecard').classList.add('hidden');
-    // A new round dealing means every rejoin decision for the last one is
-    // settled (the server won't start one while any are pending). Clear the
-    // offer and its interval here rather than leaving a countdown running
-    // against a deadline that has already passed.
-    hideRejoinOffer();
-    rejoinAsked = false;
-    // A "LEAST COUNT" call still on screen belongs to the round that just
-    // ended -- and its timer must not start that round's reveal on top of
-    // this one.
-    clearDeclareCallout();
-    // Same for last round's cards still face-up on this screen: someone else
-    // tapped through and hit Start Now first. Left running, the reveal's own
-    // timer opened LAST round's scorecard over the new deal.
-    if (revealPhaseActive) {
-      revealPhaseActive = false;
-      if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
-      revealPendingGame = null;
-      document.getElementById('screen-game').classList.remove('reveal-phase');
-    }
-    // No commentary over the deal; the new round's stakes wait for the table.
-    commentaryHush();
-
-    // No full-screen overlay at any point now (Oct 2026): the round banner,
-    // the deal and the joker/open-card turn-over all happen ON the table.
-    document.getElementById('overlay-start-sequence').classList.add('hidden');
-    document.getElementById('start-seq-reveal').classList.add('hidden');
-
-    const badge = document.getElementById('deal-phase-badge');
-    const countdownEl = document.getElementById('start-seq-countdown');
-    const dealingLabel = document.getElementById('deal-phase-label');
-    const roundIntro = document.getElementById('round-intro');
-    startSeqActive = true;
-    // Frees the centre of the table for the banner -- see
-    // #screen-game.deal-phase in style.css. Paired with the removal in
-    // hideStartSeqUi(), which every exit route already goes through.
-    const scrGame = document.getElementById('screen-game');
-    scrGame.classList.remove('round-reveal');
-    scrGame.classList.add('deal-phase');
-    badge.classList.remove('hidden');
-    countdownEl.classList.add('hidden');
-    dealingLabel.classList.add('hidden');
-
-    // "Round N" in place of the old 3-2-1 (Oct 2026). Same moment, but it
-    // carries the round number -- which nothing announced before -- what
-    // the table is playing to, and who goes first (players[0] is the first
-    // to play: the server deals in turn order, starting with them).
-    if (roundIntro) {
-      document.getElementById('round-intro-num').textContent = data.roundNumber ? String(data.roundNumber) : '';
-      const first = (data.players || [])[0];
-      const subParts = [];
-      if (data.eliminationScore) subParts.push('Playing to ' + data.eliminationScore);
-      if (first) subParts.push(first.playerId === myPlayerId ? 'You start' : displayName(first.name) + ' starts');
-      document.getElementById('round-intro-sub').textContent = subParts.join(' · ');
-      roundIntro.classList.add('hidden');
-      void roundIntro.offsetWidth;   // restart the entrance animation every round
-      roundIntro.classList.remove('hidden');
-    }
-
-    // Build the real seats now, in the actual turn order the server just
-    // dealt this round with (see beginStartSequence in server.js), each
-    // starting at 0 cards -- so the dealing animation has real chairs to fly
-    // cards to instead of an abstract side panel.
-    const dealOrderIds = (data.players || []).map((p) => p.playerId);
-    renderOvalTable(null, dealOrderIds);
-    document.getElementById('open-card-slot').innerHTML = '';
-    document.getElementById('joker-indicator').innerHTML = '';
-    document.getElementById('stock-count').textContent = '';
-    document.getElementById('chain-banner').classList.add('hidden');
-    document.getElementById('turn-timer').classList.add('hidden');
-    // The player's own hand tray previously kept showing last round's cards
-    // (whatever was left in it when that round ended) all the way through
-    // the countdown and the entire dealing animation, since nothing ever
-    // cleared it until the new hand actually arrived. Wipe it immediately so
-    // no stale cards are visible while the new deal is in progress.
-    // #hand is now the shared tray for both sub-groups (see index.html) --
-    // clear the two inner containers individually rather than wiping
-    // #hand's own innerHTML, which would delete those containers outright.
-    document.getElementById('hand-normal').innerHTML = '';
-    document.getElementById('hand-jokers').innerHTML = '';
-    document.getElementById('hand-divider').classList.add('hidden');
-    document.getElementById('hand-value').textContent = '0';
-    const countReset = document.getElementById('hand-count');
-    if (countReset) countReset.textContent = '';
-    const statsReset = document.getElementById('hand-stats');
-    if (statsReset) statsReset.textContent = '';
-    const pillReset = document.getElementById('hand-value-pill');
-    if (pillReset) pillReset.classList.remove('can-call');
-    document.getElementById('btn-discard').textContent = 'Discard';
-    handToastQueue = [];
-    selectedIds = new Set();
-    document.getElementById('btn-discard').disabled = true;
-    document.getElementById('btn-declare').disabled = true;
-
-    // typeof checks, not `||`: introMs is legitimately 0 now (the deck
-    // intro only plays before round 1), and `0 || 3400` would bring it back.
-    const countdownMs = typeof data.countdownMs === 'number' ? data.countdownMs : 3000;
-    const introMs = typeof data.introMs === 'number' ? data.introMs : 3400;
-    const deckCount = data.deckCount || 2;
-    const dealMs = data.dealMs || 1500;
-
-    // The instant past which none of this chrome may still be on screen,
-    // whatever the timers did or did not do. Generous on purpose: the whole
-    // legitimate sequence plus 9s of slack for a slow phone, so a sequence
-    // that is genuinely still animating is never cut short. Cleared the
-    // moment the reveal runs normally (see showStartReveal).
-    startSeqDeadline = Date.now() + countdownMs + introMs + dealMs + 9000;
-
-    // The banner holds for countdownMs, then the deal -- with the deck-count
-    // and shuffle intro in front of it only when the server sent one (the
-    // first round of a game). The deal itself, and its "Dealing cards..."
-    // line, are exactly as before: players preferred it to a faster
-    // all-at-once deal that was tried here.
-    function afterBanner() {
-      if (roundIntro) roundIntro.classList.add('hidden');
-      dealingLabel.classList.remove('hidden');
-      if (introMs > 0) {
-        // Sets its own "Setting up N decks..." / "Shuffling..." text, and
-        // hands back "Dealing cards..." as the deal starts.
-        runDeckIntro(deckCount, introMs, () => {
-          animateDealing(data.players || [], dealMs, data.dealPasses || 13);
-        });
-      } else {
-        dealingLabel.textContent = 'Dealing cards...';
-        // A fraction quicker than the server's deal time (~4ms a card), so
-        // the last card lands just before the real hands arrive -- the same
-        // margin round 1 has always had, because its shuffle ends ~220ms
-        // early.
-        animateDealing(data.players || [], Math.max(0, dealMs - 220), data.dealPasses || 13);
-      }
-      startSeqTimer = setTimeout(() => {
-        // Countdown + intro + deal animation are all done.
-        //
-        // THE RACE THIS FIXES: setting the flag and waiting for the next
-        // game_state assumes the server's post-deal state has not arrived
-        // yet. Often it has -- the server deals instantly while this
-        // client is still animating, and a backgrounded or slow phone
-        // widens the gap. That state passes through the handler with the
-        // flag still false, the flag goes true a moment later, and then
-        // NOTHING consumes it until somebody takes a turn. The dealing
-        // badge sits on top of a live table until then, which is the
-        // stuck counter players reported.
-        //
-        // So: if the state we were waiting for is already in hand, use it
-        // now instead of waiting for another one that may be seconds away.
-        //
-        // ...but only if it IS the new round's state. From round 2 on,
-        // latestGame still holds the round that just ended until the new one
-        // arrives (roundOver: true), and revealing that would turn over last
-        // round's joker and open card. In that case wait for the real one.
-        pendingStartReveal = true;
-        if (latestGame && !latestGame.roundOver) {
-          pendingStartReveal = false;
-          showStartReveal(latestGame, lastStartRevealMs);
-        }
-      }, introMs + dealMs);
-
-      // Last resort for the case where this page is AWAKE but the reveal
-      // never arrives -- no game_state, an exception inside
-      // showStartReveal, a server that goes quiet. Cheap to keep, and on a
-      // foreground page it reacts faster than waiting for the next state
-      // push.
-      //
-      // It is explicitly NOT the fix for the stuck-badge bug, and must not
-      // be mistaken for it again: this is a setTimeout, so a backgrounded
-      // WebView freezes it along with everything else. The real guarantee
-      // is startSeqDeadline + sweepStaleStartUi(), which run off the wall
-      // clock. See the note by those declarations.
-      setTimeout(() => {
-        if (!startSeqActive) return;
-        startSeqActive = false;
-        startSeqDeadline = 0;
-        console.warn('[start] reveal never arrived; clearing the dealing badge');
-        hideStartSeqUi();
-      }, introMs + dealMs + 8000);
-    }
-    startSeqTimer = setTimeout(afterBanner, countdownMs);
-  }
-
-  // Pre-deal intro: places the real number of decks in play for this table
-  // size (so players can reason about card-count probability -- item
-  // requested after testers asked "how many decks are we even playing
-  // with?"), then a riffle-merge shuffle, before handing off to the
-  // existing, unchanged animateDealing() below. Purely visual -- the actual
-  // shoe is already shuffled server-side; this never blocks real state.
-  function runDeckIntro(deckCount, introMs, onDone) {
-    const oval = document.getElementById('oval-table');
-    const container = document.getElementById('deck-intro');
-    // NOTE: this is a sibling function to runStartSequence, not nested
-    // inside it -- runStartSequence's own local `dealingLabel` const is out
-    // of scope here, so grab our own reference to the same element instead
-    // of relying on that outer variable (a bug that previously threw a
-    // ReferenceError the instant this function ran, silently skipping the
-    // whole deck/shuffle animation on every single deal).
-    const dealingLabel = document.getElementById('deal-phase-label');
-    container.innerHTML = '';
-    container.classList.remove('hidden');
-    dealingLabel.textContent = deckCount === 1
-      ? 'Setting up 1 deck...'
-      : `Setting up ${deckCount} decks...`;
-    dealingLabel.classList.remove('hidden');
-
-    function tableCenter() {
-      const r = oval.getBoundingClientRect();
-      return { x: r.width / 2, y: r.height / 2 };
-    }
-    const center = tableCenter();
-    let cancelled = false;
-    const timers = [];
-    const setT = (fn, ms) => { const t = setTimeout(() => { if (!cancelled) fn(); }, ms); timers.push(t); return t; };
-
-    dealAnimationCancel = () => {
-      cancelled = true;
-      timers.forEach(clearTimeout);
-      container.innerHTML = '';
-      container.classList.add('hidden');
-    };
-
-    // Step 1: decks drop in, fanned apart so the count is visible/countable,
-    // then slide together into one spot.
-    const decks = [];
-    for (let i = 0; i < deckCount; i++) {
-      const d = document.createElement('div');
-      d.className = 'deck-stack';
-      d.textContent = 'LC';
-      const spread = (i - (deckCount - 1) / 2) * 46;
-      d.style.left = (center.x - 20 + spread) + 'px';
-      d.style.top = (center.y - 28) + 'px';
-      container.appendChild(d);
-      decks.push(d);
-      setT(() => { d.style.opacity = '1'; d.style.transform = 'translateY(0) scale(1)'; }, 60 + i * 150);
-    }
-    setT(() => {
-      decks.forEach((d) => { d.style.left = (center.x - 20) + 'px'; d.style.top = (center.y - 28) + 'px'; });
-    }, 750);
-
-    // Step 2: riffle-merge shuffle -- the combined deck "splits" into two
-    // halves that zipper together in the center, alternating cards rapidly.
-    setT(() => {
-      dealingLabel.textContent = 'Shuffling...';
-      decks.forEach((d) => { d.style.opacity = '0'; });
-      // NO SOUND. This was a riffle under the shuffle animation, added in
-      // the same change that removed the per-card deal tick -- which meant
-      // one burst of card clicking replaced another and the start sequence
-      // sounded unchanged. The whole deal is silent now, by request.
-      // Sound.deckShuffle() remains defined if it is ever wanted back.
-    }, 1150);
-
-    setT(() => {
-      const leftStack = { x: center.x - 42, y: center.y };
-      const rightStack = { x: center.x + 18, y: center.y };
-      const mid = { x: center.x - 11, y: center.y };
-      const total = 22;
-      for (let i = 0; i < total; i++) {
-        const fromLeft = i % 2 === 0;
-        const src = fromLeft ? leftStack : rightStack;
-        const c = document.createElement('div');
-        c.className = 'shuffle-card';
-        c.style.left = src.x + 'px';
-        c.style.top = src.y + 'px';
-        c.style.zIndex = String(i);
-        c.style.transition = 'left 0.18s ease, top 0.18s ease, transform 0.18s ease';
-        container.appendChild(c);
-        setT(() => {
-          c.style.left = mid.x + 'px';
-          c.style.top = (mid.y - i * 0.55) + 'px';
-          c.style.transform = 'rotate(' + (fromLeft ? -8 : 8) + 'deg)';
-        }, i * 55);
-      }
-      setT(() => {
-        container.querySelectorAll('.shuffle-card').forEach((c) => { c.style.transition = 'opacity 0.25s ease'; c.style.opacity = '0'; });
-        setT(() => {
-          container.innerHTML = '';
-          container.classList.add('hidden');
-          // Hand the label back to its default "Dealing cards..." text
-          // (we borrowed it above for "Setting up N decks.../Shuffling...")
-          // before the existing per-card deal animation takes over.
-          dealingLabel.textContent = 'Dealing cards...';
-          if (!cancelled) onDone();
-        }, 250);
-      }, total * 55 + 320);
-    }, 1400);
-  }
-
-  // A small "flying card" travels directly from seat to seat around the real
-  // oval table, looping for a full 13 passes (matching the real hand size
-  // dealt underneath -- not a shortened stand-in), mirroring how a real
-  // dealer hands out one card at a time, round and round. Each seat's card
-  // count ticks up as cards land on it. totalMs is computed server-side to
-  // scale with player count, so per-flight speed stays consistent (~90ms)
-  // regardless of table size.
-  //
-  // Only the very first card starts from the table's center (nothing has
-  // been dealt yet); every card after that flies straight from wherever the
-  // PREVIOUS card just landed to the next seat -- it no longer snaps back
-  // through the middle between every single card. That center-round-trip
-  // was the original/production behavior, but once testers could actually
-  // see it clearly (after fixing the deck-intro bug that had been silently
-  // skipping this whole animation), the feedback was that it read as
-  // distracting rather than dealer-like, so this switches to a direct
-  // seat-to-seat path instead.
-  function animateDealing(players, totalMs, passes) {
-    const oval = document.getElementById('oval-table');
-    const flyer = document.getElementById('deal-flyer');
-    if (players.length === 0) { flyer.classList.add('hidden'); return; }
-    flyer.classList.remove('hidden');
-
-    function centerOf(el) {
-      const cRect = oval.getBoundingClientRect();
-      const r = el.getBoundingClientRect();
-      return { x: r.left - cRect.left + r.width / 2, y: r.top - cRect.top + r.height / 2 };
-    }
-    function tableCenter() {
-      const cRect = oval.getBoundingClientRect();
-      return { x: cRect.width / 2, y: cRect.height / 2 };
-    }
-    function seatFor(playerId) {
-      return oval.querySelector(`.seat[data-player-id="${CSS.escape(playerId)}"]`);
-    }
-
-    passes = passes || 13;
-    const totalFlights = players.length * passes;
-    const flightMs = totalMs / totalFlights;
-    let flight = 0;
-    let cancelled = false;
-    dealAnimationCancel = () => { cancelled = true; flyer.classList.add('hidden'); };
-    // The chairs drawn for the deal (runStartSequence, all at "0 cards").
-    // Counts are only ever written onto these: if the real game state lands
-    // while a card or two is still in the air (timer drift on a busy phone),
-    // the real chairs it draws already carry the real counts, and a late
-    // card must not add to them.
-    const dealSeats = new Set(oval.querySelectorAll('.seat'));
-
-    // Snap the flyer to the table's center once, up front -- this is the
-    // ONLY time it starts from center. Every flight after this continues
-    // from wherever the flyer's transition just left it (the previous
-    // seat), so there's no repeated reset-to-center in the loop below.
-    const start = tableCenter();
-    flyer.style.transition = 'none';
-    flyer.style.left = start.x + 'px';
-    flyer.style.top = start.y + 'px';
-    flyer.style.opacity = '1';
-
-    function flyNext() {
-      if (cancelled) return;
-      if (flight >= totalFlights) {
-        flyer.style.opacity = '0';
-        // Silent too -- see the note on the shuffle above. Nothing in the
-        // deal makes a sound now; the first thing you hear in a round is
-        // your own turn starting.
-        return;
-      }
-      const p = players[flight % players.length];
-      const seatEl = seatFor(p.playerId);
-      if (!seatEl) { flight += 1; flyNext(); return; }
-      // NO SOUND PER CARD -- deliberately, after two attempts.
-      //
-      // First cut played a cue on every flight: 11 per second, 78 of them
-      // in a six-player deal. Second cut throttled it to a dealer's pace
-      // (~4.5/s) and stripped the pitched layer. Both still read as
-      // clicking rather than dealing.
-      //
-      // The reason is structural, not a tuning problem: this animation
-      // deals 13 passes in one uninterrupted burst, which no real deal
-      // does. A per-card sound faithfully tracking that is going to sound
-      // like a machine whatever its rate or timbre. The deal is now
-      // bracketed by sound instead -- a riffle as it starts, a settle as it
-      // ends -- and silent in between.
-      //
-      // Sound.dealTick() still exists and is self-throttling if this is
-      // ever worth revisiting; re-enabling is this one line.
-      const to = centerOf(seatEl);
-      const travelMs = flightMs * 0.7;
-      flyer.style.transition = `left ${travelMs}ms ease, top ${travelMs}ms ease`;
-      flyer.style.left = to.x + 'px';
-      flyer.style.top = to.y + 'px';
-      setTimeout(() => {
-        if (cancelled) return;
-        const metaEl = dealSeats.has(seatEl) ? seatEl.querySelector('.seat-meta') : null;
-        if (metaEl) {
-          const cur = parseInt(metaEl.textContent, 10) || 0;
-          metaEl.textContent = cardsLabel(cur + 1);
-        }
-        seatEl.classList.add('dealt-flash');
-        setTimeout(() => seatEl.classList.remove('dealt-flash'), Math.max(80, flightMs * 0.3 - 10));
-        flight += 1;
-        setTimeout(flyNext, flightMs * 0.3);
-      }, travelMs);
-    }
-    // One rAF so the browser actually paints the center starting position
-    // before the first seat-bound transition kicks in (without this, the
-    // very first flight would jump straight to its target with no visible
-    // travel, since the "instant" center placement and the first animated
-    // move would otherwise be batched into the same paint).
-    requestAnimationFrame(() => { if (!cancelled) flyNext(); });
-  }
-
-  // Called once the first post-deal game_state arrives (pendingStartReveal
-  // was set true by runStartSequence above).
-  //
-  // ON THE TABLE now (Oct 2026). This used to open a solid full-screen
-  // panel with a big Joker and Open Card, hold it, then remove it -- so the
-  // two cards never visibly went anywhere: the panel vanished and they were
-  // simply already sitting in the middle of the table. Now the table itself
-  // is the stage. renderGame() has already put both cards in their real
-  // places; the .round-reveal class turns them over there -- the Joker
-  // first, with "Every Q = 0" under it, then the Open Card -- and comes off
-  // again once they have settled. Nothing is covered, and the place the
-  // eye is taught to look is the place the cards stay all round.
-  var roundRevealAt = 0;
-  function showStartReveal(game, revealMs) {
-    startSeqActive = false;
-    // The countdown/deal phase is over, so its deadline no longer applies --
-    // clear it before arming the reveal's own, or the sweep would tear the
-    // reveal down the moment the older deadline lapsed.
-    startSeqDeadline = 0;
-    // The reveal takes over the centre of the table next, so the deal class
-    // comes off here too -- this path hides the badge directly rather than
-    // going through hideStartSeqUi().
-    const scr = document.getElementById('screen-game');
-    scr.classList.remove('deal-phase');
-    document.getElementById('deal-phase-badge').classList.add('hidden');
-    // The deal is over once the cards are being revealed -- stop any card
-    // still in the air rather than let it cross the revealed table.
-    if (dealAnimationCancel) { try { dealAnimationCancel(); } catch (e) {} dealAnimationCancel = null; }
-    document.getElementById('deal-flyer').classList.add('hidden');
-    document.getElementById('overlay-start-sequence').classList.add('hidden');
-    document.getElementById('start-seq-reveal').classList.add('hidden');
-
-    if (startSeqTimer) { clearTimeout(startSeqTimer); startSeqTimer = null; }
-    const holdMs = revealMs || 1600;
-    // Restart the turn-over animation even if the class is somehow still on
-    // from a previous round.
-    scr.classList.remove('round-reveal');
-    void scr.offsetWidth;
-    scr.classList.add('round-reveal');
-    // renderGame reads this to keep the animation continuous when a state
-    // push rebuilds the two cards part-way through it.
-    roundRevealAt = Date.now();
-    // Wall-clock backstop: if timers freeze (a backgrounded WebView), the
-    // sweep takes the class off at the next opportunity.
-    startRevealDeadline = Date.now() + holdMs + 4000;
-    startSeqTimer = setTimeout(() => {
-      scr.classList.remove('round-reveal');
-      startSeqTimer = null;
-      startRevealDeadline = 0;
-      // Dealt a 2? Say so once the cards have settled.
-      maybeShowDealtTrump(game);
-    }, holdMs + 400);
-  }
-
-  // sessionToken is the credential that proves this device owns the seat, and
-  // it is required by 'rejoin' as of the Sept 2026 security fix. Before it
-  // existed, the playerId alone was enough to sit down in any seat -- and every
-  // client is handed every playerId in the game state, so that was no
-  // protection at all. See makeSessionToken() in server.js.
-  //
-  // It lives in the same localStorage blob as the rest of the session because
-  // it has exactly the same lifetime: lose it and you have lost the seat, which
-  // is the point. Never put it anywhere it could be read by another player --
-  // it is not sent in any broadcast and must never be rendered.
-  function saveSession(roomCode, playerId, sessionToken) {
-    myRoomCode = roomCode;
-    myPlayerId = playerId;
-    // Keep an existing token if this particular call didn't carry one, rather
-    // than blanking it -- a re-save that dropped the token would lock this
-    // device out of its own seat on the next reconnect.
-    if (sessionToken) mySessionToken = sessionToken;
-    localStorage.setItem('leastcount_session', JSON.stringify({
-      roomCode, playerId, sessionToken: mySessionToken || null,
-    }));
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-  }
-
-  // Landing panes. Four stacked blocks overflowed the viewport; a player
-  // wants either their permanent tables or a one-off game, never both at
-  // once. Invite mode hides the whole .mode-blocks wrapper, so these don't
-  // need to know about it.
-  // Home and Groups are the two bottom-bar items (Oct 2026) -- they used to
-  // be tabs at the top of the page, with Stats and Rules in the bottom bar.
-  (function wireFooterNav() {
-    const items = document.querySelectorAll('.landing-footer-nav .footer-nav-item[data-pane]');
-    items.forEach((item) => {
-      item.onclick = () => {
-        const want = item.dataset.pane;
-        items.forEach((x) => x.classList.toggle('active', x === item));
-        document.getElementById('pane-groups').classList.toggle('hidden', want !== 'groups');
-        document.getElementById('pane-quick').classList.toggle('hidden', want !== 'quick');
-        const body = document.querySelector('#screen-landing .landing-body');
-        if (body) body.scrollTop = 0;
-      };
-    });
-  })();
-
-  // ------------------------------------------------------------------
-  // Home sheets (Oct 2026, Home v2). Each way to play is one card on Home;
-  // its choices -- how many bots, how many players, a code to join -- open on
-  // a sheet from the bottom instead of sitting on the page. The controls
-  // inside keep their old ids, so every handler further down (Create Room,
-  // Join, Find Match, Start, the one-tap choices) works unchanged.
-  //
-  // The phone's Back button closes an open sheet rather than the app: opening
-  // one adds a history entry, and Capacitor's default Back steps back through
-  // the WebView's history whenever it can, which fires popstate here.
-  //
-  // `var`, not `let`: showScreen() calls closeHomeSheet(), and showScreen can
-  // run during startup, before this line has executed.
-  // ------------------------------------------------------------------
-  var openSheetId = null;
-  var sheetHistoryPushed = false;
-  var sheetBackAt = 0;
-
-  function openHomeSheet(id) {
-    const sheet = document.getElementById(id);
-    const backdrop = document.getElementById('home-sheet-backdrop');
-    if (!sheet || !backdrop) return;
-    document.querySelectorAll('.home-sheet').forEach((s) => { if (s !== sheet) s.classList.add('hidden'); });
-    sheet.querySelectorAll('.sheet-error').forEach((e) => { e.textContent = ''; });
-    backdrop.classList.remove('hidden');
-    sheet.classList.remove('hidden');
-    openSheetId = id;
-    if (!sheetHistoryPushed) {
-      try { history.pushState({ lcSheet: true }, ''); sheetHistoryPushed = true; } catch (e) { sheetHistoryPushed = false; }
-    }
-    // Focus the sheet itself, not the code box: focusing that would throw the
-    // keyboard up over the Create Room button.
-    try { sheet.setAttribute('tabindex', '-1'); sheet.focus({ preventScroll: true }); } catch (e) { /* cosmetic */ }
-    logAnalytics('home_mode_opened', { mode: id.replace('sheet-', '') });
-  }
-
-  function closeHomeSheet(opts) {
-    opts = opts || {};
-    const was = openSheetId;
-    openSheetId = null;
-    document.querySelectorAll('.home-sheet').forEach((s) => s.classList.add('hidden'));
-    const backdrop = document.getElementById('home-sheet-backdrop');
-    if (backdrop) backdrop.classList.add('hidden');
-    // Take our history entry back off, unless Back already did. Only ever
-    // the entry we added -- never a step further back than that.
-    if (sheetHistoryPushed) {
-      sheetHistoryPushed = false;
-      if (!opts.fromBack) {
-        try {
-          if (history.state && history.state.lcSheet) { sheetBackAt = Date.now(); history.back(); }
-        } catch (e) { /* nothing to undo */ }
-      }
-    }
-    // Keyboard and screen-reader users land back on the card they opened.
-    if (was && opts.refocus) {
-      const card = document.querySelector('.home-mode[data-sheet="' + was + '"]');
-      if (card) { try { card.focus({ preventScroll: true }); } catch (e) { /* cosmetic */ } }
-    }
-  }
-
-  (function wireHomeSheets() {
-    document.querySelectorAll('#screen-landing .home-mode[data-sheet]').forEach((card) => {
-      card.addEventListener('click', () => openHomeSheet(card.dataset.sheet));
-    });
-    document.querySelectorAll('#screen-landing .home-sheet .sheet-close').forEach((b) => {
-      b.addEventListener('click', () => closeHomeSheet({ refocus: true }));
-    });
-    const backdrop = document.getElementById('home-sheet-backdrop');
-    if (backdrop) backdrop.addEventListener('click', () => closeHomeSheet());
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && openSheetId) closeHomeSheet({ refocus: true });
-    });
-    window.addEventListener('popstate', () => {
-      // Our own history.back() from closing a sheet lands here a moment
-      // later; a sheet opened in that moment must not be shut by it.
-      if (Date.now() - sheetBackAt < 400) return;
-      if (openSheetId) { sheetHistoryPushed = false; closeHomeSheet({ fromBack: true }); }
-    });
-  })();
-
-  // ---------------- landing screen ----------------
-  // Remembers whatever name was last typed/submitted, so returning players
-  // never have to retype it -- previously the name field was blank on every
-  // fresh visit even though it visually looked like it should be "sticky".
-  // Pre-filled once on load below; every submit path re-saves in case they
-  // changed it since.
-  const NAME_STORAGE_KEY = 'leastcount_name';
-  (function prefillSavedName() {
-    const saved = localStorage.getItem(NAME_STORAGE_KEY);
-    if (saved) document.getElementById('input-name').value = saved;
-  })();
-
-  // ------------------------------------------------------------------
-  // Home greeting (Oct 2026, Home v2): "Good evening, Mani" over "Ready to
-  // play?". The time of day is the phone's own clock; the name is the one in
-  // the profile, and is simply left off until there is one.
-  // A function declaration reading only the page and storage -- showScreen()
-  // calls it, and can run before this part of the file has.
-  // ------------------------------------------------------------------
-  function updateHomeGreeting() {
-    const el = document.getElementById('home-greet-hello');
-    if (!el) return;
-    const h = new Date().getHours();
-    const part = h >= 5 && h < 12 ? 'Good morning' : (h >= 12 && h < 17 ? 'Good afternoon' : 'Good evening');
-    let name = '';
-    try {
-      const box = document.getElementById('input-name');
-      name = ((box && box.value) || localStorage.getItem('leastcount_name') || '').trim();
-    } catch (e) { /* storage blocked: no name */ }
-    // Diwali: "Happy Diwali, Mani 🪔" instead of the time of day.
-    if (isDiwali()) {
-      el.textContent = (name ? 'Happy Diwali, ' + name : 'Happy Diwali') + ' 🪔';
-      return;
-    }
-    el.textContent = name ? part + ', ' + name : part;
-  }
-  updateHomeGreeting();
-
-  // Diwali: the space under the three ways to play (empty on most phones)
-  // becomes a lit-up greeting with one thing to do -- get the family on a
-  // table. Built here rather than in index.html so it exists only on the
-  // Diwali days and leaves no trace afterwards.
-  (function addDiwaliPanel() {
-    if (!isDiwali()) return;
-    const pane = document.getElementById('pane-quick');
-    const modes = pane && pane.querySelector('.home-modes');
-    if (!pane || !modes || document.getElementById('home-diwali')) return;
-    const box = document.createElement('div');
-    box.id = 'home-diwali';
-    box.className = 'home-diwali';
-    box.innerHTML =
-      '<div class="hd-sparks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>'
-      + '<div class="hd-diyas" aria-hidden="true">'
-      + '<span class="hd-diya"><span class="hd-flame"></span></span>'
-      + '<span class="hd-diya hd-mid"><span class="hd-flame"></span></span>'
-      + '<span class="hd-diya"><span class="hd-flame"></span></span>'
-      + '</div>'
-      + '<h3 class="hd-title">Happy Diwali!</h3>'
-      + '<p class="hd-line">Diwali night is cards night. Get the whole family on one table.</p>'
-      + '<button id="btn-diwali-invite" class="primary hd-btn" type="button">🪔 Invite family to play</button>';
-    modes.insertAdjacentElement('afterend', box);
-    // Straight to a new table, as Play with Friends -> Create Room does (a
-    // missing name is asked for first), then the WhatsApp nudge in the lobby.
-    box.querySelector('#btn-diwali-invite').addEventListener('click', () => {
-      try { logAnalytics('diwali_invite_tapped'); } catch (e) { /* never in the way */ }
-      inviteNudgePending = true;
-      document.getElementById('btn-create').click();
-    });
-  })();
-  // Coming back to the app hours later: morning may have become evening.
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') updateHomeGreeting();
-  });
-
-  // Opening a shared invite link (?room=CODE, see btn-share-room below)
-  // pre-fills the join-room field so whoever tapped the link only has to
-  // enter their name and hit Join -- one less thing to type/copy-paste.
-  // The param is stripped from the URL afterwards so it doesn't linger in
-  // the address bar or get shared again by accident (e.g. a browser
-  // "share this page" on the landing screen itself).
-  // ====================================================================
-  // Persistent groups (client side)
-  // ====================================================================
-  // A group is a named, permanent table. Its code and link never change,
-  // so one pinned WhatsApp message keeps working, and it carries a running
-  // leaderboard across every session.
-  //
-  // Membership is deliberately just "whoever holds the link" -- there is no
-  // account, no member list, nothing to sign into. The only thing stored on
-  // this device is the list of groups you've opened, so the landing screen
-  // can offer them as one tap. Lose that list (new phone, cleared storage)
-  // and the WhatsApp link puts you straight back in.
-  // ====================================================================
-  const GROUPS_STORAGE_KEY = 'leastcount_groups';
-  const GROUPS_MAX_REMEMBERED = 8;
-
-  function readRememberedGroups() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(GROUPS_STORAGE_KEY) || '[]');
-      return Array.isArray(raw) ? raw.filter((g) => g && g.code) : [];
-    } catch (e) { return []; }
-  }
-
-  // The set of codes we're watching, order-independent. Only this decides
-  // whether the server needs telling again -- the list's ORDER changes every
-  // time a group is opened (most recent first) and that's a local display
-  // concern the server has no interest in.
-  function watchedCodesKey() {
-    return readRememberedGroups().map((g) => g.code).sort().join(',');
-  }
-
-  function rememberGroup(code, name) {
-    if (!code) return;
-    const before = watchedCodesKey();
-    try {
-      const list = readRememberedGroups().filter((g) => g.code !== code);
-      list.unshift({ code, name: name || code, lastOpenedAt: Date.now() });
-      localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list.slice(0, GROUPS_MAX_REMEMBERED)));
-    } catch (e) { /* storage blocked -- the link still works, just no shortcut */ }
-    renderGroupsBlock();
-    // ------------------------------------------------------------------
-    // THIS CALL USED TO BE UNCONDITIONAL, AND IT WAS A FEEDBACK LOOP.
-    //
-    // socket.on('group_update') calls rememberGroup() to keep names fresh.
-    // rememberGroup() called watchGroups(). watchGroups() emits watch_groups.
-    // The server answered watch_groups by broadcasting group_update -- to
-    // EVERY member of the group. Each of those arrivals started the cycle
-    // again, once per member, so it amplified rather than settling:
-    //
-    //   one person opening a 6-member group, five round trips deep
-    //   -> ~9,300 group_update messages and ~1,550 Firestore reads
-    //
-    // It never terminated on its own; it just ran at whatever rate the
-    // network allowed, for as long as anyone had a group open. That is the
-    // slowdown that arrived with permanent groups.
-    //
-    // Re-registering only when the set of codes actually changed breaks it.
-    // ------------------------------------------------------------------
-    if (watchedCodesKey() !== before) watchGroups();
-  }
-
-  function groupInviteLinkFor(code) {
-    const url = new URL(window.location.href);
-    url.search = '';
-    url.hash = '';
-    url.searchParams.set('g', code);
-    return url.toString();
-  }
-
-  // The CODE is given as well as the link, because typing a code keeps the
-  // whole journey inside the app. A tapped link opens the web version, which
-  // carries no ads at all -- so a player who joins that way is permanently
-  // worth nothing. The code is the reliable fix for that leak.
-  function groupInviteTextFor(code, name) {
-    const who = (localStorage.getItem(NAME_STORAGE_KEY) || '').trim();
-    const lead = who ? `${who} invited you` : 'You are invited';
-    return `${lead} to play Least Count with "${name}".\n`
-      + `Open the app and enter code ${code}, or tap: ${groupInviteLinkFor(code)}`;
-  }
-
-  function renderGroupsBlock() {
-    const list = document.getElementById('groups-list');
-    const empty = document.getElementById('groups-empty');
-    if (!list) return;
-    const groups = readRememberedGroups();
-    if (empty) empty.classList.toggle('hidden', groups.length > 0);
-    list.innerHTML = '';
-    groups.forEach((g) => {
-      const li = document.createElement('li');
-      li.className = 'group-row';
-      // Tapping the row PLAYS. Managing the group (share, rename, remove,
-      // delete) lives behind the "..." -- creating and managing a group are
-      // deliberately separate from sitting down at it.
-      // Tapping a group opens the GROUP, not a game lobby. That single
-      // change is why the first version felt dead -- tap, land alone in an
-      // empty lobby, leave. Management now lives inside the group behind the
-      // settings gear, so there's no menu on this row at all.
-      li.innerHTML = `<span class="group-row-name">${escapeHtml(g.name)}</span>
-        <span class="group-row-go">Open</span>`;
-      li.onclick = () => openGroupScreen(g.code, g.name);
-      list.appendChild(li);
-    });
-  }
-
-  // ---------------- group management menu ----------------
-  let groupMenuCode = null;
-  let groupMenuName = '';
-
-  function setGroupMenuError(msg) {
-    const el = document.getElementById('group-menu-error');
-    if (el) el.textContent = msg || '';
-  }
-
-  // Closing only dismisses the dropdown -- it deliberately does NOT clear
-  // groupMenuCode, because Rename and Delete open their own dialogs from the
-  // menu and still need to know which group they're acting on.
-  function closeGroupMenu() {
-    document.getElementById('group-menu').classList.add('hidden');
-    document.getElementById('group-menu-backdrop').classList.add('hidden');
-  }
-  function closeGroupDialogs() {
-    document.getElementById('group-rename-dialog').classList.add('hidden');
-    document.getElementById('group-delete-dialog').classList.add('hidden');
-    setGroupMenuError('');
-  }
-
-  async function openGroupMenu(code, name) {
-    groupMenuCode = code;
-    groupMenuName = name;
-    document.getElementById('input-group-rename').value = name;
-    setGroupMenuError('');
-    // Rename/Delete are admin-only. Hidden until the server confirms who we
-    // are -- the server enforces it too, this only avoids offering a button
-    // that would fail.
-    document.getElementById('btn-group-rename').classList.add('hidden');
-    document.getElementById('btn-group-delete').classList.add('hidden');
-    document.getElementById('group-menu').classList.remove('hidden');
-    document.getElementById('group-menu-backdrop').classList.remove('hidden');
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('get_group', { code, firebaseIdToken }, (res) => {
-      if (!res || !res.ok || !res.group || groupMenuCode !== code) return;
-      groupMenuName = res.group.name;
-      document.getElementById('input-group-rename').value = res.group.name;
-      document.getElementById('btn-group-rename').classList.toggle('hidden', !res.group.isAdmin);
-      document.getElementById('btn-group-delete').classList.toggle('hidden', !res.group.isAdmin);
-    });
-  }
-
-  // Tap anywhere off the menu to dismiss it -- there's no Close row, the
-  // same as any Android overflow menu.
-  document.getElementById('group-menu-backdrop').onclick = closeGroupMenu;
-
-  document.getElementById('btn-group-share').onclick = () => {
-    if (!groupMenuCode) return;
-    closeGroupMenu();
-    logAnalytics('invite_shared_whatsapp');
-    openWhatsAppShare(groupInviteTextFor(groupMenuCode, groupMenuName));
-  };
-
-  document.getElementById('btn-group-copy').onclick = async () => {
-    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
-    // stays comparable); every other route lands here, tagged by method.
-    logAnalytics('invite_shared', { method: 'copy', where: 'group' });
-    if (!groupMenuCode) return;
-    closeGroupMenu();
-    try {
-      await navigator.clipboard.writeText(groupInviteTextFor(groupMenuCode, groupMenuName));
-      setLandingError('Invite link copied.');
-    } catch (e) {
-      setLandingError('Could not copy — code is ' + groupMenuCode);
-    }
-  };
-
-  // The overflow list never contains inputs or confirmations -- it launches
-  // them, the way WhatsApp does.
-  document.getElementById('btn-group-rename').onclick = () => {
-    closeGroupMenu();
-    document.getElementById('group-rename-dialog').classList.remove('hidden');
-    setTimeout(() => { try { document.getElementById('input-group-rename').focus(); } catch (e) {} }, 60);
-  };
-  document.getElementById('btn-group-rename-cancel').onclick = closeGroupDialogs;
-  document.getElementById('btn-group-delete-cancel').onclick = closeGroupDialogs;
-
-  document.getElementById('btn-group-rename-save').onclick = async () => {
-    const code = groupMenuCode;
-    const newName = document.getElementById('input-group-rename').value.trim();
-    if (!code || !newName) return setGroupMenuError('Enter a name.');
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('rename_group', { code, groupName: newName, firebaseIdToken }, (res) => {
-      if (!res || !res.ok) return setGroupMenuError((res && res.error) || 'Could not rename.');
-      rememberGroup(code, res.name);
-      if (groupScreenCode === code) openGroupScreen(code, res.name);
-      closeGroupDialogs();
-    });
-  };
-
-  // Local only -- membership is "whoever holds the link", so leaving is just
-  // forgetting the shortcut on this device. Nobody else is affected, and the
-  // link still works if they change their mind.
-  document.getElementById('btn-group-remove').onclick = () => {
-    if (!groupMenuCode) return;
-    try {
-      const list = readRememberedGroups().filter((g) => g.code !== groupMenuCode);
-      localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list));
-    } catch (e) { /* storage blocked */ }
-    renderGroupsBlock();
-    closeGroupMenu();
-    showScreen('screen-landing');
-  };
-
-  // Destructive and irreversible for everyone, so it gets a proper confirm
-  // dialog rather than a tap-again trick -- a dropdown that closes underneath
-  // you is the wrong place to arm something dangerous.
-  document.getElementById('btn-group-delete').onclick = () => {
-    closeGroupMenu();
-    document.getElementById('group-delete-dialog').classList.remove('hidden');
-  };
-  document.getElementById('btn-group-delete-confirm').onclick = async () => {
-    const code = groupMenuCode;
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('delete_group', { code, firebaseIdToken }, (res) => {
-      if (!res || !res.ok) return setGroupMenuError((res && res.error) || 'Could not delete.');
-      try {
-        const list = readRememberedGroups().filter((g) => g.code !== code);
-        localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(list));
-      } catch (e) {}
-      renderGroupsBlock();
-      closeGroupDialogs();
-      showScreen('screen-landing');
-    });
-  };
-
-  // Single entry point for joining ANY table -- a 4-letter ad-hoc code, a
-  // permanent group code, from a typed code, a saved group row, or an invite
-  // link. Previously this logic lived inline in the Join button's handler,
-  // which meant every new way of arriving at a room needed its own copy of
-  // the pending-approval and session-saving branches.
-  // One request at a time per action (Nov 2026): "a player is getting added
-  // two times from the same device". A double tap on Join, Create or Play
-  // Online sent two requests, and each one could seat you. A second tap while
-  // the first is on its way now does nothing. (The server refuses a second
-  // seat for the same phone too; this just stops asking twice.) Released when
-  // the server answers, or after 10s in case it never does.
-  const requestsInFlight = new Map();
-  function startOnce(key) {
-    const at = requestsInFlight.get(key);
-    if (at && Date.now() - at < 10000) return false;
-    requestsInFlight.set(key, Date.now());
-    return true;
-  }
-  function doneOnce(key) { requestsInFlight.delete(key); }
-
-  async function joinRoomByKey(key) {
-    const name = getPlayerName();
-    const roomCode = (key || '').trim();
-    if (!name) return promptForName();
-    if (!roomCode) return setLandingError('Enter room code');
-    if (!startOnce('join')) return;
-    let firebaseIdToken = null;
-    try { firebaseIdToken = await currentFirebaseIdToken(); } catch (e) { /* join as a guest */ }
-    socket.emit('join_room', { roomCode, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
-      doneOnce('join');
-      if (!res.ok) return setLandingError(res.error);
-      // room.phase was already 'playing' when the request landed -- the
-      // server held it as a pending request instead of joining outright
-      // (see server.js' join_room). Show the waiting screen and stop here;
-      // join_admitted/join_denied take it from there.
-      if (res.pending) {
-        pendingJoinRoomCode = res.roomCode;
-        pendingJoinPlayerId = res.playerId;
-        // Same reasoning as the rejoin preload: fetch the video while they
-        // wait on the host, so approval is instant rather than a spinner.
-        if (!adPreloadedFor.join) {
-          adPreloadedFor.join = true;
-          try { window.LCAds.prepareRewarded('join'); } catch (e) { /* no ads here */ }
-        }
-        document.getElementById('waiting-host-name').textContent = 'the host';
-        // Tell them an ad is coming BEFORE the host answers, not when the video
-        // starts. The rejoin path already discloses this in its offer text; the
-        // join path did not, so the first a mid-game joiner knew of it was a
-        // video appearing. Same rule, both doors.
-        //
-        // Shown only when the server says it applies -- see needsAdToEnter.
-        // A first-timer warned about an advert they will never see might cancel
-        // instead of waiting, which is the opposite of what that exemption is
-        // for, so the default when the flag is absent is to stay quiet.
-        const adNote = document.getElementById('waiting-host-ad-note');
-        if (adNote) adNote.classList.toggle('hidden', res.needsAd !== true);
-        showScreen('screen-waiting-host');
-        return;
-      }
-      logAnalytics('room_joined', { via_invite: !!inviteArrival, kind: inviteArrival || 'code' });
-      saveSession(res.roomCode, res.playerId, res.sessionToken);
-      loadChatHistory(res.chatHistory);
-      showChatFab();
-      // Invite mode has done its job. Without this the invite card (and the
-      // pre-filled room code) is still sitting on the landing screen
-      // underneath, so leaving the game drops you back onto an invitation to
-      // rejoin the room you just left.
-      exitInviteMode();
-      document.getElementById('input-roomcode').value = '';
-      showScreen('screen-lobby');
-    });
-  }
-
-  // ====================================================================
-  // Group screen
-  // ====================================================================
-  // Tapping a group opens THIS rather than a game lobby. The first version
-  // dropped you straight into an empty room, which is why groups felt dead:
-  // you tapped, sat alone, and left. This screen says something whether or
-  // not anyone is playing.
-  // ====================================================================
-  let groupScreenCode = null;
-  let groupScreenData = null;
-  let groupBellTimer = null;
-  let groupChatMsgs = [];
-  let marathonDays = 7;
-  // What the group screen's Play button does right now: 'start' opens the
-  // table and brings everyone seated with you, 'join' walks into one that is
-  // already open. Set by renderGroupScreen alongside the button's label, so
-  // the two can't disagree.
-  let groupPlayMode = 'join';
-
-  // Tells the server which groups this client is watching, so it can count us
-  // as present and push live updates. Sent on connect and whenever the
-  // remembered list changes -- always the COMPLETE list, since the server
-  // treats it as a replace.
-  // Second guard behind rememberGroup's, because this is reachable from
-  // several places and every needless call costs the server a Firestore read
-  // per group. `force` is for reconnects, where the server has a new socket
-  // id and genuinely does need telling again even though nothing here moved.
-  let lastWatchKey = null;
-  async function watchGroups(force) {
-    const codes = readRememberedGroups().map((g) => g.code);
-    if (groupScreenCode && !codes.includes(groupScreenCode)) codes.push(groupScreenCode);
-    const name = localStorage.getItem(NAME_STORAGE_KEY) || '';
-    const key = codes.slice().sort().join(',') + '|' + name;
-    if (!force && key === lastWatchKey) return;
-    lastWatchKey = key;
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('watch_groups', { codes, name, firebaseIdToken });
-  }
-
-  async function openGroupScreen(code, fallbackName) {
-    if (!code) return;
-    groupScreenCode = code;
-    const gErr = document.getElementById('group-error');
-    if (gErr) gErr.textContent = '';   // stale error from a previous visit
-    // Collapse chat and treat the whole 30-minute history as unread, so
-    // arriving tells you there's something to read rather than hiding it.
-    // Also stops one group's messages being counted as "seen" in another.
-    groupChatSeenAt = 0;
-    setGroupChatExpanded(false);
-    document.getElementById('group-title').textContent = fallbackName || 'Group';
-    document.getElementById('group-code-text').textContent = code;
-    showScreen('screen-group');
-    watchGroups();
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('get_group', { code, firebaseIdToken }, (res) => {
-      if (!res || !res.ok) {
-        setLandingError((res && res.error) || 'Could not open that group.');
-        showScreen('screen-landing');
-        return;
-      }
-      if (groupScreenCode !== code) return; // moved on while we waited
-      renderGroupScreen(res.group);
-    });
-  }
-
-  const GROUP_STATUS_LABEL = {
-    playing: 'playing',
-    table: 'at the table',
-    online: 'online',
-    away: '',
-  };
-
-  function relativeDay(iso) {
-    if (!iso) return '';
-    const days = Math.floor((Date.now() - Date.parse(iso)) / 86400000);
-    if (days <= 0) return 'today';
-    if (days === 1) return 'yesterday';
-    if (days < 7) return days + ' days ago';
-    return Math.floor(days / 7) + 'w ago';
-  }
-
-  // Group screen v2 (Oct 2026): the people at the table as overlapping colour
-  // circles -- the lobby's seat faces, smaller. Three circles at most: past
-  // three, two faces and a "+N". Nobody there is one empty dashed seat, so
-  // the strip still has a shape when it has no people.
-  const GROUP_FACES_MAX = 3;
-  // The 3D medals (home-art.css) for first, second and third: the group's
-  // marathon standings and each round's result.
-  const MEDAL_ART = ['art-gold', 'art-silver', 'art-bronze'];
-  // You first, then everyone else in the order they came -- the faces and
-  // the names line beside them read the same way round.
-  function groupMeFirst(people) {
-    const me = myFirebaseUid();
-    const isMe = (p) => !!me && p.uid === me;
-    return people.filter(isMe).concat(people.filter((p) => !isMe(p)));
-  }
-  function paintGroupFaces(el, people) {
-    if (!el) return;
-    el.innerHTML = '';
-    people = groupMeFirst(people);
-    if (!people.length) {
-      const seat = document.createElement('span');
-      seat.className = 'glf-face empty';
-      el.appendChild(seat);
-      return;
-    }
-    const shown = people.length > GROUP_FACES_MAX ? people.slice(0, GROUP_FACES_MAX - 1) : people;
-    shown.forEach((p) => {
-      const f = document.createElement('span');
-      f.className = 'glf-face';
-      f.style.background = seatColour(p.uid || p.name);
-      f.textContent = seatInitial(p.name);
-      el.appendChild(f);
-    });
-    if (shown.length < people.length) {
-      const more = document.createElement('span');
-      more.className = 'glf-face more';
-      more.textContent = '+' + (people.length - shown.length);
-      el.appendChild(more);
-    }
-  }
-
-  // "Bhavana and Ravi", "Bhavana, Ravi and Mani", "Bhavana, Ravi and 2 more".
-  // You are "You", and first.
-  function groupNamesLine(people) {
-    const me = myFirebaseUid();
-    const names = groupMeFirst(people).map((p) => (me && p.uid === me ? 'You' : p.name));
-    if (names.length <= 1) return names.join('');
-    if (names.length <= 3) return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
-    return names.slice(0, 2).join(', ') + ' and ' + (names.length - 2) + ' more';
-  }
-
-  function renderGroupScreen(group) {
-    if (!group) return;
-    groupScreenData = group;
-    rememberGroup(group.code, group.name);
-    document.getElementById('group-title').textContent = group.name;
-    document.getElementById('group-code-text').textContent = group.code;
-
-    // ---- live strip ----
-    const liveFaces = document.getElementById('group-live-faces');
-    const liveText = document.getElementById('group-live-text');
-    const liveNames = document.getElementById('group-live-names');
-    const bellBtn = document.getElementById('btn-group-bell');
-    const bellLabel = document.getElementById('btn-group-bell-label');
-    const playBtn = document.getElementById('btn-group-play');
-    const standBtn = document.getElementById('btn-group-standdown');
-    const hint = document.getElementById('group-bell-hint');
-
-    const meAtTable = group.members.some((m) => m.uid === myFirebaseUid() && m.status === 'table');
-    const seated = group.atTable || [];
-
-    // groupPlayMode decides what the one Play button does when tapped --
-    // start the table, or walk into one that's already open.
-    if (group.gameInProgress) {
-      const playing = group.members.filter((m) => m.status === 'playing');
-      paintGroupFaces(liveFaces, playing);
-      liveText.textContent = 'A game is in progress';
-      liveNames.textContent = groupNamesLine(playing);
-      bellBtn.classList.add('hidden');
-      standBtn.classList.add('hidden');
-      playBtn.classList.remove('hidden');
-      playBtn.textContent = 'Join the game';
-      groupPlayMode = 'join';
-      hint.textContent = 'You’ll be dealt in at the start of the next round.';
-    } else if (group.roomLive) {
-      // The room is open but nothing is dealt yet -- somebody is sitting in
-      // the lobby waiting. This branch didn't exist, which is exactly how the
-      // host ended up alone with nobody able to reach them.
-      const inRoom = group.inRoom || [];
-      paintGroupFaces(liveFaces, inRoom);
-      liveText.textContent = inRoom.length === 1
-        ? `${inRoom[0].name} is waiting to start`
-        : 'Table is open';
-      // One name is already in the title.
-      liveNames.textContent = inRoom.length === 1 ? '' : groupNamesLine(inRoom);
-      bellBtn.classList.add('hidden');
-      standBtn.classList.add('hidden');
-      playBtn.classList.remove('hidden');
-      playBtn.textContent = 'Join the table';
-      groupPlayMode = 'join';
-      hint.textContent = 'Join and the game starts once everyone’s in.';
-    } else if (seated.length) {
-      paintGroupFaces(liveFaces, seated);
-      if (seated.length === 1) {
-        liveText.textContent = meAtTable ? 'You’re at the table' : `${seated[0].name} is at the table`;
-        liveNames.textContent = meAtTable ? '' : 'Waiting for you';
-      } else {
-        liveText.textContent = `${seated.length} at the table`;
-        liveNames.textContent = groupNamesLine(seated) + (meAtTable ? '' : ' · waiting for you');
-      }
-      bellBtn.classList.toggle('hidden', meAtTable);
-      standBtn.classList.toggle('hidden', !meAtTable);
-      // Start Game belongs to whoever raised their hand first -- they called
-      // the game. Everyone else waits for them, or just joins the table.
-      const iAmHost = group.hostUid && group.hostUid === myFirebaseUid();
-      playBtn.classList.toggle('hidden', !(iAmHost && seated.length >= 2));
-      playBtn.textContent = 'Start Game';
-      groupPlayMode = 'start';
-      // Someone not at the table already has "waiting for you" and the
-      // button; the hints are for the people sitting there.
-      hint.textContent = !meAtTable ? ''
-        : seated.length >= 2
-          ? (iAmHost ? 'Everyone at the table comes with you.' : 'Waiting for the host to start.')
-          : 'Waiting for someone else to join.';
-    } else {
-      paintGroupFaces(liveFaces, []);
-      liveText.textContent = 'No one at the table';
-      liveNames.textContent = 'Be the first to sit down';
-      bellBtn.classList.remove('hidden');
-      standBtn.classList.add('hidden');
-      playBtn.classList.add('hidden');
-      // Set even though the button is hidden -- a mode left over from the
-      // previous render is exactly the kind of stale flag that has bitten
-      // this project before.
-      groupPlayMode = 'join';
-      hint.textContent = '';
-    }
-
-    // The bell's cooldown is shown rather than letting someone tap it and
-    // have nothing happen.
-    const cooldownLeft = Math.max(0, (group.bellReadyAt || 0) - Date.now());
-    if (!meAtTable && cooldownLeft > 0) {
-      bellLabel.textContent = `I want to play (quiet for ${Math.ceil(cooldownLeft / 60000)}m)`;
-    } else {
-      bellLabel.textContent = 'I want to play';
-    }
-
-    // ---- members ----
-    const list = document.getElementById('group-members');
-    document.getElementById('group-member-count').textContent = group.members.length
-      ? '· ' + group.members.length : '';
-    list.innerHTML = '';
-    const meUid = myFirebaseUid();
-    group.members.forEach((m) => {
-      const li = document.createElement('li');
-      // v2: each member's own colour circle (as in the lobby), with the
-      // status dot on its corner; the host gets the lobby's gold ring.
-      li.className = 'group-member' + (m.status === 'away' ? ' away' : '') + (m.isHost ? ' host' : '');
-      const status = GROUP_STATUS_LABEL[m.status];
-      // "Played yesterday" carries the list when nobody is around. A column
-      // of grey offline dots would read as MORE dead, not less.
-      const meta = status || relativeDay(m.lastPlayedAt) || 'not played yet';
-      li.innerHTML =
-        `<span class="gm-face" style="background:${seatColour(m.uid || m.name)}" aria-hidden="true">${escapeHtml(seatInitial(m.name))}<span class="gm-dot ${m.status}"></span></span>` +
-        `<span class="gm-name">${escapeHtml(m.name)}${meUid && m.uid === meUid ? ' <span class="gm-you">(you)</span>' : ''}${m.isHost ? ' <span class="gm-host">Host</span>' : ''}</span>` +
-        `<span class="gm-meta ${m.status}">${escapeHtml(meta)}</span>`;
-      list.appendChild(li);
-    });
-
-    renderMarathonStrip(group);
-    renderGroupChat(group.chat || []);
-    renderGroupBoard();
-  }
-
-  // The marathon is started by the admin and runs a fixed number of days, so
-  // this strip has three states rather than one: running (with a countdown),
-  // just ended (with the winner), and none at all. Between marathons games
-  // still count on the daily board -- the group isn't dead in the gaps.
-  // "Sat 27 Sep". Locale-aware, and wrapped because toLocaleDateString can
-  // throw on some older WebViews for option combinations it doesn't support
-  // -- a missing date is fine, a crashed render of the whole group screen is
-  // not.
-  function marathonEndLabel(ts) {
-    try {
-      return new Date(ts).toLocaleDateString(undefined, {
-        weekday: 'short', day: 'numeric', month: 'short',
-      });
-    } catch (e) {
-      return '';
-    }
-  }
-
-  function renderMarathonStrip(group) {
-    const state = document.getElementById('group-marathon-state');
-    const sub = document.getElementById('group-marathon-sub');
-    const startBtn = document.getElementById('btn-start-marathon');
-    if (!state || !sub || !startBtn) return;
-    const m = (group && group.marathon) || {};
-
-    if (m.running) {
-      // The marathon's "name" is its length -- there's no naming step, so the
-      // duration is the identity: "7-day marathon". The end DATE goes
-      // underneath alongside the countdown, because "ends in 5 days" alone
-      // makes people do the arithmetic to work out whether they can play on
-      // the last day.
-      const days = Math.ceil((m.msLeft || 0) / 86400000);
-      state.textContent = m.days ? m.days + '-day marathon' : 'Marathon';
-      const when = marathonEndLabel(Date.now() + (m.msLeft || 0));
-      sub.textContent = (days <= 1 ? 'Ends today' : 'Ends in ' + days + ' days')
-        + (when ? ' · ' + when : '');
-      startBtn.classList.add('hidden');
-      return;
-    }
-    if (m.ended) {
-      state.textContent = m.winnerName ? 'Marathon over — ' + m.winnerName + ' won' : 'Marathon over';
-      sub.textContent = 'Starting another resets the board.';
-      startBtn.textContent = 'Start a new marathon';
-    } else {
-      state.textContent = 'No marathon running';
-      sub.textContent = group && group.isAdmin
-        ? 'Start one to give everyone a reason to play daily.'
-        : 'The group admin can start one.';
-      startBtn.textContent = 'Start a marathon';
-    }
-    // isAdmin only arrives on our own get_group (a broadcast has no viewer);
-    // renderGroupScreen already carries it forward across pushes.
-    startBtn.classList.toggle('hidden', !(group && group.isAdmin));
-  }
-
-  function groupMemberNameByUid(uid) {
-    if (!groupScreenData || !uid) return '';
-    const m = (groupScreenData.members || []).find((x) => x.uid === uid);
-    return m ? m.name : '';
-  }
-
-  function groupChatPeople() {
-    const me = myFirebaseUid();
-    if (!groupScreenData) return [];
-    return (groupScreenData.members || [])
-      .filter((m) => m.uid && m.uid !== me)
-      .map((m) => ({ id: m.uid, name: m.name }));
-  }
-
-  function chatClock(ts) {
-    const d = new Date(ts || Date.now());
-    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  }
-
-  // Renders `msgs` into `ul`. Used by BOTH the chat sheet and the read-only
-  // preview block on the group screen, so the two can never drift apart in
-  // grouping, mention highlighting or clock format -- the preview showing a
-  // message differently from the sheet it opens would be its own small bug.
-  function paintGroupChatInto(ul, msgs) {
-    if (!ul) return;
-    ul.innerHTML = '';
-    const me = myFirebaseUid();
-    let prevUid = null;
-    msgs.forEach((m) => {
-      // Same grouping as the table chat. The TIME stays, though -- opposite
-      // decision, for a reason: with only 30 minutes of history, "25 minutes
-      // ago" versus "just now" is how you tell whether somebody is still
-      // around and worth waiting for. At the table everyone is already
-      // playing, so there it said nothing.
-      const grouped = prevUid && m.uid === prevUid;
-      const mentionsMe = Array.isArray(m.mentions) && m.mentions.indexOf(me) >= 0;
-      const li = document.createElement('li');
-      li.className = 'group-chat-msg'
-        + (m.uid && m.uid === me ? ' mine' : '')
-        + (grouped ? ' grouped' : '')
-        + (mentionsMe ? ' mentions-me' : '');
-      if (!grouped) {
-        // v2: the sender's colour circle, the same one as in Members.
-        const face = document.createElement('span');
-        face.className = 'gc-face';
-        face.setAttribute('aria-hidden', 'true');
-        face.style.background = seatColour(m.uid || m.name);
-        face.textContent = seatInitial(m.name || 'Player');
-        li.appendChild(face);
-        const t = document.createElement('span');
-        t.className = 'gc-time';
-        t.textContent = chatClock(m.at);
-        li.appendChild(t);
-        const n = document.createElement('span');
-        n.className = 'gc-name';
-        n.textContent = m.name || 'Player';
-        li.appendChild(n);
-      }
-      const body = document.createElement('span');
-      body.className = 'gc-text';
-      renderChatText(body, m.text, m.mentions, groupMemberNameByUid, me);
-      li.appendChild(body);
-      ul.appendChild(li);
-      prevUid = m.uid || null;
-    });
-  }
-
-  // How many messages the read-only preview on the group screen shows.
-  const GROUP_CHAT_PREVIEW_COUNT = 5;
-
-  function renderGroupChat(list) {
-    const ul = document.getElementById('group-chat-list');
-    const empty = document.getElementById('group-chat-empty');
-    if (!ul || !empty) return;
-    groupChatMsgs = list || [];
-
-    // The sheet: everything.
-    paintGroupChatInto(ul, groupChatMsgs);
-    empty.classList.toggle('hidden', groupChatMsgs.length > 0);
-    ul.classList.toggle('hidden', groupChatMsgs.length === 0);
-    ul.scrollTop = ul.scrollHeight;
-
-    // The preview: the last few, same renderer. slice(-N) is safe on a list
-    // shorter than N, so no length check is needed.
-    const pv = document.getElementById('group-chat-preview');
-    const pvEmpty = document.getElementById('group-chat-preview-empty');
-    if (pv) {
-      const recent = groupChatMsgs.slice(-GROUP_CHAT_PREVIEW_COUNT);
-      paintGroupChatInto(pv, recent);
-      pv.classList.toggle('hidden', recent.length === 0);
-      if (pvEmpty) pvEmpty.classList.toggle('hidden', recent.length > 0);
-      pv.scrollTop = pv.scrollHeight;
-    }
-
-    // Keeps the FAB's unread count in step with every incoming batch.
-    updateGroupChatUnread();
-  }
-
-  // Champions rows used to be keyed by calendar month. They now record when
-  // the marathon ended and how long it ran -- but old rows are still sitting
-  // in Firestore, so both shapes have to render.
-  // Currently UNUSED: its only caller was the Champions board tab, removed
-  // Sept 2026. Kept deliberately -- the server still sends g.champions, so
-  // this is the other half of bringing that view back as a pure UI change.
-  // Delete both together if champions are dropped for good.
-  function championLabel(c) {
-    if (c && c.endedAt) {
-      const d = new Date(c.endedAt);
-      const when = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-      return c.days ? c.days + 'd · ' + when : when;
-    }
-    return (c && c.month) || '';
-  }
-
-  // One board now: the standings for the current marathon. The Today /
-  // Recent / Champions tabs were removed in Sept 2026 -- see the comment in
-  // index.html where the tab row used to be. g.daily, g.recent and
-  // g.champions still arrive in the payload and are simply not rendered;
-  // left alone deliberately, so bringing any of them back is a UI change
-  // rather than a server one.
-  // One marathon row, on the group screen and in the lobby's leaderboard.
-  // v2: gold, silver and bronze medals for the top three, a number after.
-  // By position, as the numbers were: the server breaks a tie on points by
-  // name, and names that first one as the marathon's winner.
-  function standingsRowHtml(s, i) {
-    const rank = i < 3
-      ? `<span class="st-rank st-medal art ${MEDAL_ART[i]}" role="img" aria-label="${i + 1}"></span>`
-      : `<span class="st-rank">${i + 1}</span>`;
-    return rank +
-      `<span class="st-name">${escapeHtml(s.name)}</span>` +
-      `<span class="st-wins">${Number(s.points) || 0}<small> pts</small></span>`;
-  }
-
-  function renderGroupBoard() {
-    const g = groupScreenData;
-    if (!g) return;
-    const board = document.getElementById('group-board');
-    const empty = document.getElementById('group-board-empty');
-    board.innerHTML = '';
-    const rows = (g.marathon && g.marathon.standings) || [];
-
-    const me = myFirebaseUid();
-    rows.forEach((s, i) => {
-      const li = document.createElement('li');
-      // Your own row is marked, so you can find yourself without reading
-      // every name -- the whole point of a standings table is "where am I".
-      li.className = 'standings-row' + (me && s.uid === me ? ' is-me' : '');
-      li.innerHTML = standingsRowHtml(s, i);
-      board.appendChild(li);
-    });
-
-    empty.classList.toggle('hidden', rows.length > 0);
-    // The scoring note explains the points in the table above it, so it only
-    // earns its space when there IS a table.
-    const note = document.querySelector('.group-scoring-note');
-    if (note) note.classList.toggle('hidden', rows.length === 0);
-    // Two quite different empty states. "Nothing scored yet" for the
-    // no-marathon case reads as though the app has lost your points.
-    empty.textContent = !(g.marathon && (g.marathon.running || g.marathon.ended))
-      ? 'No marathon running yet.'
-      : 'Nothing scored yet — play a game to get on the board.';
-  }
-
-  document.getElementById('btn-group-back').onclick = () => {
-    groupScreenCode = null;
-    groupScreenData = null;
-    showScreen('screen-landing');
-  };
-
-  document.getElementById('btn-group-settings').onclick = () => {
-    if (groupScreenData) openGroupMenu(groupScreenData.code, groupScreenData.name);
-  };
-
-  document.getElementById('btn-group-invite').onclick = () => {
-    if (!groupScreenData) return;
-    logAnalytics('invite_shared_whatsapp');
-    openWhatsAppShare(groupInviteTextFor(groupScreenData.code, groupScreenData.name));
-  };
-
-  document.getElementById('btn-group-bell').onclick = async () => {
-    if (!groupScreenCode) return;
-    if (!getPlayerName()) return promptForName();
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('ring_bell', {
-      code: groupScreenCode,
-      name: getPlayerName(),
-      firebaseIdToken,
-    }, (res) => {
-      if (!res || !res.ok) setLandingError((res && res.error) || 'Could not do that.');
-      else logAnalytics('group_bell_rung');
-    });
-  };
-
-  document.getElementById('btn-group-standdown').onclick = async () => {
-    if (!groupScreenCode) return;
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('stand_down', { code: groupScreenCode, firebaseIdToken });
-  };
-
-  // Start Game and Join are NOT the same action -- they used to be, and that
-  // was the bug. Joining is local: walk into the room. Starting is a server
-  // action that brings everyone at the table with you.
-  document.getElementById('btn-group-play').onclick = async () => {
-    if (!groupScreenCode) return;
-    if (groupPlayMode !== 'start') { joinRoomByKey(groupScreenCode); return; }
-    if (!getPlayerName()) return promptForName();
-    // Starting is a SERVER action, not a local navigation. The old code just
-    // called joinRoomByKey here, which walked the host into an empty room on
-    // their own and left everyone else behind with no way in.
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('start_group_game', { code: groupScreenCode, firebaseIdToken }, (res) => {
-      if (!res || !res.ok) return setLandingError((res && res.error) || 'Could not start the game.');
-      logAnalytics('group_game_started');
-      // We're in the group room too, so the group_game_starting broadcast
-      // below brings us in on the same path as everyone else -- one code
-      // path, so the host can't end up somewhere the others aren't.
-    });
-  };
-
-  // Everyone seated at the table walks into the room together. Guests who
-  // aren't seated ignore it; they can still tap "Join the table" afterwards,
-  // which is also the fallback if this push is missed entirely.
-  socket.on('group_game_starting', ({ code, roomCode, seatUids }) => {
-    const target = roomCode || code;
-    if (!target) return;
-
-    // Already sitting in a room -- the screen is the only honest signal for
-    // that. (An earlier version tested myRoomCode, which does NOT mean "in a
-    // room": it is seeded from localStorage at load and survives a failed
-    // rejoin, so a stale value silently disqualified people.)
-    const active = document.querySelector('.screen.active');
-    if (active && (active.id === 'screen-lobby' || active.id === 'screen-game')) return;
-
-    // seatUids only arrives on the FALLBACK broadcast. Normally the server
-    // sends this event straight to our socket because it knows we're seated,
-    // and then there is nothing to match -- being sent it is the whole
-    // instruction. Matching on our own Firebase uid was the fragile part:
-    // LCAuth.getUser() can be null on a client that is otherwise fine, and a
-    // null there meant being left behind with no error and no button.
-    if (Array.isArray(seatUids)) {
-      const me = myFirebaseUid();
-      if (!me || seatUids.indexOf(me) < 0) return;
-    }
-    joinRoomByKey(target);
-  });
-
-
-  // ---- start a marathon ----
-  document.getElementById('btn-start-marathon').onclick = () => {
-    if (!groupScreenData) return;
-    marathonDays = 7;
-    const tabs = document.getElementById('marathon-days-tabs');
-    tabs.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s.dataset.days === '7'));
-    document.getElementById('marathon-start-error').textContent = '';
-    document.getElementById('marathon-start-dialog').classList.remove('hidden');
-  };
-
-  (function wireMarathonDayTabs() {
-    const tabs = document.getElementById('marathon-days-tabs');
-    if (!tabs) return;
-    tabs.querySelectorAll('.seg').forEach((seg) => {
-      seg.onclick = () => {
-        marathonDays = Number(seg.dataset.days);
-        tabs.querySelectorAll('.seg').forEach((s) => s.classList.toggle('active', s === seg));
-      };
-    });
-  })();
-
-  document.getElementById('btn-marathon-cancel').onclick = () => {
-    document.getElementById('marathon-start-dialog').classList.add('hidden');
-  };
-
-  document.getElementById('btn-marathon-confirm').onclick = async () => {
-    if (!groupScreenCode) return;
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('start_marathon', {
-      code: groupScreenCode,
-      days: marathonDays,
-      firebaseIdToken,
-    }, (res) => {
-      if (!res || !res.ok) {
-        // Shown inside the dialog rather than as a landing toast -- the
-        // dialog is covering the screen, so a toast behind it is invisible.
-        document.getElementById('marathon-start-error').textContent =
-          (res && res.error) || 'Could not start it.';
-        return;
-      }
-      document.getElementById('marathon-start-dialog').classList.add('hidden');
-      logAnalytics('marathon_started');
-      // The server broadcasts the new state, but that broadcast carries no
-      // viewer, so re-asking keeps isAdmin and the Start button correct.
-      openGroupScreen(groupScreenCode, groupScreenData && groupScreenData.name);
-    });
-  };
-
-  // ---- group chat: collapsed by default ----
-  // The unread count is what makes collapsing safe. A collapsed section with
-  // no signal is a section nobody opens twice, and the whole point of this
-  // chat is arranging a game -- it has to be able to interrupt you.
-  //
-  // "Unread" is measured by TIMESTAMP, not by a message count. History only
-  // lives 30 minutes server-side, so the list shrinks on its own as messages
-  // expire; a count-based marker would go negative and under-report.
-  // (groupChatExpanded / groupChatSeenAt are declared with the rest of the
-  // group state above.)
-
-  function updateGroupChatUnread() {
-    const badge = document.getElementById('group-chat-unread');
-    if (!badge) return;
-    const me = myFirebaseUid();
-    // Your own messages never count as unread.
-    const n = groupChatExpanded ? 0 : groupChatMsgs.filter(
-      (m) => m && m.at > groupChatSeenAt && m.uid !== me
-    ).length;
-    badge.textContent = n > 99 ? '99+' : String(n);
-    badge.classList.toggle('hidden', n === 0);
-  }
-
-  // Open/close the group chat sheet. Mirrors the table chat's handlers
-  // deliberately, including NOT auto-focusing the input on open -- focusing
-  // it forces the keyboard up the instant the sheet appears, which on a real
-  // Android WebView broke the panel's position:fixed layout outright (see
-  // the long comment on the table chat's FAB handler).
-  function setGroupChatExpanded(open) {
-    const panel = document.getElementById('group-chat-panel');
-    const backdrop = document.getElementById('group-chat-backdrop');
-    const fab = document.getElementById('group-chat-fab');
-    if (!panel || !backdrop || !fab) return;
-    groupChatExpanded = !!open;
-
-    if (groupChatExpanded) {
-      activeChatPanelId = 'group-chat-panel';
-      activeChatListId = 'group-chat-list';
-      panel.classList.remove('hidden');
-      backdrop.classList.remove('hidden');
-      fab.classList.add('hidden');
-      groupChatSeenAt = Date.now();
-      // Re-derive the top anchor from scratch on every open -- the one
-      // moment the keyboard is definitionally closed -- and hold the group
-      // screen still behind the sheet (see chatSheetOpened).
-      chatSheetOpened();
-      positionChatSheet();
-      scrollChatToLatest();
-    } else {
-      // Drop focus FIRST so the keyboard closes with the sheet, otherwise it
-      // outlives the panel and the next viewport resize applies an offset to
-      // something that's no longer there.
-      const input = document.getElementById('input-group-chat');
-      if (input) input.blur();
-      panel.classList.add('hidden');
-      backdrop.classList.add('hidden');
-      // Only re-show the button if we're still on the group screen -- backing
-      // out to the landing screen closes the sheet too, and a chat button
-      // floating over the landing screen would be nonsense.
-      fab.classList.toggle('hidden', !groupScreenCode);
-      chatSheetClosed();
-    }
-    updateGroupChatUnread();
-  }
-
-  (function wireGroupChatSheet() {
-    const fab = document.getElementById('group-chat-fab');
-    const closeBtn = document.getElementById('btn-group-chat-close');
-    const backdrop = document.getElementById('group-chat-backdrop');
-    if (fab) fab.onclick = () => setGroupChatExpanded(true);
-    // The whole preview block is the tap target, not a small "Open" link --
-    // it's read-only, so there is nothing else you could be reaching for.
-    const preview = document.getElementById('group-chat-preview-block');
-    if (preview) preview.onclick = () => setGroupChatExpanded(true);
-    if (closeBtn) closeBtn.onclick = () => setGroupChatExpanded(false);
-    if (backdrop) backdrop.onclick = () => setGroupChatExpanded(false);
-    const input = document.getElementById('input-group-chat');
-    if (input) {
-      // Same settle sequence as the table chat's input: the keyboard's
-      // resize events on Android WebView arrive late and in steps, so the
-      // sheet is re-placed a few times as it opens (each pass also keeps the
-      // newest message in view while the list changes height).
-      input.addEventListener('focus', () => {
-        const settle = () => { positionChatSheet(); scrollChatToLatest(); };
-        settle();
-        setTimeout(settle, 120);
-        setTimeout(settle, 350);
-        setTimeout(settle, 600);
-      });
-      input.addEventListener('blur', () => setTimeout(positionChatSheet, 120));
-    }
-  })();
-
-  async function sendGroupChat() {
-    const input = document.getElementById('input-group-chat');
-    const text = (input.value || '').trim();
-    if (!text || !groupScreenCode) return;
-    if (!getPlayerName()) return promptForName();
-    // Cleared immediately rather than in the ack: a message that sits in the
-    // box until the server answers feels broken on a slow connection.
-    input.value = '';
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('group_chat_send', {
-      code: groupScreenCode,
-      text,
-      name: getPlayerName(),
-      firebaseIdToken,
-      mentions: collectMentions(text, groupChatPeople()),
-    }, (res) => {
-      if (!res || !res.ok) setLandingError((res && res.error) || 'Could not send that.');
-    });
-  }
-
-  wireMentionBar('input-group-chat', 'group-chat-mention-bar', groupChatPeople);
-  document.getElementById('btn-group-chat-send').onclick = sendGroupChat;
-  document.getElementById('input-group-chat').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); sendGroupChat(); }
-  });
-
-  // One message at a time, not a whole group_update -- a full refresh means a
-  // Firestore read, and paying for a document read per chat message would be
-  // absurd. The 30-minute window is enforced server-side; nothing here needs
-  // to expire anything.
-  socket.on('group_chat', ({ code, msg }) => {
-    if (!msg || code !== groupScreenCode) return;
-    groupChatMsgs.push(msg);
-    renderGroupChat(groupChatMsgs);
-  });
-
-  // Live updates: presence changes, someone raising a hand, a game starting.
-  socket.on('group_update', ({ group }) => {
-    if (!group) return;
-    // Keep the list row's name fresh even for groups we're not looking at.
-    rememberGroup(group.code, group.name);
-    if (group.code === groupScreenCode) {
-      // isAdmin only comes back on our own get_group (broadcasts have no
-      // viewer), so preserve what we already learned rather than losing the
-      // settings buttons on every push.
-      if (groupScreenData && groupScreenData.isAdmin) group.isAdmin = true;
-      renderGroupScreen(group);
-    }
-  });
-
-  // Somebody rang the bell. Until FCM lands this only reaches people who
-  // already have the app open -- the mechanic is the same either way, push
-  // just makes it reach further.
-  socket.on('group_bell', ({ code, byName }) => {
-    if (groupBellTimer) clearTimeout(groupBellTimer);
-    const el = document.getElementById('landing-toast-error');
-    if (!el) return;
-    el.textContent = `${byName} wants to play`;
-    el.classList.remove('hidden');
-    groupBellTimer = setTimeout(() => el.classList.add('hidden'), 6000);
-    if (code && code !== groupScreenCode) {
-      el.onclick = () => openGroupScreen(code);
-    }
-  });
-
-  // Forced: a reconnect means a new socket id server-side, so presence has to
-  // be re-registered even though nothing changed on this device.
-  socket.on('connect', () => { watchGroups(true); });
-
-  // --------------------------------------------------------------------
-  // Invite mode: what someone sees after tapping a shared link.
-  //
-  // Before this existed they landed on the full three-mode menu, and the
-  // name field lived only inside the profile modal behind a small avatar
-  // icon -- so a first-time visitor went: tap Join -> "Enter your name"
-  // error -> hunt for the hidden field -> type -> close -> tap Join again.
-  // Five steps and an error message, on the exact path every new player
-  // arrives through. Now everything needed is on one card.
-  // --------------------------------------------------------------------
-  let inviteJoinKey = null;
-
-  // Each install prompt says it was shown once per page load, not on every
-  // redraw. (A `var`, set up on first use: the invite card below logs from
-  // start-up, long before the rest of the install code further down runs.)
-  var installShownLogged = null;
-  function logInstallShown(where) {
-    if (!installShownLogged) installShownLogged = new Set();
-    if (installShownLogged.has(where)) return;
-    installShownLogged.add(where);
-    logAnalytics('install_prompt_shown', { where });
-  }
-
-  // The invite card, on the website on an Android phone (Nov 2026): "Play in
-  // the app" first, the browser second. Almost every new player arrives
-  // through an invite link, and the link opens the website. See the install
-  // notes by INSTALL_URL further down.
-  function showInviteAppChoice(key) {
-    const box = document.getElementById('invite-app');
-    const card = document.getElementById('invite-card');
-    const join = document.getElementById('btn-invite-join');
-    if (!box || !card || !join) return;
-    const appFirst = FEATURES.installPrompt && CLIENT_PLATFORM === 'web' && /Android/i.test(navigator.userAgent || '');
-    box.classList.toggle('hidden', !appFirst);
-    card.classList.toggle('app-first', appFirst);
-    join.textContent = appFirst ? 'Join in the browser' : 'Join Game';
-    if (!appFirst) return;
-    const codeEl = document.getElementById('invite-app-code');
-    if (codeEl) codeEl.textContent = key;
-    const hint = document.getElementById('invite-app-hint');
-    if (hint) hint.classList.remove('copied');
-    logInstallShown('invite');
-  }
-
-  (function wireInviteAppButton() {
-    const btn = document.getElementById('btn-invite-app');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      // Set now, at the tap: the install code further down is not ready
-      // during start-up, when the card is drawn.
-      btn.href = installUrl('invite');
-      const key = inviteJoinKey || '';
-      logAnalytics('install_prompt_accepted', { where: 'invite' });
-      // The app can't be told which table (that needs the next app build),
-      // so the code goes on the clipboard: one paste in the app.
-      try { if (key && navigator.clipboard) navigator.clipboard.writeText(key).catch(() => {}); } catch (e) { /* type it instead */ }
-      const hint = document.getElementById('invite-app-hint');
-      if (hint && key) {
-        hint.innerHTML = 'Code <b>' + escapeHtml(key) + '</b> copied. In the app tap <b>Play with Friends</b> and paste it in <b>Enter code</b>.';
-        hint.classList.add('copied');
-      }
-    });
-  })();
-
-  function enterInviteMode(key, headline) {
-    inviteJoinKey = key;
-    // A link tapped while a Home sheet is open: the invite card replaces the
-    // cards, so the sheet goes too.
-    try { closeHomeSheet(); } catch (e) { /* cosmetic */ }
-    const card = document.getElementById('invite-card');
-    const blocks = document.querySelector('.mode-blocks');
-    if (!card || !blocks) return;
-    blocks.classList.add('hidden');
-    card.classList.remove('hidden');
-    document.getElementById('invite-headline').textContent = headline;
-    document.getElementById('invite-roomcode').textContent = key;
-    const nameInput = document.getElementById('input-invite-name');
-    // Returning players never retype -- same stored name the rest of the app
-    // uses, so this is usually already filled and it's a single tap to play.
-    nameInput.value = localStorage.getItem(NAME_STORAGE_KEY) || '';
-    showInviteAppChoice(key);
-    // Not with "Play in the app" leading: the keyboard popping up over it
-    // would push the main choice off the screen.
-    if (!card.classList.contains('app-first')) setTimeout(() => { try { nameInput.focus(); } catch (e) {} }, 60);
-    updateAppPromos();
-  }
-
-  function exitInviteMode() {
-    inviteJoinKey = null;
-    const card = document.getElementById('invite-card');
-    const blocks = document.querySelector('.mode-blocks');
-    if (card) card.classList.add('hidden');
-    if (blocks) blocks.classList.remove('hidden');
-    updateAppPromos();
-  }
-
-  // Set when this visit began from an invite link, so the join that follows
-  // can be credited to the invite. `var` because joinRoomByKey reads it and
-  // nothing here may sit in a temporal dead zone at startup.
-  var inviteArrival = null;
-
-  (function handleInviteLink() {
-    const params = new URLSearchParams(window.location.search);
-    const groupCode = (params.get('g') || '').trim().toUpperCase();
-    // Both kinds of code are uppercase; ?g= vs ?room= only says which sort
-    // of table you were invited to.
-    const roomFromLink = (params.get('room') || '').trim().toUpperCase();
-
-    if (groupCode) {
-      enterInviteMode(groupCode, 'You’ve been invited to play');
-      // Ask the server what this group is actually called, so the card says
-      // "Sharma Family" rather than the raw code. Purely cosmetic -- if the
-      // lookup fails the card still works and they can still join.
-      socket.emit('get_group', { code: groupCode }, (res) => {
-        if (!res || !res.ok || !res.group) return;
-        document.getElementById('invite-headline').textContent = `You’ve been invited to ${res.group.name}`;
-        document.getElementById('invite-roomcode').textContent = res.group.name;
-      });
-    } else if (roomFromLink) {
-      document.getElementById('input-roomcode').value = roomFromLink;
-      enterInviteMode(roomFromLink, 'You’ve been invited to a game');
-    }
-
-    if (groupCode || roomFromLink) {
-      // THE MISSING MIDDLE OF THE FUNNEL. Sends were logged; opens were not, so
-      // there was no way to tell whether a single invite ever brought anyone
-      // in. is_new_player separates "a friend came back" from "a stranger
-      // arrived" -- the second is the one that actually grows the user base.
-      inviteArrival = groupCode ? 'group' : 'room';
-      let isNew = true;
-      try { isNew = !hasPlayedBefore(); } catch (e) { /* unknown -> count as new */ }
-      logAnalytics('invite_link_opened', { kind: inviteArrival, is_new_player: isNew });
-      // Strip the param so it can't linger in the address bar or get shared
-      // onward by accident (e.g. a browser "share this page").
-      const url = new URL(window.location.href);
-      url.searchParams.delete('g');
-      url.searchParams.delete('room');
-      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-    }
-  })();
-
-  // --------------------------------------------------------------------
-  // Deep link arriving while the app is already open (Android App Links).
-  //
-  // The IIFE above only runs at page load, which covers the browser and a
-  // cold app start. But once App Links are verified, tapping an invite in
-  // WhatsApp with the app already running hands the URL to the app instead
-  // of reloading the page -- Capacitor fires appUrlOpen and nothing else
-  // happens unless we listen for it.
-  //
-  // Registered now even though the manifest side isn't built yet: it's inert
-  // without it (the event simply never fires), and it means the native build
-  // is a manifest change only, with no matching web deploy to remember.
-  // --------------------------------------------------------------------
-  (function listenForDeepLinks() {
-    const CapApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
-    if (!CapApp || !CapApp.addListener) return;
-    // The same link can arrive twice (the launch link is also replayed as an
-    // event): the second within a few seconds is ignored.
-    let lastHref = null;
-    let lastAt = 0;
-    function openInviteFromLink(href, how) {
-      try {
-        if (!href) return;
-        if (href === lastHref && Date.now() - lastAt < 15000) return;
-        const url = new URL(href);
-        const gcode = (url.searchParams.get('g') || '').trim().toUpperCase();
-        const room = (url.searchParams.get('room') || '').trim().toUpperCase();
-        if (!gcode && !room) return;
-        lastHref = href;
-        lastAt = Date.now();
-        // Already sitting in that exact table? Don't yank them out of it.
-        if (myRoomCode && (myRoomCode === gcode || myRoomCode === room)) return;
-        inviteArrival = gcode ? 'group' : 'room';
-        let isNew = true;
-        try { isNew = !hasPlayedBefore(); } catch (e) { /* unknown -> count as new */ }
-        logAnalytics('invite_link_opened', { kind: inviteArrival, is_new_player: isNew, in_app: true, how });
-        if (gcode) {
-          enterInviteMode(gcode, 'You’ve been invited to play');
-          socket.emit('get_group', { code: gcode }, (res) => {
-            if (!res || !res.ok || !res.group) return;
-            document.getElementById('invite-headline').textContent = `You’ve been invited to ${res.group.name}`;
-            document.getElementById('invite-roomcode').textContent = res.group.name;
-          });
-        } else {
-          document.getElementById('input-roomcode').value = room;
-          enterInviteMode(room, 'You’ve been invited to a game');
-        }
-        showScreen('screen-landing');
-      } catch (e) {
-        console.warn('[DeepLink] could not handle', href, e && e.message);
-      }
-    }
-    // The app already open: the link arrives as an event.
-    CapApp.addListener('appUrlOpen', (event) => openInviteFromLink(event && event.url, 'open'));
-    // The app was CLOSED and the link opened it (Nov 2026, app 1.2). The site
-    // loads as usual and the link only reaches the page through
-    // getLaunchUrl() -- without this, an invite tapped in WhatsApp opened the
-    // app on Home and the invite was lost. Once per launch link: reloading
-    // the page reports the same link again, and the card must not come back.
-    if (typeof CapApp.getLaunchUrl === 'function') {
-      CapApp.getLaunchUrl().then((res) => {
-        const href = res && res.url;
-        if (!href) return;
-        let seen = null;
-        try { seen = sessionStorage.getItem('leastcount_launch_link'); } catch (e) { /* private mode */ }
-        if (seen === href) return;
-        try { sessionStorage.setItem('leastcount_launch_link', href); } catch (e) { /* private mode */ }
-        openInviteFromLink(href, 'launch');
-      }).catch(() => { /* no launch link */ });
-    }
-  })();
-
-  document.getElementById('btn-invite-join').onclick = () => {
-    const nameInput = document.getElementById('input-invite-name');
-    const name = nameInput.value.trim();
-    if (!name) {
-      // NOT promptForName(): this card carries its own name box, right here on
-      // screen. Opening the profile modal over it would hide the very field we
-      // are asking them to fill in.
-      setLandingError('Add your name so the others know who joined');
-      try { nameInput.focus(); } catch (e) {}
-      return;
-    }
-    // Mirror into the canonical name field/storage that the rest of the app
-    // (and getPlayerName) reads, so this card doesn't become a second source
-    // of truth for who you are.
-    localStorage.setItem(NAME_STORAGE_KEY, name);
-    document.getElementById('input-name').value = name;
-    joinRoomByKey(inviteJoinKey);
-  };
-  document.getElementById('btn-invite-dismiss').onclick = exitInviteMode;
-
-  document.getElementById('btn-create-group').onclick = async () => {
-    const nameInput = document.getElementById('input-group-name');
-    const groupName = nameInput.value.trim();
-    if (!groupName) return setLandingError('Name your group first');
-    if (!getPlayerName()) return promptForName();
-    const btn = document.getElementById('btn-create-group');
-    btn.disabled = true;
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_group', { groupName, firebaseIdToken }, (res) => {
-      btn.disabled = false;
-      if (!res || !res.ok) return setLandingError((res && res.error) || 'Could not create the group.');
-      nameInput.value = '';
-      rememberGroup(res.code, res.name);
-      logAnalytics('group_created');
-      // Creating a group does NOT drop you into a game (Sept 2026, per
-      // feedback). Making a group and playing at it are separate acts: the
-      // group appears in the list above, and you open it when people are
-      // actually around. The menu opens straight away so the obvious next
-      // step -- sharing the link -- is one tap, without having sat down at
-      // an empty table first.
-      // Creating a group does NOT drop you into a game -- making a group and
-      // playing at it are separate acts. You land on the group's own screen,
-      // where Invite is right there.
-      openGroupScreen(res.code, res.name);
-    });
-  };
-
-  // (The vs Bots / Online switch is gone, Oct 2026: they are two cards on
-  // Home now, both always showing.)
-
-  renderGroupsBlock();
-  function getPlayerName() {
-    const name = document.getElementById('input-name').value.trim();
-    if (name) localStorage.setItem(NAME_STORAGE_KEY, name);
-    return name;
-  }
-
-  // Set by "Play with friends" at the end of a bot game (see
-  // playWithFriendsFromBots): the table it makes opens with a line pointing at
-  // the WhatsApp button, since inviting is the whole reason they are there.
-  let inviteNudgePending = false;
-
-  document.getElementById('btn-create').onclick = async () => {
-    const name = getPlayerName();
-    if (!name) return promptForName();
-    if (!startOnce('create')) return;   // a double tap made two tables
-    let firebaseIdToken = null;
-    try { firebaseIdToken = await currentFirebaseIdToken(); } catch (e) { /* as a guest */ }
-    socket.emit('create_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
-      doneOnce('create');
-      if (!res.ok) return setLandingError(res.error);
-      logAnalytics('room_created');
-      saveSession(res.roomCode, res.playerId, res.sessionToken);
-      loadChatHistory(res.chatHistory);
-      showChatFab();
-      showScreen('screen-lobby');
-      if (inviteNudgePending) {
-        inviteNudgePending = false;
-        showRoomcodeFeedback('Now invite your friends on WhatsApp ↓', 12000);
-      }
-    });
-  };
-
-  // Thin wrapper now -- the actual join lives in joinRoomByKey() above, so
-  // typing a code, tapping a saved group and following an invite link all
-  // go through exactly the same path.
-  // Routes by code length: a 4-letter ad-hoc code drops you straight into
-  // that room, but a 5-letter GROUP code opens the group's own screen rather
-  // than seating you at a table nobody else is at. Joining a group and
-  // sitting down to play are separate acts -- typing a code shouldn't skip
-  // the first one.
-  // There are TWO of these boxes -- one in each landing pane (Sept 2026).
-  //
-  // The box accepts both kinds of code, but when the landing screen was split
-  // into Groups / Quick Play it ended up filed under Groups only. So someone
-  // sent a 4-letter Quick Room code had to switch to the GROUPS tab to type
-  // it in. Rather than pick a home for it, it now appears in both, and the
-  // code itself decides where you land -- which is what the length already
-  // told us. Same wording in both, so neither reads as the "real" one.
-  //
-  // Both boxes share this handler; only their element ids differ.
-  const JOIN_INPUT_IDS = ['input-roomcode', 'input-roomcode-quick'];
-
-  function clearJoinCodeInputs() {
-    JOIN_INPUT_IDS.forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.value = '';
-    });
-  }
-
-  function submitJoinCode(inputId) {
-    const input = document.getElementById(inputId);
-    if (!input) return;
-    const code = input.value.trim().toUpperCase();
-    if (!code) return setLandingError('Enter a code');
-    // Length is the router. A 5-letter GROUP code opens that group's own
-    // screen rather than seating you at a table nobody else is at -- joining
-    // a group and sitting down to play are separate acts, and typing a code
-    // shouldn't skip the first one. Anything else is a one-off room code and
-    // goes straight in.
-    if (code.length === 5) {
-      clearJoinCodeInputs();
-      openGroupScreen(code);
-      return;
-    }
-    joinRoomByKey(code);
-  }
-
-  (function wireJoinCodeBoxes() {
-    [
-      { input: 'input-roomcode', button: 'btn-join' },
-      { input: 'input-roomcode-quick', button: 'btn-join-quick' },
-    ].forEach(({ input, button }) => {
-      const btn = document.getElementById(button);
-      const box = document.getElementById(input);
-      if (btn) btn.onclick = () => submitJoinCode(input);
-      // Enter submits -- on a phone the keyboard's Go key is the natural way
-      // to finish typing a code, and reaching for the button instead is
-      // friction on the one screen a brand-new player has to get through.
-      if (box) {
-        box.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') submitJoinCode(input);
-        });
-      }
-    });
-  })();
-
-  // Copy just the code, or share a full join-link that pre-fills the room
-  // code on the other end (see prefillRoomCodeFromLink above). Both give a
-  // short on-screen "Copied!"/"Shared!" confirmation instead of relying on
-  // the browser's own (easy-to-miss) clipboard toast.
-  let roomcodeFeedbackTimer = null;
-  function showRoomcodeFeedback(text, ms) {
-    const el = document.getElementById('roomcode-action-feedback');
-    el.textContent = text;
-    if (roomcodeFeedbackTimer) clearTimeout(roomcodeFeedbackTimer);
-    roomcodeFeedbackTimer = setTimeout(() => { el.textContent = ''; }, ms || 2500);
-  }
-  // Two link shapes, because there are two kinds of table:
-  //   ?g=sharma-family-k2p  -- a permanent group. This link never expires,
-  //                            so it can be pinned in a WhatsApp group once
-  //                            and keep working for years.
-  //   ?room=ABCD            -- a one-off room, good only for this session.
-  // Separate params rather than one, because the room-code path uppercases
-  // its value, and ?g= vs ?room= records which kind of table it was.
-  function roomInviteLink() {
-    const url = new URL(window.location.href);
-    url.search = '';
-    url.hash = '';
-    const gcode = latestRoom && latestRoom.groupCode;
-    if (gcode) url.searchParams.set('g', gcode);
-    else url.searchParams.set('room', myRoomCode || '');
-    return url.toString();
-  }
-
-  // "Ravi invited you..." rather than "Join my Least Count game!" -- an
-  // invitation with a person's name attached reads as a message from someone
-  // you know, which is the whole point of it landing in a family group chat.
-  function inviteShareText() {
-    const link = roomInviteLink();
-    const who = (localStorage.getItem(NAME_STORAGE_KEY) || '').trim();
-    const groupName = latestRoom && latestRoom.groupName;
-    const lead = who ? `${who} invited you` : 'You are invited';
-    // Diwali: the invite reads as a festival message in the family group.
-    if (isDiwali()) {
-      return groupName
-        ? `🪔 Happy Diwali! ${lead} to play Least Count with "${groupName}".\n${link}`
-        : `🪔 Happy Diwali! ${lead} to a Diwali game of Least Count. Room code: ${myRoomCode}\n${link}`;
-    }
-    return groupName
-      ? `${lead} to play Least Count with "${groupName}".\n${link}`
-      : `${lead} to a game of Least Count. Room code: ${myRoomCode}\n${link}`;
-  }
-  // -------------------------------------------------------------------------
-  // In-game invite (Sept 2026)
-  //
-  // The room code lived only on the lobby screen, so once a game started the
-  // host could not tell anyone how to join -- including the mid-game join path
-  // the rewarded ad was built around.
-  //
-  // Reuses roomInviteLink() and inviteShareText() rather than rebuilding the
-  // link here: one definition of what an invite is, so the lobby and the table
-  // can never send people to different places.
-  // -------------------------------------------------------------------------
-  function showGameInviteFeedback(text) {
-    const el = document.getElementById('game-invite-feedback');
-    if (!el) return;
-    el.textContent = text;
-    // A plain timer, deliberately -- NOT the holdTransient registry used for the
-    // stuck-overlay fixes. That registry clears things by adding .hidden, which
-    // is right for an overlay but wrong here: this is a text line that is
-    // emptied by setting textContent. Hiding it would leave it display:none for
-    // the rest of the session, so the SECOND "Copied!" would never appear.
-    //
-    // The frozen-timer risk is real but cosmetic here: worst case a stale
-    // "Copied!" sits on a sheet the player has already closed. Matches how the
-    // lobby's showRoomcodeFeedback has always behaved.
-    setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 2500);
-  }
-
-  document.getElementById('btn-game-invite').onclick = () => {
-    if (!myRoomCode) return;
-    const panel = document.getElementById('game-invite-panel');
-    const code = document.getElementById('game-invite-code');
-    const fb = document.getElementById('game-invite-feedback');
-    if (code) code.textContent = myRoomCode;
-    if (fb) fb.textContent = '';
-    if (panel) panel.classList.remove('hidden');
-  };
-
-  document.getElementById('btn-game-invite-close').onclick = () => {
-    const panel = document.getElementById('game-invite-panel');
-    if (panel) panel.classList.add('hidden');
-  };
-
-  document.getElementById('btn-game-invite-copy').onclick = async () => {
-    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
-    // stays comparable); every other route lands here, tagged by method.
-    logAnalytics('invite_shared', { method: 'copy', where: 'game' });
-    if (!myRoomCode) return;
-    try {
-      await navigator.clipboard.writeText(myRoomCode);
-      showGameInviteFeedback('Copied!');
-    } catch (e) {
-      // Clipboard is blocked in some WebViews and on insecure origins. The
-      // code is already on screen above, so say so rather than failing dumbly.
-      showGameInviteFeedback('Could not copy -- read out the code above.');
-    }
-  };
-
-  // The phone's own share sheet, in the app (Nov 2026, app 1.2+, the Share
-  // plugin). navigator.share doesn't exist in Android's WebView, so until
-  // now the app's Share buttons could only copy the link. true = the sheet
-  // was shown (or the player closed it); false = not here, fall back.
-  async function appShareSheet(text, url) {
-    const cap = window.Capacitor;
-    if (!cap || typeof cap.isPluginAvailable !== 'function' || !cap.isPluginAvailable('Share')) return false;
-    const Share = cap.Plugins && cap.Plugins.Share;
-    if (!Share || typeof Share.share !== 'function') return false;
-    try {
-      await Share.share({ title: 'Least Count', text, url, dialogTitle: 'Invite to Least Count' });
-      return true;
-    } catch (e) {
-      // Closing the sheet without picking an app rejects -- that's fine.
-      return /cancel/i.test((e && e.message) || '');
-    }
-  }
-
-  document.getElementById('btn-game-invite-share').onclick = async () => {
-    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
-    // stays comparable); every other route lands here, tagged by method.
-    logAnalytics('invite_shared', { method: 'share', where: 'game' });
-    if (!myRoomCode) return;
-    const link = roomInviteLink();
-    const shareText = inviteShareText();
-    if (await appShareSheet(shareText.split('\n')[0], link)) return;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: 'Least Count', text: shareText.split('\n')[0], url: link });
-        return;   // the native sheet gives its own confirmation
-      } catch (e) {
-        // Cancelled, or share unavailable -- fall through to copying the link.
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(link);
-      showGameInviteFeedback('Link copied!');
-    } catch (e) {
-      showGameInviteFeedback('Could not share -- read out the code above.');
-    }
-  };
-
-  document.getElementById('btn-copy-roomcode').onclick = async () => {
-    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
-    // stays comparable); every other route lands here, tagged by method.
-    logAnalytics('invite_shared', { method: 'copy', where: 'lobby' });
-    if (!myRoomCode) return;
-    try {
-      await navigator.clipboard.writeText(myRoomCode);
-      showRoomcodeFeedback('Copied!');
-    } catch (e) {
-      showRoomcodeFeedback('Could not copy -- code is ' + myRoomCode);
-    }
-  };
-  document.getElementById('btn-share-room').onclick = async () => {
-    // WhatsApp shares log as invite_shared_whatsapp (kept as-is so past data
-    // stays comparable); every other route lands here, tagged by method.
-    logAnalytics('invite_shared', { method: 'share', where: 'lobby' });
-    if (!myRoomCode) return;
-    const link = roomInviteLink();
-    const shareText = inviteShareText();
-    if (await appShareSheet(shareText.split('\n')[0], link)) return;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: 'Least Count', text: shareText.split('\n')[0], url: link });
-        return; // native share sheet handles its own confirmation
-      } catch (e) {
-        if (e && e.name === 'AbortError') return; // user cancelled the share sheet -- not an error
-        // fall through to clipboard fallback below
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(shareText);
-      showRoomcodeFeedback('Invite link copied!');
-    } catch (e) {
-      showRoomcodeFeedback('Could not copy -- code is ' + myRoomCode);
-    }
-  };
-
-  // --------------------------------------------------------------------
-  // Share straight to WhatsApp.
-  //
-  // Why this exists alongside the generic share button above: navigator.share
-  // is a Chrome API that Android WebView does not implement, so inside the
-  // Capacitor-wrapped app the button above silently falls through to
-  // "copied to clipboard" -- leaving the user to open WhatsApp and find the
-  // contact themselves, which is exactly the friction the invite loop can't
-  // afford. A wa.me URL is just a link, so it works in the WebView with no
-  // native plugin and no rebuild, and lands the user on WhatsApp's own
-  // contact picker with the message already written.
-  //
-  // TODO (next native build): install @capacitor/share and prefer it when
-  // window.Capacitor.Plugins.Share exists, which restores the full app
-  // chooser (WhatsApp / Instagram / Messages) instead of WhatsApp only.
-  // Deliberately not done now because it needs an AAB upload and a Play
-  // review cycle, and this fix shouldn't wait for that.
-  // --------------------------------------------------------------------
-  function openWhatsAppShare(text) {
-    const url = 'https://wa.me/?text=' + encodeURIComponent(text);
-    // _blank so Android hands the https link off to whatever claims it --
-    // WhatsApp registers wa.me as an App Link, so it opens the app directly
-    // when installed and falls back to the web version when it isn't.
-    const win = window.open(url, '_blank');
-    if (!win) window.location.href = url; // popup blocked -- navigate instead
-  }
-
-  const shareWhatsAppBtn = document.getElementById('btn-share-whatsapp');
-  if (shareWhatsAppBtn) {
-    shareWhatsAppBtn.onclick = () => {
-      if (!myRoomCode) return;
-      logAnalytics('invite_shared_whatsapp');
-      openWhatsAppShare(inviteShareText());
-    };
-  }
-
-  // Only set while genuinely waiting on a mid-game join request -- distinct
-  // from myRoomCode/myPlayerId (which mean "I'm an actual member of this
-  // room"), since a pending requester isn't in room.players at all yet.
-  let pendingJoinRoomCode = null;
-  let pendingJoinPlayerId = null;
-
-  document.getElementById('btn-cancel-waiting').onclick = () => {
-    if (pendingJoinRoomCode && pendingJoinPlayerId) {
-      socket.emit('cancel_join_request', { roomCode: pendingJoinRoomCode, playerId: pendingJoinPlayerId });
-    }
-    pendingJoinRoomCode = null;
-    pendingJoinPlayerId = null;
-    showScreen('screen-landing');
-  };
-
-  socket.on('join_admitted', ({ roomCode, playerId, sessionToken, chatHistory }) => {
-    pendingJoinRoomCode = null;
-    pendingJoinPlayerId = null;
-    logAnalytics('room_joined_midgame', { via_invite: !!inviteArrival, kind: inviteArrival || 'code' });
-    saveSession(roomCode, playerId, sessionToken);
-    // Every other join path (create_room/join_room/queue_matched) loads chat
-    // history and shows the chat FAB -- this path was missing both, which is
-    // why someone admitted mid-game never got a chat option at all.
-    loadChatHistory(chatHistory);
-    showChatFab();
-    // The very next room_update/game_state (already on its way as a side
-    // effect of the host's admit on the server) will render the real
-    // lobby/game screen; showing the game screen now avoids a flash of the
-    // waiting screen lingering for the instant before that arrives.
-    showScreen('screen-game');
-  });
-
-  socket.on('join_denied', ({ reason }) => {
-    pendingJoinRoomCode = null;
-    pendingJoinPlayerId = null;
-    showScreen('screen-landing');
-    const messages = {
-      declined: 'The host declined your request to join.',
-      timeout: 'The host didn’t respond in time. Try again.',
-      disconnected: '',
-      cancelled: '',
-    };
-    setLandingError(messages[reason] || 'Could not join that room.');
-  });
-
-  // ---------------- mid-game join approval: host-side banner ----------------
-  function renderJoinRequestsBanner(pending) {
-    const banner = document.getElementById('join-requests-banner');
-    banner.classList.toggle('hidden', !pending || pending.length === 0);
-    banner.innerHTML = '';
-    (pending || []).forEach((req) => {
-      const row = document.createElement('div');
-      row.className = 'join-request-row';
-      row.innerHTML = `<span class="jr-text"><b>${escapeHtml(req.name)}</b> wants to join</span>
-        <button class="jr-admit" type="button">Admit</button>
-        <button class="jr-ignore" type="button">Ignore</button>`;
-      // Both buttons clear their own row immediately rather than waiting for
-      // the server's refreshed list. The server does send one (and it will
-      // overwrite this), but a dropped packet or a slow round trip used to
-      // leave the banner sitting there as though the tap hadn't registered --
-      // so the host taps again, and the second tap errors with "that request
-      // is no longer waiting". Removing the row on tap makes the control feel
-      // answered and removes the reason to tap twice.
-      const settle = () => {
-        row.remove();
-        if (!banner.children.length) banner.classList.add('hidden');
-      };
-      row.querySelector('.jr-admit').onclick = () => {
-        settle();
-        socket.emit('admit_join_request', { roomCode: myRoomCode, playerId: req.playerId });
-      };
-      row.querySelector('.jr-ignore').onclick = () => {
-        settle();
-        socket.emit('ignore_join_request', { roomCode: myRoomCode, playerId: req.playerId });
-      };
-      banner.appendChild(row);
-    });
-  }
-  socket.on('join_requests', ({ pending }) => renderJoinRequestsBanner(pending));
-
-  // ================= rejoin after elimination: client =================
-  // Engine + server for this shipped days before the UI did, so until now an
-  // eliminated player simply spectated: the server was listening for
-  // request_rejoin, the engine was exposing canRejoin/rejoinScore per viewer,
-  // and nothing ever asked. These three pieces close that.
-  //
-  // The server gives the decision REJOIN_DECISION_MS (30s) and auto-denies
-  // after it, holding the next round the whole time -- so both sides show a
-  // countdown, and neither is allowed to look like it's waiting forever.
-  const REJOIN_DECISION_MS = 30000;
-  let rejoinAsked = false;       // this player has a request in flight
-  let rejoinDeadline = 0;        // epoch ms the server will give up at
-  let rejoinTicker = null;
-
-  function rejoinEls() {
-    return {
-      box: document.getElementById('rejoin-offer'),
-      text: document.getElementById('rejoin-offer-text'),
-      status: document.getElementById('rejoin-offer-status'),
-      ask: document.getElementById('btn-rejoin-ask'),
-      no: document.getElementById('btn-rejoin-no'),
-    };
-  }
-
-  function stopRejoinTicker() {
-    if (rejoinTicker) { clearInterval(rejoinTicker); rejoinTicker = null; }
-  }
-
-  function secondsLeft() {
-    return Math.max(0, Math.ceil((rejoinDeadline - Date.now()) / 1000));
-  }
-
-  // Locks the buttons and counts down while the host decides. Reaching zero
-  // doesn't decide anything on its own -- the SERVER's timer is the one that
-  // matters, and its rejoin_result is what actually closes this out. This
-  // just stops the screen claiming time is left when it isn't.
-  function startRejoinCountdown() {
-    const { status } = rejoinEls();
-    stopRejoinTicker();
-    const tick = () => {
-      const s = secondsLeft();
-      status.textContent = s > 0
-        ? `Asked the host — ${s}s left`
-        : 'Waiting for the host…';
-      if (s <= 0) stopRejoinTicker();
-    };
-    tick();
-    rejoinTicker = setInterval(tick, 1000);
-  }
-
-  function hideRejoinOffer() {
-    stopRejoinTicker();
-    const { box, status } = rejoinEls();
-    box.classList.add('hidden');
-    status.classList.add('hidden');
-  }
-
-  // Called from the round-result render. `game.canRejoin` and
-  // `game.rejoinScore` are computed per-viewer by the engine, so this needs
-  // no eligibility logic of its own -- deliberately, so the screen can never
-  // offer something the server would then refuse.
-  function renderRejoinOffer(game) {
-    const { box, text, status, ask, no } = rejoinEls();
-    if (!game || !game.canRejoin) {
-      // Not eligible (or no longer eligible -- e.g. the game ended while the
-      // scorecard was up). Drop any in-flight state with it.
-      if (!rejoinAsked) hideRejoinOffer();
-      return;
-    }
-
-    box.classList.remove('hidden');
-    // Start fetching the rewarded video NOW, while they read the offer and
-    // decide -- not when the host approves. A video takes seconds to load, and
-    // approval is the one moment the player is impatient. Harmless if they
-    // never ask, and prepareRewarded swallows its own failures.
-    if (!rejoinAsked && !adPreloadedFor.rejoin) {
-      adPreloadedFor.rejoin = true;
-      try { window.LCAds.prepareRewarded('rejoin'); } catch (e) { /* no ads here */ }
-    }
-    const back = game.rejoinScore;
-    const limit = game.eliminationScore || 200;
-    // Say upfront what rejoining involves. Two things are being disclosed: the
-    // host has to approve, and (unless this player is exempt) a short ad plays
-    // once they do. Nobody should tap Ask and then be surprised by either.
-    //
-    // game.rejoinNeedsAd is per-viewer and comes from the server -- first-time
-    // players and anyone eliminated by a dropped connection are exempt, and
-    // must not be told to expect an ad they will never see.
-    const needsAd = game.rejoinNeedsAd !== false;
-    text.textContent = rejoinAsked
-      ? (needsAd
-          ? 'Waiting for the host. The ad starts as soon as they say yes.'
-          : 'Waiting for the host to answer.')
-      : (needsAd
-          ? `You're out. Come back in at ${back} points? The limit is ${limit}. The host has to approve, then a short ad plays.`
-          : `You're out. Come back in at ${back} points? The limit is ${limit}. The host has to approve.`);
-    ask.classList.toggle('hidden', rejoinAsked);
-    no.classList.toggle('hidden', rejoinAsked);
-    status.classList.toggle('hidden', !rejoinAsked);
-  }
-
-  document.getElementById('btn-rejoin-ask').onclick = () => {
-    const { status } = rejoinEls();
-    // Optimistic: the buttons swap for the countdown immediately rather than
-    // after the round trip, because the 30 seconds are already running on the
-    // server and a second tap would just be refused as a duplicate.
-    rejoinAsked = true;
-    rejoinDeadline = Date.now() + REJOIN_DECISION_MS;
-    renderRejoinOffer(latestGame);
-    startRejoinCountdown();
-    socket.emit('request_rejoin', { roomCode: myRoomCode }, (res) => {
-      if (res && res.ok) return;
-      // Refused (solo vs bots, no longer eligible, rate limited). Put the
-      // choice back rather than leaving a countdown that will never resolve.
-      rejoinAsked = false;
-      stopRejoinTicker();
-      renderRejoinOffer(latestGame);
-      status.classList.remove('hidden');
-      status.textContent = friendlyError((res && res.error) || 'Could not ask to rejoin.');
-    });
-  };
-
-  document.getElementById('btn-rejoin-no').onclick = () => {
-    hideRejoinOffer();
-    rejoinAsked = false;
-    // Tells the server to stop holding the round for a decision this player
-    // has already made. Leaving instead is the player's own call afterwards.
-    socket.emit('decline_rejoin', { roomCode: myRoomCode }, () => {});
-  };
-
-  // -------------------------------------------------------------------------
-  // Rewarded-ad entry (Sept 2026)
-  //
-  // The server decides whether an ad is needed and emits ad_required to this
-  // player alone. By the time that arrives the host has ALREADY approved -- so
-  // the seat is theirs and this sheet can honestly promise it. That ordering is
-  // a policy requirement, not a preference: a rewarded ad must deliver what it
-  // promised, which is impossible if the host could still say no afterwards.
-  // -------------------------------------------------------------------------
-  let adRewardKind = null;
-
-  function adRewardEls() {
-    return {
-      box: document.getElementById('ad-reward-offer'),
-      panel: document.querySelector('#ad-reward-offer .ad-reward-modal'),
-      title: document.getElementById('ad-reward-title'),
-      sub: document.getElementById('ad-reward-sub'),
-      note: document.getElementById('ad-reward-note'),
-      watch: document.getElementById('btn-ad-reward-watch'),
-      skip: document.getElementById('btn-ad-reward-skip'),
-    };
-  }
-
-  function hideAdRewardOffer() {
-    const { box, panel } = adRewardEls();
-    if (box) box.classList.add('hidden');
-    if (panel) panel.classList.remove('busy');
-    adRewardKind = null;
-  }
-
-  // Owners of Remove Ads never see an advert. The check lives here rather than
-  // on the server because RevenueCat runs entirely on the device -- the server
-  // has no view of entitlements. That makes it spoofable, but so is "the ad
-  // finished", and in both cases the only thing at stake is an impression: the
-  // host already approved, so no game outcome changes either way.
-  // Reuses the module-level `adsRemoved` that refreshRemoveAdsUI() maintains,
-  // rather than calling isEntitled() again here. Two reasons: isEntitled() is
-  // async and this decision has to be instant, and the entitlement key is the
-  // literal string 'remove ads' WITH A SPACE -- a detail confirmed the hard way
-  // from a live customerInfo response (see the note by that call). Re-typing it
-  // in a second place is exactly how the two drift, and the failure would be
-  // silent: paying customers quietly shown ads.
-  //
-  // It also inherits the lc_force_ads testing override for free.
-  function hasRemovedAds() {
-    return adsRemoved === true;
-  }
-
-  // The host has said yes. The seat is already theirs -- this just collects the
-  // ad they were told about when they asked.
-  //
-  // No confirmation step: they opted in at the moment they tapped Ask, having
-  // read that an ad would play. Asking twice for the same consent is friction
-  // at the one moment they are impatient to get back into the game.
-  socket.on('ad_required', async ({ kind }) => {
-    const k = kind === 'join' ? 'join' : 'rejoin';
-    adRewardKind = k;
-
-    // Paid the ads away already -- seat them without one.
-    if (hasRemovedAds()) {
-      socket.emit('claim_ad_reward', { roomCode: myRoomCode, kind: k }, () => {});
-      adRewardKind = null;
-      return;
-    }
-
-    // Tell them what is happening before the screen is taken over, so a video
-    // appearing full-screen reads as expected rather than as an interruption.
-    showAdRewardStatus(k === 'join'
-      ? 'You\u2019re in \u2014 starting your ad\u2026'
-      : 'Approved \u2014 starting your ad\u2026');
-
-    let earned = false;
-    try {
-      earned = await window.LCAds.showRewarded(k);
-    } catch (e) {
-      // showRewarded swallows its own failures and returns true; this is the
-      // impossible case. Same rule: our failure is not the player's to pay for.
-      earned = true;
-    }
-
-    if (!earned) {
-      // They closed the video early. The approval is still live for its 60
-      // seconds, so offer one retry rather than burning the seat they were
-      // granted. This is error recovery, not a second approval step.
-      offerAdRetry(k);
-      return;
-    }
-
-    socket.emit('claim_ad_reward', { roomCode: myRoomCode, kind: k }, (res) => {
-      adRewardKind = null;
-      hideAdRewardOffer();
-      if (res && res.ok) return;
-      setLandingError && setLandingError(friendlyError((res && res.error) || 'Could not take your seat.'));
-    });
-  });
-
-  // The 60-second window closed before they watched. Say so plainly rather
-  // than leaving a sheet up that no longer does anything.
-  socket.on('ad_grant_expired', () => {
-    if (!adRewardKind) return;
-    const { sub, note, watch } = adRewardEls();
-    if (sub) sub.textContent = 'That window closed. Ask again next round.';
-    if (note) note.textContent = '';
-    if (watch) watch.classList.add('hidden');
-    setTimeout(hideAdRewardOffer, 3000);
-  });
-
-  // The sheet is no longer a "do you want to watch?" prompt -- that consent was
-  // given when they tapped Ask. It now only reports status, and offers a retry
-  // if the video was closed before it finished.
-  function showAdRewardStatus(message) {
-    const { box, panel, title, sub, note, watch } = adRewardEls();
-    if (!box) return;
-    if (title) title.textContent = 'Taking your seat';
-    if (sub) sub.textContent = message;
-    if (note) note.textContent = '';
-    if (watch) watch.classList.add('hidden');
-    if (panel) panel.classList.add('busy');
-    box.classList.remove('hidden');
-  }
-
-  function offerAdRetry(kind) {
-    const { box, panel, title, sub, note, watch } = adRewardEls();
-    if (!box) return;
-    adRewardKind = kind;
-    if (panel) panel.classList.remove('busy');
-    if (title) title.textContent = 'Ad didn\u2019t finish';
-    if (sub) sub.textContent = 'The ad has to play through before you can take your seat.';
-    if (note) note.textContent = 'Your seat is held for a short while.';
-    if (watch) {
-      watch.textContent = 'Try again';
-      watch.classList.remove('hidden');
-    }
-    box.classList.remove('hidden');
-  }
-
-  document.getElementById('btn-ad-reward-watch').onclick = async () => {
-    const { panel, sub } = adRewardEls();
-    const kind = adRewardKind;
-    if (!kind) return;
-    if (panel) panel.classList.add('busy');
-    if (sub) sub.textContent = 'Loading the ad\u2026';
-
-    let earned = false;
-    try { earned = await window.LCAds.showRewarded(kind); } catch (e) { earned = true; }
-
-    if (!earned) { offerAdRetry(kind); return; }
-
-    socket.emit('claim_ad_reward', { roomCode: myRoomCode, kind }, (res) => {
-      adRewardKind = null;
-      hideAdRewardOffer();
-      if (res && res.ok) return;
-      setLandingError && setLandingError(friendlyError((res && res.error) || 'Could not take your seat.'));
-    });
-  };
-
-  document.getElementById('btn-ad-reward-skip').onclick = () => {
-    hideAdRewardOffer();
-    // Nothing to tell the server: the approval expires on its own and the
-    // sweeper releases the table.
-  };
-
-  socket.on('rejoin_result', ({ ok, score, reason, pending }) => {
-    rejoinAsked = false;
-    stopRejoinTicker();
-    const { box, text, status, ask, no } = rejoinEls();
-    box.classList.remove('hidden');
-    ask.classList.add('hidden');
-    no.classList.add('hidden');
-    status.classList.remove('hidden');
-    if (ok && pending) {
-      // The ad was watched and the seat is granted, but a round was already
-      // running so the engine cannot seat them until it ends (see owedRejoins
-      // on the server). Say so plainly -- without this branch the message read
-      // "Rejoined at undefined points", because no score exists yet.
-      text.textContent = 'You’re in.';
-      status.textContent = reason || 'A round had already started -- you join at the end of it.';
-    } else if (ok) {
-      text.textContent = 'You’re back in.';
-      status.textContent = `Rejoined at ${score} points. Next round deals shortly.`;
-      // The seats, scores and your hand all arrive on the next game_state --
-      // nothing to reconstruct here.
-    } else {
-      text.textContent = 'Not this time.';
-      status.textContent = friendlyError(reason || 'The host declined.');
-    }
-  });
-
-  // ---- host side: who's asking to come back ----
-  function renderRejoinRequestsBanner(pending) {
-    const banner = document.getElementById('rejoin-requests-banner');
-    banner.classList.toggle('hidden', !pending || pending.length === 0);
-    banner.innerHTML = '';
-    (pending || []).forEach((req) => {
-      const row = document.createElement('div');
-      row.className = 'join-request-row';
-      const txt = document.createElement('span');
-      txt.className = 'jr-text';
-      const b = document.createElement('b');
-      b.textContent = req.name;
-      txt.appendChild(b);
-      // The score is the whole decision for the host -- letting someone back
-      // at 45 and at 190 are not the same favour -- so it's stated, not
-      // implied, and built as text nodes since the name is user-supplied.
-      txt.appendChild(document.createTextNode(` wants back in at ${req.score}`));
-      const yes = document.createElement('button');
-      yes.className = 'jr-admit'; yes.type = 'button'; yes.textContent = 'Let in';
-      const nope = document.createElement('button');
-      nope.className = 'jr-ignore'; nope.type = 'button'; nope.textContent = 'No';
-      row.appendChild(txt); row.appendChild(yes); row.appendChild(nope);
-
-      // Same reason as the join banner: clear the row on tap so a slow round
-      // trip doesn't invite a second tap that errors with "no longer waiting".
-      const settle = () => {
-        row.remove();
-        if (!banner.children.length) banner.classList.add('hidden');
-      };
-      yes.onclick = () => {
-        settle();
-        socket.emit('respond_rejoin', { roomCode: myRoomCode, playerId: req.playerId, accept: true }, () => {});
-      };
-      nope.onclick = () => {
-        settle();
-        socket.emit('respond_rejoin', { roomCode: myRoomCode, playerId: req.playerId, accept: false }, () => {});
-      };
-      banner.appendChild(row);
-    });
-  }
-  socket.on('rejoin_requests', ({ pending }) => renderRejoinRequestsBanner(pending));
-
-  // Errors get TWO independent signals now, not just one easy-to-miss one:
-  // 1) the inline toast banner in the main page flow (visible regardless of
-  //    whether the profile dropdown is open), and 2) the same text inside
-  //    the dropdown itself (#landing-error) plus a brief pulse on the
-  //    avatar, for anyone who does have it open already. Whichever a
-  //    player actually notices, the message gets through.
-  // ------------------------------------------------------------------
-  // Server error strings are shown to the player verbatim, so anything the
-  // server didn't phrase deliberately lands in the UI as-is. Creating a group
-  // on the live build printed "8 RESOURCE_EXHAUSTED: Quota exceeded." into
-  // the toast -- a raw Firestore gRPC code, to a family playing cards.
-  //
-  // Messages we wrote ("Only the group admin can start a marathon") pass
-  // through untouched; this only rewrites the ones that are plainly not ours,
-  // and logs the original so it's still debuggable.
-  // ------------------------------------------------------------------
-  function friendlyError(msg) {
-    const raw = (msg || '').toString().trim();
-    if (!raw) return '';
-    const looksInternal = /^\d+\s+[A-Z][A-Z_]{3,}/.test(raw)
-      || /RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|PERMISSION_DENIED|UNAUTHENTICATED|INTERNAL|ECONNREFUSED|ETIMEDOUT/.test(raw);
-    if (!looksInternal) return raw;
-    console.warn('[LC] internal error shown as generic:', raw);
-    return 'That’s not available right now — please try again in a moment.';
-  }
-
-  function setLandingError(rawMsg) {
-    const msg = friendlyError(rawMsg);
-    document.getElementById('landing-error').textContent = msg || '';
-    // Mirror onto the group screen. Both surfaces this writes to below live
-    // INSIDE #screen-landing, so anything that failed while the group screen
-    // was up was invisible -- a refused start or a join that didn't take just
-    // looked like the button did nothing. That silence is most of the reason
-    // the group start bug was so hard to pin down.
-    const groupErr = document.getElementById('group-error');
-    if (groupErr) groupErr.textContent = msg || '';
-    // An open Home sheet covers the banner below, so the message goes on the
-    // sheet as well -- otherwise a refused join would look like Join did
-    // nothing.
-    document.querySelectorAll('.home-sheet:not(.hidden) .sheet-error').forEach((e) => { e.textContent = msg || ''; });
-    const toast = document.getElementById('landing-toast-error');
-    if (toast) {
-      if (msg) {
-        toast.textContent = msg;
-        toast.classList.remove('hidden');
-        // Restart the shake animation even if the same message fires twice
-        // in a row (e.g. tapping "Create Room" repeatedly with no name).
-        toast.style.animation = 'none';
-        void toast.offsetWidth;
-        toast.style.animation = '';
-      } else {
-        toast.classList.add('hidden');
-      }
-    }
-    const avatar = document.getElementById('btn-profile-menu');
-    if (msg && avatar) {
-      avatar.classList.remove('attn-pulse');
-      void avatar.offsetWidth;
-      avatar.classList.add('attn-pulse');
-    }
-  }
-
-  // ------------------------------------------------------------------
-  // Asking for a name (Oct 2026)
-  //
-  // A name is no longer the price of entry. The tutorial and solo games run
-  // without one (your seat just reads "You"), and the name is asked for at the
-  // two moments it actually matters:
-  //   - once, gently, when you come back from your first game -- by then you
-  //     have seen what the app is and a name is worth giving it;
-  //   - before any table other people can see (online, a room code, a group),
-  //     because there a name is how the others know who you are.
-  //
-  // In the second case the action you tapped is RESUMED once the name is in.
-  // Before, it was: tap Play, get told off, find the field, type, close, tap
-  // Play again -- and the second tap is exactly where people give up.
-  // ------------------------------------------------------------------
-  // `var`, not `let`, on purpose. showScreen('screen-landing') can run during
-  // startup -- a failed session restore sends you back to landing -- before
-  // this line has executed, and it calls maybeAskNameAfterFirstGame(). A `let`
-  // read there throws a temporal-dead-zone error that the surrounding
-  // try/catch swallows, so the ask would silently never happen. (Exactly how
-  // the card backdrop went missing for weeks.) A `var` is merely undefined
-  // that early, and the code below treats undefined as "nothing pending".
-  var pendingAfterName = null;
-  var lastButtonTap = null;
-  // Capture phase, so it is recorded before the button's own handler runs and
-  // calls promptForName() from inside it.
-  document.addEventListener('click', (e) => {
-    const b = e.target && e.target.closest && e.target.closest('button');
-    if (b) lastButtonTap = { el: b, at: Date.now() };
-  }, true);
-
-  function promptForName(msg) {
-    const hint = document.getElementById('name-ask-hint');
-    if (hint) {
-      hint.textContent = msg || 'Pick a name first \u2014 the other players will see it.';
-      hint.classList.remove('hidden');
-    }
-    // Resume whatever was tapped -- but only if it really was a tap just now.
-    // Group chat can be sent with the Enter key, and resuming a stale button
-    // from minutes ago would fire the wrong action entirely.
-    const t = lastButtonTap;
-    pendingAfterName = (t && t.el && Date.now() - t.at < 1500 && !msg) ? t.el : null;
-    // Looked up directly rather than through openProfileMenu(): that reads a
-    // `const` declared further down this file, which is still in its dead zone
-    // if this runs during startup. Same element, no ordering trap.
-    const panel = document.getElementById('profile-menu-panel');
-    if (!panel) return false;
-    panel.classList.remove('hidden');
-    const el = document.getElementById('input-name');
-    if (el) { try { el.focus(); el.select && el.select(); } catch (e) { /* not focusable yet */ } }
-    return true;
-  }
-
-  // Called when the profile closes. Clears the prompt either way, and if the
-  // name is now set, carries on with what they were trying to do.
-  function finishNamePrompt() {
-    const hint = document.getElementById('name-ask-hint');
-    // Measures the "ask after the first game" decision directly: of the people
-    // asked, how many answered? Only logged when a prompt was actually showing.
-    if (hint && !hint.classList.contains('hidden')) {
-      const firstGame = /Nice game/.test(hint.textContent || '');
-      logAnalytics('name_prompt_closed', {
-        context: firstGame ? 'after_first_game' : 'before_table',
-        gave_name: !!getPlayerName(),
-      });
-    }
-    if (hint) { hint.textContent = ''; hint.classList.add('hidden'); }
-    const resume = pendingAfterName;
-    pendingAfterName = null;
-    if (resume && getPlayerName()) setTimeout(() => resume.click(), 0);
-  }
-
-  // The once-only ask after a first game. Driven from showScreen, like the
-  // tutorial offer, so it fires on whichever path brings them back here.
-  function maybeAskNameAfterFirstGame() {
-    try {
-      if (Tutorial.isActive()) return;
-      if (localStorage.getItem('leastcount_has_played') !== '1') return;   // no game yet
-      if (localStorage.getItem('leastcount_name_asked') === '1') return;           // asked already
-      if (getPlayerName()) return;                                         // has one
-      const offer = document.getElementById('tutorial-offer');
-      if (offer && !offer.classList.contains('hidden')) return;           // one sheet at a time
-      const done = document.getElementById('tutorial-finished');
-      if (done && !done.classList.contains('hidden')) return;
-      // Marked as asked only once the sheet is actually on screen, so a
-      // failure to open it cannot use up the one chance.
-      if (promptForName('Nice game! What should we call you?')) {
-        localStorage.setItem('leastcount_name_asked', '1');
-      }
-    } catch (e) { /* storage blocked: just don't ask */ }
-  }
-
-  // ---------------- profile modal (sign-in + name) ----------------
-  // Guarded with existence checks (unlike a plain .onclick= on a possibly-
-  // missing element) -- if index.html and app.js ever get out of sync during
-  // a deploy (old index.html + new app.js, or vice versa), a missing element
-  // here would otherwise throw and silently kill every handler registered
-  // AFTER this point in the file, which explains a lot more than just the
-  // profile button not responding.
-  // #profile-menu-panel is itself the full-screen .overlay now (see
-  // index.html) -- opening/closing it is just toggling one class on one
-  // element, no separate backdrop to keep in sync.
-  const btnProfileMenu = document.getElementById('btn-profile-menu');
-  const profileMenuPanel = document.getElementById('profile-menu-panel');
-  function openProfileMenu() {
-    if (profileMenuPanel) profileMenuPanel.classList.remove('hidden');
-    loadProfileRating();
-    checkAdminButton();
-  }
-
-  // ---- Admin reports (Nov 2026) --------------------------------------------
-  // Only for the account ids the server lists in ADMIN_UIDS (a Render
-  // setting). The server decides: the button is added only once it says yes
-  // for this signed-in account, and the admin key is never in the app --
-  // tapping asks the server for a link that works for 30 minutes and opens
-  // the reports right here ("Back to the game" on the page comes back).
-  let adminButtonShown = false;
-  // The bottom banner is a native view drawn over the page: it would stay on
-  // top of the report pages (they cannot run our ad code), hide their last
-  // lines, and invite taps on our own ad -- which AdMob counts as invalid
-  // clicks. So it is taken away before they open; coming back to the game
-  // loads the page again, and the banner with it.
-  async function takeBannerDownForReports() {
-    try {
-      const cap = window.Capacitor;
-      const AdMob = cap && cap.Plugins && cap.Plugins.AdMob;
-      if (!AdMob || !(cap.isNativePlatform && cap.isNativePlatform())) return;
-      await Promise.race([
-        Promise.resolve().then(() => AdMob.removeBanner()).catch(() => {}),
-        new Promise((resolve) => setTimeout(resolve, 1500)),
-      ]);
-    } catch (e) { /* the reports open anyway */ }
-  }
-  async function checkAdminButton() {
-    if (adminButtonShown || !profileMenuPanel) return;
-    const token = await currentFirebaseIdToken();
-    if (!token) return;
-    socket.emit('admin_check', { firebaseIdToken: token }, (res) => {
-      if (!res || !res.ok || !res.admin || adminButtonShown) return;
-      adminButtonShown = true;
-      const close = document.getElementById('btn-close-profile-menu');
-      const btn = document.createElement('button');
-      btn.id = 'btn-admin-reports';
-      btn.type = 'button';
-      btn.className = 'secondary profile-stats-btn';
-      btn.textContent = 'Admin reports';
-      btn.onclick = async () => {
-        btn.disabled = true;
-        const t = await currentFirebaseIdToken();
-        socket.emit('admin_link', { firebaseIdToken: t }, async (r) => {
-          btn.disabled = false;
-          if (r && r.ok && r.url) {
-            await takeBannerDownForReports();
-            window.location.href = r.url;
-            return;
-          }
-          setLandingError((r && r.error) || 'Could not open the reports. Try again.');
-        });
-      };
-      if (close && close.parentNode) close.parentNode.insertBefore(btn, close);
-    });
-  }
-  function closeProfileMenu() {
-    if (profileMenuPanel) profileMenuPanel.classList.add('hidden');
-    finishNamePrompt();
-    updateHomeGreeting();
-  }
-  if (btnProfileMenu && profileMenuPanel) {
-    btnProfileMenu.onclick = (e) => {
-      e.stopPropagation();
-      openProfileMenu();
-    };
-    const btnCloseProfileMenu = document.getElementById('btn-close-profile-menu');
-    if (btnCloseProfileMenu) btnCloseProfileMenu.onclick = closeProfileMenu;
-    // Tapping the dimmed backdrop itself (i.e. the overlay element but not
-    // its inner card) closes it too, same as tapping Close.
-    profileMenuPanel.addEventListener('click', (e) => {
-      if (e.target === profileMenuPanel) closeProfileMenu();
-    });
-  }
-
-  // Tapping the toast jumps straight to fixing the problem -- opens the
-  // dropdown (if it wasn't already) and focuses the name field, since
-  // "enter your name" is by far the most common reason it appears.
-  const landingToastError = document.getElementById('landing-toast-error');
-  if (landingToastError) {
-    landingToastError.onclick = () => {
-      openProfileMenu();
-      const nameInput = document.getElementById('input-name');
-      if (nameInput) nameInput.focus();
-    };
-  }
-
-  // Clears the error the moment they start fixing it, instead of leaving a
-  // stale "enter your name" banner up after they've already typed one.
-  const inputNameEl = document.getElementById('input-name');
-  if (inputNameEl) {
-    inputNameEl.addEventListener('input', () => {
-      if (inputNameEl.value.trim()) setLandingError('');
-      updateHomeGreeting();
-    });
-    // The keyboard's Done key closes the sheet, which saves the name and
-    // resumes whatever they had tapped -- no hunting for the Close button.
-    inputNameEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && inputNameEl.value.trim()) { e.preventDefault(); closeProfileMenu(); }
-    });
-  }
-
-  // ---------------- solo play vs bots ----------------
-  const MAX_BOTS = 7;
-  (function populateBotCountSelect() {
-    const sel = document.getElementById('input-bot-count');
-    for (let i = 1; i <= MAX_BOTS; i++) {
-      const opt = document.createElement('option');
-      opt.value = String(i);
-      opt.textContent = i + (i === 1 ? ' bot' : ' bots');
-      if (i === 3) opt.selected = true;
-      sel.appendChild(opt);
-    }
-    syncDropdown(sel);
-  })();
-
-  // ---- How long a bot game runs (Oct 2026) ----
-  // A third row on the Play vs Bots sheet: Max score 100 / 150 / 200, and it
-  // starts at 100. Every bot game used to run to 200 with no choice, and most
-  // were abandoned part-way (GA4, Oct 2026: left 161 times, finished 55 -- in
-  // the app only 11 people ever finished one). Mani's reasoning for 100: a
-  // short game against bots, with energy left over for a real game with
-  // friends. Whatever a game starts with is remembered for the next one, so
-  // someone who prefers 200 picks it once. Friends' tables keep 200.
-  //
-  // Built here rather than written into index.html, so the change ships in
-  // app.js alone. It copies the sheet's own markup (sheet-field, sheet-label,
-  // chips, a hidden chip-source select), so it looks exactly like the Bots and
-  // Level rows above it.
-  const BOT_MAX_SCORE_KEY = 'leastcount_bot_maxscore';
-  const BOT_MAX_SCORES = [100, 150, 200];
-  const BOT_DEFAULT_MAX_SCORE = 100;
-  (function addBotMaxScoreRow() {
-    const sheet = document.getElementById('sheet-bots');
-    const go = document.getElementById('btn-solo-start');
-    if (!sheet || !go || go.parentNode !== sheet || document.getElementById('input-bot-maxscore')) return;
-    const field = document.createElement('div');
-    field.className = 'sheet-field';
-    const label = document.createElement('span');
-    label.className = 'sheet-label';
-    label.id = 'label-bot-maxscore';
-    label.textContent = 'Max score';
-    const chips = document.createElement('div');
-    chips.className = 'chips';
-    chips.setAttribute('data-for', 'input-bot-maxscore');
-    chips.setAttribute('role', 'group');
-    chips.setAttribute('aria-labelledby', 'label-bot-maxscore');
-    field.appendChild(label);
-    field.appendChild(chips);
-    const select = document.createElement('select');
-    select.id = 'input-bot-maxscore';
-    select.className = 'chip-source';
-    select.hidden = true;
-    select.setAttribute('aria-hidden', 'true');
-    select.tabIndex = -1;
-    BOT_MAX_SCORES.forEach((v) => {
-      const opt = document.createElement('option');
-      opt.value = String(v);
-      opt.textContent = String(v);
-      select.appendChild(opt);
-    });
-    // Under the Level row; the hidden select goes with the other two.
-    const level = sheet.querySelector('.chips[data-for="input-bot-difficulty"]');
-    const levelField = level && level.parentNode;
-    if (levelField && levelField.parentNode === sheet) sheet.insertBefore(field, levelField.nextSibling);
-    else sheet.insertBefore(field, go);
-    sheet.insertBefore(select, go);
-    // Set once the options are attached -- see populateMaxScoreSelect on why.
-    select.value = String(defaultBotMaxScore());
-    select.addEventListener('change', () => rememberBotMaxScore(select.value));
-  })();
-  function rememberBotMaxScore(v) {
-    try { localStorage.setItem(BOT_MAX_SCORE_KEY, String(v)); } catch (e) { /* session only */ }
-  }
-  function defaultBotMaxScore() {
-    let saved = NaN;
-    try { saved = Number(localStorage.getItem(BOT_MAX_SCORE_KEY)); } catch (e) { /* fine */ }
-    return BOT_MAX_SCORES.indexOf(saved) !== -1 ? saved : BOT_DEFAULT_MAX_SCORE;
-  }
-  function botMaxScore() {
-    const el = document.getElementById('input-bot-maxscore');
-    const v = Number(el && el.value);
-    return BOT_MAX_SCORES.indexOf(v) !== -1 ? v : BOT_DEFAULT_MAX_SCORE;
-  }
-
-  // Home's choices are one-tap buttons (Oct 2026) -- see initChips below.
-  // The saved difficulty is restored first so the right button lights up.
-  restoreBotDifficulty();
-  initChips('input-bot-count', (opt) => opt.value);
-  initChips('input-bot-difficulty');
-  initChips('input-bot-maxscore');
-  initChips('input-online-playercount');
-  initDropdown('input-maxscore');
-  initDropdown('round-maxscore-select');
-
-  document.getElementById('btn-solo-start').onclick = () => startSoloGame();
-
-  (function wireCoachButtons() {
-    const next = document.getElementById('coach-next');
-    const skip = document.getElementById('coach-skip');
-    if (next) next.onclick = () => Tutorial.next();
-    if (skip) skip.onclick = () => Tutorial.skip();
-  })();
-
-  // ------------------------------------------------------------------
-  // First-launch offer.
-  //
-  // Offered, never forced: a tutorial you cannot decline is one of the most
-  // reliable ways to lose a player in the first minute. One tap in, one tap
-  // past, asked once ever.
-  //
-  // Gated on having a name, because the tutorial starts a real room and the
-  // server needs one. If they haven't entered a name yet, the prompt waits
-  // rather than erroring.
-  // ------------------------------------------------------------------
-  // ------------------------------------------------------------------
-  // Who sees the tutorial invitation.
-  //
-  // "Hasn't dismissed it" was the wrong test -- it also caught everyone who
-  // had played fifty games, because the flag did not exist until today. So
-  // the real question is whether this person has ever played, and there are
-  // two ways to know:
-  //
-  //   1. leastcount_has_played, set the first time a game state arrives.
-  //   2. A saved player name. Anyone with one has been here before and
-  //      typed it in, which covers every existing player on the day this
-  //      ships -- without it, the whole existing user base would get a
-  //      "new to Least Count?" popup, which is worse than not asking.
-  //
-  // Fires once. Declining sets the same flag as completing, so it never
-  // asks twice either way.
-  // ------------------------------------------------------------------
-  function hasPlayedBefore() {
-    try {
-      if (localStorage.getItem('leastcount_has_played') === '1') return true;
-      const n = localStorage.getItem('leastcount_name');
-      return !!(n && n.trim());
-    } catch (e) {
-      return true;   // can't tell -> don't interrupt
-    }
-  }
-
-  function markHasPlayed() {
-    try { localStorage.setItem('leastcount_has_played', '1'); } catch (e) { /* session only */ }
-  }
-
-  function maybeOfferTutorial() {
-    if (Tutorial.isActive()) return;          // never over the tutorial itself
-    if (Tutorial.wasSeen()) return;
-    if (hasPlayedBefore()) return;
-    const box = document.getElementById('tutorial-offer');
-    if (!box) return;
-    box.classList.remove('hidden');
-  }
-
-  (function wireTutorialOffer() {
-    const box = document.getElementById('tutorial-offer');
-    if (!box) return;
-    const dismiss = () => {
-      box.classList.add('hidden');
-      try { localStorage.setItem('leastcount_tutorial_done', '1'); } catch (e) { /* session only */ }
-    };
-    const yes = document.getElementById('btn-tutorial-yes');
-    const no = document.getElementById('btn-tutorial-no');
-    if (yes) yes.onclick = () => {
-      // No name needed. The tutorial runs entirely in this tab -- no room, no
-      // socket, no server -- and already labels your seat 'You' when there is
-      // no name set. Requiring one here meant a brand-new player's VERY FIRST
-      // tap was rejected, and the field to fix it is inside the profile modal
-      // behind an unlabelled icon. That is the worst possible place to put a
-      // wall: before anyone has seen a single card.
-      box.classList.add('hidden');
-      logAnalytics('tutorial_started');
-      Tutorial.start();
-    };
-    if (no) no.onclick = () => { logAnalytics('tutorial_declined'); dismiss(); };
-
-    // The handoff after the last lesson. "Play bots" starts an ordinary
-    // solo game -- nothing about it is special, which is the point: the
-    // tutorial taught the rules, and this is just the game.
-    const play = document.getElementById('btn-tutorial-play');
-    const later = document.getElementById('btn-tutorial-later');
-    const hideFinished = () => {
-      const f = document.getElementById('tutorial-finished');
-      if (f) f.classList.add('hidden');
-    };
-    if (play) play.onclick = () => { hideFinished(); startSoloGame(); };
-    if (later) later.onclick = hideFinished;
-  })();
-
-  // The tutorial no longer goes through here -- it is entirely client-side
-  // and creates no room. This is the ordinary solo game again, and it is
-  // also what the "play against bots" nudge at the end of the tutorial
-  // starts, so a learner's first real game is a completely normal one.
-  async function startSoloGame() {
-    // No name needed: nobody else is at a bots table, so a name only labels
-    // your own seat. "You" does that job. The name is asked for once they come
-    // back from this game (maybeAskNameAfterFirstGame), or the first time they
-    // head somewhere other people will see it. Not saved -- getPlayerName()
-    // only stores what was actually typed.
-    const name = getPlayerName() || 'You';
-    const botCount = Number(document.getElementById('input-bot-count').value) || 3;
-    // Remembered as the next game's starting point too, so a player who likes
-    // short games doesn't have to pick 100 every time.
-    const maxScore = botMaxScore();
-    rememberBotMaxScore(maxScore);
-    const firebaseIdToken = await currentFirebaseIdToken();
-    socket.emit('create_solo_room', { name, botCount, botDifficulty: botDifficulty(), eliminationScore: maxScore, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
-      if (!res.ok) return setLandingError(res.error);
-      logAnalytics('solo_game_started', { bot_count: botCount, max_score: maxScore });
-      saveSession(res.roomCode, res.playerId, res.sessionToken);
-      loadChatHistory(res.chatHistory);
-      showChatFab();
-      // Solo play skips the lobby entirely -- the room's already mid-deal by
-      // the time this ack comes back, so head straight to the game screen
-      // (the very next room_update/game_starting event drives the rest).
-      showScreen('screen-game');
-    });
-  }
-
-  // Footer nav on the landing screen. Home is just the landing screen itself
-  // (no-op, it's already there). Stats is the SAME #btn-my-stats element the
-  // header used to also show -- it only lives in the footer now, no
-  // duplicate icon, and its real click handler (elsewhere in this file,
-  // guarded with `if (myStatsBtn)`) attaches to it exactly the same either
-  // way. Rules reuses the existing rules overlay (normally only reachable
-  // from the lobby, now also reachable before ever joining a room).
-  document.getElementById('btn-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
-
-  // ---------------- "Play Online" matchmaking ----------------
-  const QUEUE_PROMPT_DELAY_MS = 40000; // ~40s of real waiting before offering wait/bots/cancel
-  let queueTimeoutTimer = null;
-  let queuedPlayerCount = null;
-  // Wall-clock instant at which the wait/bots/cancel choice becomes due.
-  //
-  // THE INVERTED FROZEN-TIMER BUG. Everywhere else in this file the hazard is
-  // a timer that fails to REMOVE something, leaving stale UI on screen. Here
-  // it is the opposite and worse: the timer is what REVEALS the player's only
-  // way out of the waiting screen. If it never fires, the escape hatch never
-  // appears, and there is nothing stale to notice or dismiss -- the player
-  // just sits on "waiting for players" with no buttons until they force-quit
-  // the app.
-  //
-  // And this is the likeliest freeze of the lot. The window is 40 seconds of
-  // doing nothing but waiting, which is exactly when someone switches to
-  // another app -- so the timer is backgrounded almost by design.
-  //
-  // A missing control cannot be fixed by hiding something, so the transient
-  // registry does not apply. Instead we record when the prompt is due and
-  // re-check on every chance to look (see syncQueuePrompt).
-  let queuePromptDueAt = 0;
-
-  function clearQueueTimeoutTimer() {
-    if (queueTimeoutTimer) { clearTimeout(queueTimeoutTimer); queueTimeoutTimer = null; }
-    queuePromptDueAt = 0;
-  }
-
-  function showQueueChoice() {
-    document.getElementById('queue-waiting-hint').classList.add('hidden');
-    document.getElementById('queue-waiting-choice').classList.remove('hidden');
-    queuePromptDueAt = 0;
-  }
-
-  // Arms both paths: the timer (normal, foreground) and the deadline (survives
-  // a backgrounded WebView). Idempotent, so both firing is harmless.
-  function armQueuePrompt() {
-    clearQueueTimeoutTimer();
-    document.getElementById('queue-waiting-choice').classList.add('hidden');
-    document.getElementById('queue-waiting-hint').classList.remove('hidden');
-    queuePromptDueAt = Date.now() + QUEUE_PROMPT_DELAY_MS;
-    queueTimeoutTimer = setTimeout(showQueueChoice, QUEUE_PROMPT_DELAY_MS);
-  }
-
-  // Called when the page becomes visible again. If the prompt came due while
-  // the timers were frozen, show it now rather than leaving the player
-  // stranded. Only acts while actually on the waiting screen -- a stale
-  // deadline must not resurrect the prompt over some other screen.
-  function syncQueuePrompt(reason) {
-    if (!queuePromptDueAt) return false;
-    const screen = document.getElementById('screen-queue-waiting');
-    if (!screen || !screen.classList.contains('active')) return false;
-    if (Date.now() < queuePromptDueAt) return false;
-    console.warn('[queue] prompt was overdue; showing it now (' + reason + ')');
-    clearQueueTimeoutTimer();
-    showQueueChoice();
-    return true;
-  }
-
-  document.getElementById('btn-play-online').onclick = async () => {
-    const name = getPlayerName();
-    if (!name) return promptForName();
-    const playerCount = Number(document.getElementById('input-online-playercount').value) || 3;
-    // A double tap queued you twice -- and the matchmaker then sat you at
-    // the same table twice.
-    if (!startOnce('queue')) return;
-    let firebaseIdToken = null;
-    try { firebaseIdToken = await currentFirebaseIdToken(); } catch (e) { /* as a guest */ }
-    socket.emit('queue_join', { playerCount, name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
-      doneOnce('queue');
-      if (!res.ok) return setLandingError(res.error);
-      queuedPlayerCount = playerCount;
-      document.getElementById('queue-waiting-count').textContent = String(playerCount);
-      renderQueueSeats(playerCount);
-      document.getElementById('queue-waiting-choice').classList.add('hidden');
-      document.getElementById('queue-waiting-hint').classList.remove('hidden');
-      showScreen('screen-queue-waiting');
-      armQueuePrompt();
-    });
-  };
-
-  // Finding players (Oct 2026): your seat, in gold with your first letter,
-  // then an empty one for each player still to come. The server doesn't say
-  // how many it has found so far, so the empty seats simply breathe.
-  function renderQueueSeats(count) {
-    const box = document.getElementById('queue-seats');
-    if (!box) return;
-    box.innerHTML = '';
-    const me = document.createElement('span');
-    me.className = 'ws-seat me';
-    me.textContent = seatInitial(getPlayerName() || 'You');
-    box.appendChild(me);
-    for (let i = 1; i < count; i++) {
-      const seat = document.createElement('span');
-      seat.className = 'ws-seat';
-      seat.style.animationDelay = (i * 0.3) + 's';
-      box.appendChild(seat);
-    }
-  }
-
-  document.getElementById('btn-queue-keep-waiting').onclick = () => {
-    // Just re-hides the choice and gives it another full waiting window --
-    // still queued the whole time, this only affects when the prompt reappears.
-    // armQueuePrompt() does the hide/show and arms BOTH the timer and the
-    // wall-clock deadline, so a background during the second window is
-    // covered exactly like the first.
-    armQueuePrompt();
-  };
-
-  document.getElementById('btn-queue-fill-bots').onclick = () => {
-    clearQueueTimeoutTimer();
-    socket.emit('queue_fill_bots', {}, (res) => {
-      if (!res.ok) { setLandingError(res.error); showScreen('screen-landing'); }
-      // On success, queue_matched (below) takes it from here.
-    });
-  };
-
-  document.getElementById('btn-queue-cancel').onclick = () => {
-    clearQueueTimeoutTimer();
-    socket.emit('queue_cancel', {});
-    queuedPlayerCount = null;
-    showScreen('screen-landing');
-  };
-
-  socket.on('queue_matched', ({ roomCode, playerId, sessionToken, chatHistory }) => {
-    clearQueueTimeoutTimer();
-    queuedPlayerCount = null;
-    logAnalytics('online_match_found');
-    saveSession(roomCode, playerId, sessionToken);
-    loadChatHistory(chatHistory);
-    showChatFab();
-    // Same as solo play -- matched rooms skip the lobby and go straight into
-    // the countdown/deal sequence, already in progress by the time this arrives.
-    showScreen('screen-game');
-  });
-
-  // ---------------- lobby screen ----------------
-  populateMaxScoreSelect(document.getElementById('input-maxscore'), DEFAULT_MAX_SCORE, 0);
-
-  document.getElementById('btn-start').onclick = () => {
-    const eliminationScore = Number(document.getElementById('input-maxscore').value) || undefined;
-    socket.emit('start_game', { roomCode: myRoomCode, eliminationScore }, (res) => {
-      if (!res.ok) document.getElementById('lobby-error').textContent = res.error;
-    });
-  };
-
-  // ------------------------------------------------------------------
-  // Table nickname. Friends rename themselves for a laugh between rounds --
-  // this changes what THIS table sees and nothing else: the saved profile
-  // name is untouched, and the group marathon board still records the real
-  // one (see recordGroupGame on the server).
-  //
-  // Reachable from your own lobby row and your own seat. Deliberately NOT
-  // from the round-result screen, which auto-advances after 10 seconds and
-  // would cut people off mid-typing.
-  // ------------------------------------------------------------------
-  function openNameDialog() {
-    const dlg = document.getElementById('table-name-dialog');
-    const input = document.getElementById('input-table-name');
-    if (!dlg || !input) return;
-    input.value = playerName(myPlayerId) || getPlayerName() || '';
-    document.getElementById('table-name-error').textContent = '';
-    dlg.classList.remove('hidden');
-    setTimeout(() => { try { input.focus(); input.select(); } catch (e) {} }, 60);
-  }
-
-  function closeNameDialog() {
-    const dlg = document.getElementById('table-name-dialog');
-    if (dlg) dlg.classList.add('hidden');
-  }
-
-  (function wireNameDialog() {
-    const cancel = document.getElementById('btn-table-name-cancel');
-    const save = document.getElementById('btn-table-name-save');
-    const input = document.getElementById('input-table-name');
-    if (!cancel || !save || !input) return;
-    cancel.onclick = closeNameDialog;
-    save.onclick = () => {
-      const name = (input.value || '').trim();
-      if (!name) {
-        document.getElementById('table-name-error').textContent = 'Enter a name.';
-        return;
-      }
-      socket.emit('set_name', { roomCode: myRoomCode, name }, (res) => {
-        if (!res || !res.ok) {
-          document.getElementById('table-name-error').textContent = (res && res.error) || 'Could not change it.';
-          return;
-        }
-        closeNameDialog();
-      });
-    };
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.onclick(); });
-  })();
-
-  // ---- Host-only bot controls in the lobby (Oct 2026) ----
-  // The host can pad out a thin table. Deliberately not automatic and not tied
-  // to how many humans are present -- the host decides, and can change it right
-  // up until the deal. Hidden for everyone else, and hidden once the game
-  // starts, because the server refuses both outside the lobby anyway and a
-  // control that always errors is worse than no control.
-  function renderLobbyBots(room) {
-    const row = document.getElementById('lobby-bots-row');
-    if (!row) return;
-    const isHost = room && room.hostPlayerId === myPlayerId;
-    const inLobby = !room || room.phase === 'lobby';
-    row.classList.toggle('hidden', !(isHost && inLobby));
-    if (!isHost || !inLobby) return;
-
-    const players = Array.isArray(room.players) ? room.players : [];
-    const bots = players.filter((p) => p && p.isBot).length;
-    document.getElementById('lobby-bot-count').textContent = String(bots);
-    // Driven by the ROOM, not by this device: whatever the host chose is what
-    // everyone is actually playing against, and a host on a second device must
-    // not see a stale local value.
-    const diffEl = document.getElementById('lobby-bot-difficulty');
-    if (diffEl && room.botDifficulty && diffEl.value !== room.botDifficulty) {
-      diffEl.value = room.botDifficulty;
-    }
-    // Mirrors the server's own limits so the buttons grey out instead of
-    // firing a request that comes back as an error.
-    document.getElementById('btn-bot-add').disabled = players.length >= 10;
-    document.getElementById('btn-bot-remove').disabled = bots === 0;
-  }
-
-  // Writes to #lobby-error, which is what the rest of this screen already uses
-  // (see the start_game and join handlers). There is no setLobbyError() helper
-  // in this file -- the two existing callers set .textContent directly -- so
-  // this wraps that one pattern rather than inventing a third convention.
-  function showLobbyBotError(msg) {
-    const el = document.getElementById('lobby-error');
-    if (!el) return;
-    el.textContent = friendlyError(msg || 'Could not change the bots.');
-    setTimeout(() => { if (el.textContent) el.textContent = ''; }, 3000);
-  }
-
-  document.getElementById('lobby-bot-difficulty').onchange = (e) => {
-    const level = e.target.value;
-    rememberBotDifficulty(level);
-    // Also keep the landing screen's picker in step, so a host who sets Hard
-    // here does not find Medium waiting next time they start a solo game.
-    const solo = document.getElementById('input-bot-difficulty');
-    if (solo) solo.value = level;
-    if (!myRoomCode) return;
-    socket.emit('set_bot_difficulty', { roomCode: myRoomCode, level }, (res) => {
-      if (res && !res.ok) showLobbyBotError(res.error);
-    });
-  };
-
-  document.getElementById('input-bot-difficulty').onchange = (e) => {
-    rememberBotDifficulty(e.target.value);
-  };
-
-  document.getElementById('btn-bot-add').onclick = () => {
-    if (!myRoomCode) return;
-    socket.emit('add_bot', { roomCode: myRoomCode }, (res) => {
-      // No optimistic update: the row is redrawn from the room_update the
-      // server broadcasts, so the count on screen is always what the server
-      // actually seated rather than what we hoped it would.
-      if (res && !res.ok) showLobbyBotError(res.error);
-    });
-  };
-
-  document.getElementById('btn-bot-remove').onclick = () => {
-    if (!myRoomCode) return;
-    socket.emit('remove_bot', { roomCode: myRoomCode }, (res) => {
-      if (res && !res.ok) showLobbyBotError(res.error);
-    });
-  };
-
-  // Lobby v2 (Oct 2026): four seats to a row; a room holds ten (the server's
-  // limit -- see join_room in server.js).
-  var LOBBY_SEAT_COLS = 4;
-  var LOBBY_MAX_SEATS = 10;
-  const LOBBY_PENCIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/></svg>';
-
-  // A bot's one-line character ("Saving a 2 for you. Usually too long."),
-  // shown when its seat is tapped -- a seat has no room for a sentence, and
-  // the line is what makes the bots learnable. One at a time; a second tap,
-  // or the next room update, puts it away.
-  function toggleLobbyTrait(li, text, align) {
-    const open = li.querySelector('.ls-bubble');
-    document.querySelectorAll('#lobby-players .ls-bubble').forEach((x) => x.remove());
-    if (open) return;
-    const bubble = document.createElement('span');
-    bubble.className = 'ls-bubble' + (align ? ' ' + align : '');
-    bubble.textContent = text;
-    li.appendChild(bubble);
-    setTimeout(() => { if (bubble.parentNode) bubble.remove(); }, 4000);
-  }
-
-  function renderLobby(room) {
-    document.getElementById('lobby-roomcode').textContent = room.roomCode;
-    renderLobbyBots(room);
-    const list = document.getElementById('lobby-players');
-    list.innerHTML = '';
-    // Players as seats: a circle in the player's own table colour with their
-    // first letter, the name under it, one word under that. The host's circle
-    // wears a gold ring and the word "Host" (a crown was tried and turned
-    // down). Bots are the 3D robot. Your own seat carries a pencil: tapping it
-    // changes how your name shows here. Anyone else's opens the same
-    // report/mute popover their chair has at the table.
-    room.players.forEach((p, i) => {
-      const li = document.createElement('li');
-      const isMe = p.playerId === myPlayerId;
-      const isHost = p.playerId === room.hostPlayerId;
-      li.className = 'lobby-seat' + (p.isBot ? ' bot' : '') + (isHost ? ' host' : '')
-        + (isMe ? ' me' : '') + (p.connected || p.isBot ? '' : ' offline');
-      li.dataset.playerId = p.playerId;
-      const name = displayName(p.name);
-      const col = i % LOBBY_SEAT_COLS;
-      const align = col === 0 ? 'align-left' : (col === LOBBY_SEAT_COLS - 1 ? 'align-right' : '');
-      const face = p.isBot
-        ? '<span class="ls-face art art-bots" aria-hidden="true"></span>'
-        : `<span class="ls-face" style="background:${seatColour(p.playerId)}" aria-hidden="true">${escapeHtml(seatInitial(name))}${isMe ? '<span class="ls-edit">' + LOBBY_PENCIL + '</span>' : ''}</span>`;
-      const sub = isHost ? (isMe ? 'Host · You' : 'Host')
-        : (p.isBot ? 'Bot' : (isMe ? 'You' : (p.connected ? 'online' : 'offline')));
-      // Rating (Nov 2026): "Ravi (455)", as at the table.
-      const lsRating = typeof p.rating === 'number' ? ratingBracketHtml(p.rating) : '';
-      li.innerHTML = face
-        + `<span class="ls-name${lsRating ? ' has-rating' : ''}"><span class="ls-nm">${escapeHtml(name)}</span>${lsRating}</span>`
-        + `<span class="ls-sub">${escapeHtml(sub)}</span>`;
-      if (p.isBot) {
-        if (p.trait) {
-          li.classList.add('tappable');
-          li.onclick = (e) => { e.stopPropagation(); toggleLobbyTrait(li, p.trait, align); };
-        }
-      } else if (!isMe) {
-        li.classList.add('tappable');
-        li.dataset.popoverAlign = align;
-        li.onclick = (e) => {
-          e.stopPropagation();
-          togglePlayerActionPopover(li, p.playerId, p.name, align);
-        };
-      } else {
-        li.classList.add('tappable', 'own-row');
-        li.setAttribute('aria-label', 'Change how your name shows at this table');
-        li.onclick = (e) => { e.stopPropagation(); openNameDialog(); };
-      }
-      list.appendChild(li);
-    });
-    // Empty seats invite: enough to finish the first row, then one more while
-    // the room has space. Tapping one is the WhatsApp invite.
-    const free = Math.max(0, LOBBY_MAX_SEATS - room.players.length);
-    const invites = Math.min(free, room.players.length < LOBBY_SEAT_COLS ? LOBBY_SEAT_COLS - room.players.length : 1);
-    for (let k = 0; k < invites; k++) {
-      const li = document.createElement('li');
-      li.className = 'lobby-seat empty tappable';
-      li.setAttribute('role', 'button');
-      li.setAttribute('aria-label', 'Invite someone');
-      li.innerHTML = '<span class="ls-face" aria-hidden="true">+</span><span class="ls-sub">Invite</span>';
-      li.onclick = (e) => {
-        e.stopPropagation();
-        const wa = document.getElementById('btn-share-whatsapp');
-        if (wa) wa.click();
-      };
-      list.appendChild(li);
-    }
-    reopenPlayerActionPopoverIfNeeded(list);
-    // Start Game is available to EVERYONE at the table (Sept 2026), not just
-    // the host: six people in a group, four free tonight, and those four
-    // shouldn't be blocked by whoever happens to hold the host flag -- who
-    // might not even be playing. The max-score selector moves with it, since
-    // whoever starts the game is the one choosing how long it runs.
-    const btn = document.getElementById('btn-start');
-    btn.classList.remove('hidden');
-    btn.disabled = room.players.length < 2;
-    // While you're the only one here, Start Game is dead weight and inviting
-    // is the only thing worth doing -- so it visually steps back and the
-    // WhatsApp invite button above is the loudest thing on screen. It becomes
-    // primary again the moment there's someone to play with.
-    const alone = room.players.length < 2;
-    btn.classList.toggle('primary', !alone);
-    btn.classList.toggle('secondary', alone);
-    document.getElementById('lobby-maxscore-row').classList.remove('hidden');
-    // The line under the header. "At the table" counts every seat, bots
-    // included, so it never calls a bot a player.
-    document.getElementById('lobby-hint').textContent = alone
-      ? 'Just you so far \u2014 invite someone or add bots'
-      : `${room.players.length} at the table \u00b7 anyone can start`;
-
-    // ---- persistent group extras ----
-    const isGroup = !!room.groupCode;
-    // The header names the table: the group's own name, or "Your table". The
-    // group's leaderboard trophy sits beside it.
-    const titleEl = document.getElementById('lobby-title');
-    if (titleEl) titleEl.textContent = (isGroup && room.groupName) ? room.groupName : 'Your table';
-    const boardBtn = document.getElementById('btn-group-leaderboard');
-    if (boardBtn) boardBtn.classList.toggle('hidden', !isGroup);
-    const groupHeader = document.getElementById('lobby-group-header');
-    const groupNameEl = document.getElementById('lobby-group-name');
-    if (groupNameEl) groupNameEl.textContent = room.groupName || '';
-    if (groupHeader) groupHeader.classList.toggle('hidden', !isGroup);
-    // A group has its own screen carrying the code and the invite, so the
-    // lobby's ad-hoc room-code row is redundant while playing in one.
-    const codeLabel = document.getElementById('lobby-roomcode-label');
-    const codeRow = document.getElementById('lobby-roomcode-row');
-    const codeHint = document.getElementById('lobby-code-hint');
-    if (codeLabel) codeLabel.classList.toggle('hidden', isGroup);
-    if (codeRow) codeRow.classList.toggle('hidden', isGroup);
-    if (codeHint) codeHint.classList.toggle('hidden', isGroup);
-
-    if (isGroup) rememberGroup(room.groupCode, room.groupName);
-  }
-
-  // Running leaderboard for a permanent group, shown in an overlay from the
-  // trophy icon rather than inline -- as a block in the page flow it pushed
-  // Start Game and Leave Table below the fold on a phone.
-  function loadGroupStandings(code) {
-    const list = document.getElementById('lobby-standings');
-    const empty = document.getElementById('lobby-standings-empty');
-    if (!list) return;
-    socket.emit('get_group', { code }, (res) => {
-      if (!res || !res.ok || !res.group) return;
-      // The lobby's trophy shows THIS MONTH's marathon -- the same table the
-      // group screen leads with, so the two never disagree.
-      const rows = res.group.marathon.standings || [];
-      list.innerHTML = '';
-      empty.classList.toggle('hidden', rows.length > 0);
-      rows.forEach((s, i) => {
-        const li = document.createElement('li');
-        li.className = 'standings-row';
-        li.innerHTML = standingsRowHtml(s, i);
-        list.appendChild(li);
-      });
-    });
-  }
-
-  document.getElementById('btn-group-leaderboard').onclick = () => {
-    if (!latestRoom || !latestRoom.groupCode) return;
-    loadGroupStandings(latestRoom.groupCode);
-    document.getElementById('overlay-standings').classList.remove('hidden');
-  };
-  document.getElementById('btn-close-standings').onclick = () => {
-    document.getElementById('overlay-standings').classList.add('hidden');
-  };
-  document.getElementById('overlay-standings').onclick = (e) => {
-    if (e.target.id === 'overlay-standings') e.currentTarget.classList.add('hidden');
-  };
-
-  // ---------------- realistic card rendering ----------------
-  // ------------------------------------------------------------------
-  // SCATTERED-CARD BACKDROP
-  //
-  // Builds the backdrop from cardEl() -- the same function the table uses --
-  // so the cards behind the UI are the app's own cards, not a picture of
-  // some. No image to license, nothing to download, nothing to 404, and it
-  // cannot drift out of step with the real card design.
-  //
-  // The layout is HARD-CODED rather than random. Random would reshuffle on
-  // every reload, so the app would look subtly different each launch and
-  // could occasionally deal itself a bad composition -- three cards stacked
-  // in the corner where the title goes. These fifteen were placed by hand.
-  //
-  // Every card carries a rotateX and rotateY as well as a flat rotate: a
-  // card square to the screen reads as a rectangle, and the whole point is
-  // that these read as cards in mid-air.
-  //
-  // Percentages, not pixels, so the composition holds from a 320px phone to
-  // a tablet without reflowing.
-  // ------------------------------------------------------------------
-  const BACKDROP_CARDS = [
-    { r: 'A', s: 'S', x: -6,  y: 2,  rot: -18, rx: 14, ry: -22, sc: 1.05, o: 0.30 },
-    { r: '7', s: 'H', x: 62,  y: -4, rot: 24,  rx: -18, ry: 16, sc: 0.95, o: 0.24 },
-    { r: 'K', s: 'D', x: 28,  y: 9,  rot: -7,  rx: 22, ry: 10,  sc: 0.70, o: 0.16 },
-    { r: '10', s: 'C', x: 84, y: 16, rot: 33,  rx: 10, ry: -26, sc: 0.82, o: 0.20 },
-    { r: 'Q', s: 'H', x: 4,   y: 24, rot: 12,  rx: -14, ry: 20, sc: 0.78, o: 0.18 },
-    { r: '3', s: 'S', x: 45,  y: 30, rot: -28, rx: 20, ry: -12, sc: 0.62, o: 0.13 },
-    { r: 'J', s: 'D', x: 72,  y: 38, rot: 9,   rx: -22, ry: -18, sc: 1.00, o: 0.26 },
-    { r: '5', s: 'C', x: 12,  y: 46, rot: -34, rx: 16, ry: 24,  sc: 0.88, o: 0.22 },
-    { r: '9', s: 'H', x: 88,  y: 54, rot: 17,  rx: -10, ry: -20, sc: 0.72, o: 0.15 },
-    { r: '2', s: 'S', x: 34,  y: 58, rot: 41,  rx: 24, ry: 14,  sc: 0.66, o: 0.14 },
-    { r: 'A', s: 'D', x: -8,  y: 68, rot: 21,  rx: -16, ry: -24, sc: 1.02, o: 0.28 },
-    { r: '8', s: 'C', x: 58,  y: 74, rot: -13, rx: 18, ry: 22,  sc: 0.85, o: 0.20 },
-    { r: 'K', s: 'S', x: 80,  y: 84, rot: 29,  rx: -20, ry: 12,  sc: 0.94, o: 0.24 },
-    { r: '6', s: 'H', x: 22,  y: 88, rot: -22, rx: 12, ry: -18, sc: 0.76, o: 0.17 },
-    { r: '4', s: 'D', x: 48,  y: 95, rot: 36,  rx: -24, ry: 20,  sc: 0.68, o: 0.15 },
-  ];
-
-  function buildCardBackdrop() {
-    const host = document.getElementById('bg-cards');
-    if (!host || host.childElementCount) return;   // build once, never rebuild
-    const frag = document.createDocumentFragment();
-    BACKDROP_CARDS.forEach((c) => {
-      let el;
-      try {
-        el = cardEl({ id: 'bg-' + c.r + c.s, rank: c.r, suit: c.s });
-      } catch (e) {
-        return;   // a decorative card is never worth a broken screen
-      }
-      el.style.left = c.x + '%';
-      el.style.top = c.y + '%';
-      el.style.opacity = String(c.o);
-      el.style.transform =
-        'rotate(' + c.rot + 'deg) rotateX(' + c.rx + 'deg) rotateY(' + c.ry + 'deg) scale(' + c.sc + ')';
-      frag.appendChild(el);
-    });
-    host.appendChild(frag);
-  }
-
-
-  // Eight hues spaced round the wheel, picked to stay clear of the gold the
-  // active seat uses. Chosen by a hash of the playerId rather than by seat
-  // index, so a player's colour does not change when somebody else leaves and
-  // the seats renumber -- the whole point is that the colour IS the player.
-  const SEAT_HUES = [150, 18, 205, 275, 45, 0, 320, 95];
-  function seatColour(playerId) {
-    const id = String(playerId || '');
-    let h = 0;
-    for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
-    return 'hsl(' + SEAT_HUES[Math.abs(h) % SEAT_HUES.length] + ', 55%, 62%)';
-  }
-  function seatInitial(name) {
-    const n = String(name || '').trim();
-    if (!n) return '?';
-    // The first LETTER, not the first character: a name that starts with a
-    // digit or an emoji would otherwise put that in the disc, which is not an
-    // initial. Falls back to the first character only if there is no letter at
-    // all. Bots all showing B is fine -- the disc colour is what separates
-    // them, and the name is right there next to it.
-    const letter = n.match(/[a-z]/i);
-    return (letter ? letter[0] : n[0]).toUpperCase();
-  }
-
-  // The drawn suits and emblems (Oct 2026): <use> of the sprite at the top of
-  // index.html. Every card carries both the old font character (.st) and the
-  // drawing (.sg); style.css shows one or the other -- the drawings only with
-  // the premium game screen (html.gs2), so without it nothing changes.
-  function cardGlyph(id, cls) {
-    return `<svg class="${cls}" aria-hidden="true" focusable="false"><use href="#lc-${id}"></use></svg>`;
-  }
-
-  function cardEl(card, opts) {
-    opts = opts || {};
-    const el = document.createElement('div');
-    el.className = 'card';
-    if (card.rank === 'JOKER') {
-      el.classList.add('joker');
-      const stacked = '<span class="joker-letters">' +
-        'J<br>O<br>K<br>E<br>R' +
-        '</span>';
-      el.innerHTML =
-        `<div class="card-corner corner-tl">${stacked}</div>` +
-        `<div class="card-center"><div class="joker-cap"></div>${cardGlyph('jester', 'joker-hat')}</div>` +
-        `<div class="card-corner corner-br">${stacked}</div>`;
-    } else {
-      const isRed = RED_SUITS.has(card.suit);
-      el.classList.add(isRed ? 'red' : 'black');
-      if (SUIT_SYMBOL[card.suit]) el.classList.add('s-' + card.suit);
-      // Only with a suit: the ace's face is its one big suit, so the round's
-      // joker card (a rank with no suit -- "A = 0") keeps its letter.
-      if (card.rank === 'A' && SUIT_SYMBOL[card.suit]) el.classList.add('ace');
-      const suitChar = SUIT_SYMBOL[card.suit] || '';
-      const suit = SUIT_SYMBOL[card.suit]
-        ? `<span class="st">${suitChar}</span>${cardGlyph(card.suit, 'sg')}`
-        : suitChar;
-      const court = (card.rank === 'J' || card.rank === 'Q' || card.rank === 'K')
-        ? cardGlyph(card.rank, 'court-emblem') : '';
-      el.innerHTML =
-        `<div class="card-corner corner-tl"><span class="corner-rank">${card.rank}</span><span class="corner-suit">${suit}</span></div>` +
-        `<div class="card-center">${court}<span class="center-rank">${card.rank}</span><span class="center-suit">${suit}</span></div>` +
-        `<div class="card-corner corner-br"><span class="corner-rank">${card.rank}</span><span class="corner-suit">${suit}</span></div>`;
-    }
-    // Court cards get a class of their own: the premium game screen (gs2 in
-    // style.css) draws them a thin gold frame, the way a printed court card
-    // frames its figure. Without gs2 it does nothing.
-    if (card.rank === 'J' || card.rank === 'Q' || card.rank === 'K') el.classList.add('court');
-    if (opts.selectable) el.classList.add('selectable');
-    if (opts.selected) el.classList.add('selected');
-    if (opts.wild) el.classList.add('wild-zero');
-    if (opts.hinted) el.classList.add('hint-suggested');
-    // The +2 card (Oct 2026). A 2 makes the next player play a 2 or pick up
-    // cards, so it gets its own red edge wherever it appears -- hand, table,
-    // chairs, scorecard. The "+2" tag itself goes only where there's room
-    // for it (renderHandTiles, the open card).
-    if (card.rank === '2') el.classList.add('trump');
-    return el;
-  }
-
-  function cardsLabel(n) {
-    return n === 1 ? '1 card' : n + ' cards';
-  }
-
-  function sortHand(hand) {
-    return hand.slice().sort((a, b) => RANK_ORDER.indexOf(a.rank) - RANK_ORDER.indexOf(b.rank));
-  }
-
-  // Groups same-rank cards into a single tile with a count badge, so a hand
-  // of e.g. four 9s only takes up one card-slot of screen space. Rank '2' is
-  // always kept as separate individual tiles since the +2 chain rule needs
-  // playing exactly one 2 at a time.
-  function groupHand(hand) {
-    const groups = [];
-    const byRank = new Map();
-    hand.forEach((card) => {
-      if (card.rank === '2') {
-        groups.push({ rank: '2', cards: [card] });
-        return;
-      }
-      let g = byRank.get(card.rank);
-      if (!g) {
-        g = { rank: card.rank, cards: [] };
-        byRank.set(card.rank, g);
-        groups.push(g);
-      }
-      g.cards.push(card);
-    });
-    return groups;
-  }
-
-  // ---------------- oval table ----------------
-  // orderOverride: an explicit array of playerIds (used only during the
-  // countdown/dealing phase, before any `game` object exists yet -- see
-  // runStartSequence) to pre-build the real seats in the exact order the
-  // server just dealt this round with, each starting at 0 cards.
-  //
-  // Otherwise seating always follows game.turnOrder -- the engine's actual,
-  // dealer-rotated play order (which also already excludes anyone eliminated
-  // or quit) -- rather than plain join order, so who's sitting next to you
-  // on screen always matches who you actually play after/before.
-  // Must match .seat { width } in style.css -- the clamp below is in percent
-  // of the table, so it needs the seat's pixel width to convert.
-  const SEAT_WIDTH_PX = 96;
-
-  // ------------------------------------------------------------------
-  // SEAT-RENDER WATCHDOG (25 Sept)
-  //
-  // A player reported the table emptying mid-game and STAYING empty until
-  // the app was restarted, while the open card kept updating. Sticky is
-  // the important word: a one-off exception repairs itself on the next
-  // state push, so something was wrong with client state rather than with
-  // one render.
-  //
-  // Swapping the seats in at the end (below) means a bail now leaves the
-  // previous table on screen instead of a blank one -- better, but a table
-  // frozen one state behind is still wrong. This does two more things:
-  //
-  //  1. Says WHY it bailed, with the data, so the next report identifies
-  //     the trigger instead of us guessing from a video.
-  //  2. Asks the server for fresh room state if it keeps bailing, so the
-  //     player is not stuck until they think to restart the app.
-  //
-  // Deliberately conservative: three consecutive bails before acting, and
-  // at most one resync every 15s, because syncWithServer() can decide the
-  // session is dead and return you to the landing screen. Firing that on a
-  // single transient bail would be far worse than a stale table.
-  // ------------------------------------------------------------------
-  let seatRenderBails = 0;
-  let lastSeatResyncAt = 0;
-  const SEAT_BAIL_LIMIT = 3;
-  const SEAT_RESYNC_COOLDOWN_MS = 15000;
-
-  function noteSeatRenderBail(reason, game, extra) {
-    seatRenderBails += 1;
-    console.warn('[table] seat render bailed (' + seatRenderBails + '): ' + reason, {
-      roundOver: !!(game && game.roundOver),
-      turnOrderLength: (game && game.turnOrder && game.turnOrder.length) || 0,
-      roomPlayers: (latestRoom && latestRoom.players && latestRoom.players.length) || 0,
-      inRoom: !!myRoomCode,
-      ...(extra || {}),
-    });
-    if (seatRenderBails < SEAT_BAIL_LIMIT || !myRoomCode) return;
-    const now = Date.now();
-    if (now - lastSeatResyncAt < SEAT_RESYNC_COOLDOWN_MS) return;
-    lastSeatResyncAt = now;
-    console.warn('[table] asking the server for fresh room state');
-    try { syncWithServer(); } catch (e) {
-      console.warn('[table] resync failed:', e && e.message);
-    }
-  }
-
-  // "Mallik... (455)" at the least (Nov 2026). A name next to its rating
-  // gives way first, but never to fewer than six letters: its flex-basis is
-  // the measured width of its first six letters and the "...", so the line
-  // only breaks -- the rating dropping under the name -- when even that will
-  // not fit beside the number. Measured once per name and size, with a
-  // hidden copy of the name in the same row so the font is exactly the same.
-  const seatNameSixWidth = new Map();
-  function fitSeatName(nameEl) {
-    try {
-      const text = nameEl.textContent || '';
-      const key = getComputedStyle(nameEl).fontSize + '|' + text;
-      let w = seatNameSixWidth.get(key);
-      if (w == null) {
-        const probe = nameEl.cloneNode(false);
-        probe.textContent = text.length > 6 ? text.slice(0, 6) + '\u2026' : text;
-        probe.style.cssText = 'position:absolute;visibility:hidden;flex:none;max-width:none;width:auto;';
-        nameEl.parentNode.appendChild(probe);
-        const six = probe.getBoundingClientRect().width;
-        probe.textContent = text;   // "Sukumar" is narrower than "Sukuma..."
-        w = Math.ceil(Math.min(six, probe.getBoundingClientRect().width));
-        probe.remove();
-        if (w > 0) seatNameSixWidth.set(key, w);
-      }
-      if (w > 0) nameEl.style.flexBasis = w + 'px';
-    } catch (e) { /* the stylesheet's own basis stands */ }
-  }
-
-  function renderOvalTable(game, orderOverride) {
-    const oval = document.getElementById('oval-table');
-    // ------------------------------------------------------------------
-    // DO NOT DELETE THE SEATS HERE.
-    //
-    // This used to remove every .seat as its first act, before anything
-    // could fail. Two ways that ends with an empty table: latestRoom is
-    // falsy and the function returns, or anything below throws. Either way
-    // the seats are already gone and nothing puts them back.
-    //
-    // That is exactly what the 25 Sept video shows -- the entire table
-    // vanished for 18 seconds mid-game while the open card kept updating,
-    // because renderGame calls this function partway through: everything
-    // before the throw (open card, joker) kept rendering and everything
-    // after it (hand tray, hand value, buttons) silently stopped. The turn
-    // timer ran out and the server auto-played.
-    //
-    // Seats are now built into a fragment and swapped in at the very end,
-    // so a failure leaves the PREVIOUS table on screen. A table that is one
-    // state stale is vastly better than no table at all.
-    // ------------------------------------------------------------------
-    renderRevealBanner(game);
-    if (!latestRoom) { noteSeatRenderBail('no room state', game); return; }
-    const seatFrag = document.createDocumentFragment();
-
-    const dealing = !!orderOverride;
-    const playerById = new Map(latestRoom.players.map((p) => [p.playerId, p]));
-    const orderIds = orderOverride
-      || ((game && game.turnOrder && game.turnOrder.length) ? game.turnOrder : latestRoom.players.map((p) => p.playerId));
-
-    const meIdx = orderIds.indexOf(myPlayerId);
-    const rotatedIds = meIdx > 0 ? [...orderIds.slice(meIdx), ...orderIds.slice(0, meIdx)] : orderIds.slice();
-    const seatOrder = rotatedIds.map((id) => playerById.get(id)).filter(Boolean);
-    const n = seatOrder.length;
-    if (n === 0) {
-      // The room's player list and the game's turn order have diverged, so
-      // not one seat resolved. This is the sticky failure: the list stays
-      // wrong, every later render bails here too, and the centre cards keep
-      // updating on a table that never repaints.
-      noteSeatRenderBail('no seats resolved', game, { orderIds, known: [...playerById.keys()] });
-      return;
-    }
-    seatRenderBails = 0;   // a good render clears the counter
-
-    // ------------------------------------------------------------------
-    // Fluid table furniture (Sept 2026).
-    //
-    // The oval was the ONLY thing on this screen sized from the viewport
-    // (max-height: 56vh), so it absorbed every bit of device variation on
-    // its own: measured 513px tall on a 412x915 phone but crushed to 286px
-    // on a 360x640 one. Meanwhile the seats stayed pinned at 96px and the
-    // centre cards at 58px, so a chair went from 19% of the table's height
-    // to 34% of it, and on the narrow table the side seats overlapped the
-    // open/joker cards by 27px on BOTH sides:
-    //
-    //   seat 96 + centre (58 + 18 + 58) + seat 96 = 326px of furniture
-    //   ...into a table only 273px wide.
-    //
-    // Those numbers were never wrong, just tuned for the ~372px table a
-    // Pixel gives you (326 fits in 372 with room to spare). Expressed as
-    // fractions of the table's OWN width they hold everywhere, and on a
-    // big phone they resolve to the same values as before -- so nothing
-    // changes on the devices where this already looked right.
-    //
-    // Floors stop it collapsing into unreadability on a 320px screen; the
-    // caps are today's values, so this can only ever shrink, never inflate.
-    // ------------------------------------------------------------------
-    // ------------------------------------------------------------------
-    // Seat sizing, Oct 2026 -- now aware of how many people are sitting down.
-    //
-    // The Sept fix made the furniture scale with the table's WIDTH, which
-    // solved small-screen crowding at a fixed player count. It missed two
-    // things, and at 7+ players they collide visibly:
-    //
-    //   1. It never looked at `n`. A seat was the same size at 4 players and
-    //      at 10, so the ring simply ran out of room and chairs overlapped.
-    //   2. It only measured tableW, never tableH -- and the overlaps are
-    //      VERTICAL, between seats stacked down the left and right sides.
-    //      The table is far shorter than it is wide, so the vertical gaps run
-    //      out long before the horizontal ones.
-    //
-    // Making the seats taller (stacking the avatar above the name) made this
-    // worse, because seat height was never part of the sum.
-    //
-    // So: work out where the seats will actually land, in pixels, measure the
-    // smallest gap between neighbours, and size the seat to fit THAT. It is
-    // self-correcting -- any device, any player count, any future change to
-    // the ring radius.
-    // ------------------------------------------------------------------
-    const ovalRect = oval.getBoundingClientRect();
-    const tableW = ovalRect.width || 1;
-    const tableH = ovalRect.height || 1;
-    const px = (v) => Math.round(v) + 'px';
-
-    // Spread the ring a little wider once the table is busy. Cheap extra room,
-    // and at low player counts it changes nothing.
-    // Push the ring out as the table fills. Buys room for free, and below
-    // seven players nothing changes. The 48 step exists for the extreme corner
-    // -- ten players on a 320px phone -- where the seat has already hit its
-    // readability floor and cannot shrink any further.
-    const ringR = n >= 9 ? 48 : (n >= 7 ? 46 : 43);
-
-    // ------------------------------------------------------------------
-    // Equal SPACING, not equal angles (Oct 2026).
-    //
-    // Seats used to be placed at even angular steps: angle = PI/2 + k/n*2PI.
-    // On a circle that gives even spacing. This table is not a circle -- it is
-    // 1:1.05, and the seat ring is a percentage of width horizontally and a
-    // percentage of height vertically, so it is an ellipse in real pixels. On
-    // an ellipse, equal angles do NOT give equal distances: the steps bunch up
-    // where the curve is flat and stretch where it is tight. That is why the
-    // gap between two chairs looked different depending on where they were
-    // sitting, and why it looked different again on a differently shaped
-    // screen.
-    //
-    // So the seats are spaced by ARC LENGTH along the ellipse instead. Walk
-    // the curve in small steps, total up the real distance travelled, then
-    // place seat k at the point k/n of the way round by distance. Every
-    // neighbouring pair is then exactly the same distance apart, on any
-    // screen shape.
-    //
-    // 720 steps is a tenth of a degree -- far finer than a pixel at these
-    // radii, and a one-off loop per render.
-    // ------------------------------------------------------------------
-    const rx = tableW * (ringR / 100);
-    const ry = tableH * (ringR / 100);
-    const START_ANGLE = Math.PI / 2;           // bottom centre: your own seat
-    const ARC_STEPS = 720;
-    const arc = [0];                            // cumulative distance at each step
-    for (let k = 1; k <= ARC_STEPS; k++) {
-      const t0 = START_ANGLE + ((k - 1) / ARC_STEPS) * 2 * Math.PI;
-      const t1 = START_ANGLE + (k / ARC_STEPS) * 2 * Math.PI;
-      arc.push(arc[k - 1] + Math.hypot(
-        rx * (Math.cos(t1) - Math.cos(t0)),
-        ry * (Math.sin(t1) - Math.sin(t0))
-      ));
-    }
-    const perimeter = arc[ARC_STEPS];
-    // Distance round the ring -> the angle that lands there.
-    function angleAtDistance(d) {
-      if (!(perimeter > 0)) return START_ANGLE;
-      const target = ((d % perimeter) + perimeter) % perimeter;
-      let lo = 0, hi = ARC_STEPS;
-      while (lo < hi) {                         // first step at or past target
-        const mid = (lo + hi) >> 1;
-        if (arc[mid] < target) lo = mid + 1; else hi = mid;
-      }
-      const i = Math.max(1, lo);
-      const span = arc[i] - arc[i - 1];
-      const frac = span > 0 ? (target - arc[i - 1]) / span : 0;
-      return START_ANGLE + ((i - 1 + frac) / ARC_STEPS) * 2 * Math.PI;
-    }
-    const seatAngles = [];
-    for (let k = 0; k < n; k++) seatAngles.push(angleAtDistance((k / n) * perimeter));
-
-    // Where every seat centre will be, in real pixels.
-    const centres = seatAngles.map((a) => ({
-      x: tableW * 0.5 + rx * Math.cos(a),
-      y: tableH * 0.5 + ry * Math.sin(a),
-    }));
-    // The tightest neighbour pair decides the size for everyone -- seats must
-    // stay uniform or the table looks broken rather than responsive.
-    let minGap = Infinity;
-    for (let k = 0; k < n; k++) {
-      const a = centres[k], b = centres[(k + 1) % n];
-      minGap = Math.min(minGap, Math.hypot(a.x - b.x, a.y - b.y));
-    }
-    if (!isFinite(minGap) || n < 2) minGap = tableW;
-
-    // 0.92 leaves a hair of breathing room so neighbours never touch.
-    // The 54px floor is readability: below that the name is unreadable and a
-    // slightly cramped table beats an illegible one.
-    // 30% of the table (was 26%) since Oct 2026: the name needs the room --
-    // at 26% a 393px phone gave an 82px chair and three or four letters of
-    // the name. The side chairs still clear the open card and joker at every
-    // width measured (320-430px): the centre pair is sized from the table too.
-    // Smaller since Oct 2026 (was 15.5% of the table, up to 58px): at that
-    // size the open card and the joker filled the middle of the felt, and the
-    // live commentary under them had no clean room of its own.
-    const centreCardW = Math.round(Math.max(32, Math.min(48, tableW * 0.125)));
-    // 14px at least: on a small table the "Open Card" label runs a little past
-    // its card, and this is the room it runs into before it meets "Joker".
-    const centreGap = Math.round(Math.max(14, Math.min(18, tableW * 0.05)));
-    // ...but never so wide that a chair at the side reaches the open card or
-    // the joker: on a small table (a short phone, or the +2 banner taking
-    // height) the side chairs sit right beside them.
-    const sideRoom = tableW / 2 - (2 * centreCardW + centreGap) / 2 - 6;
-    const wantW = Math.min(SEAT_WIDTH_PX, tableW * 0.30, Math.max(0, sideRoom));
-    // The floor drops a little on a very crowded table. At ten players on a
-    // 320px phone the seat hits the readability floor and cannot shrink
-    // further, leaving neighbours a pixel into each other -- invisible, but it
-    // means the guarantee is not actually a guarantee. Two pixels of floor buys
-    // it back, and nothing below nine players ever reaches down here.
-    const floorW = n >= 9 ? 52 : 54;
-    const seatW = Math.round(Math.max(floorW, Math.min(wantW, minGap * 0.90)));
-    // Everything inside the seat scales with it, so the chip gets shorter as
-    // well as narrower -- height was the axis that actually overflowed.
-    const seatScale = Math.max(0.68, Math.min(1, seatW / SEAT_WIDTH_PX));
-    oval.style.setProperty('--seat-scale', String(seatScale.toFixed(3)));
-
-    // Shedding detail beats shrinking type.
-    //
-    // Measured on a 372x230 table, which is what a short phone actually gives
-    // us: at 8 players the chairs overlapped by 30px. Scaling alone brought
-    // that to 11px -- better, still touching. Dropping the "Last:" discard
-    // strip takes the chip from ~100px tall to ~70px and the overlap to ZERO
-    // at every player count up to ten.
-    //
-    // So it is dropped only when it has to be. The strip is real information
-    // (what each player last threw), so a four-player table keeps it; a busy
-    // one trades it for chairs you can actually read.
-    //
-    // Driven by the measured vertical gap rather than a hardcoded player
-    // count, so it does the right thing on any screen -- which is the other
-    // half of the complaint: the same table looking different device to
-    // device.
-    let minVGap = Infinity;
-    for (let k = 0; k < n; k++) {
-      const a = centres[k], b = centres[(k + 1) % n];
-      const dy = Math.abs(a.y - b.y);
-      if (Math.abs(a.x - b.x) < seatW) minVGap = Math.min(minVGap, dy);
-    }
-    // Chip height at full size, measured against the current structure: the
-    // name+score row (~14px), the hand/discards row (~30px, the 18px fan plus
-    // its count below it) and 10px of padding. Dropped from 76 when the
-    // discards moved off their own line and into the hand row -- leaving it at
-    // 76 would have put normal tables into compact mode for height they no
-    // longer use.
-    // Name (~14px), "12 cards · 40" (~12px), "threw 7" (~14px) and 10px of
-    // padding -- the fan of card backs and the mini card that used to make
-    // this 58 are gone (Oct 2026).
-    const CHIP_FULL_H = 52 * seatScale;
-    const compact = isFinite(minVGap) && minVGap < CHIP_FULL_H;
-    oval.classList.toggle('compact-seats', compact);
-    // Six or more chairs and the reveal panel has to go on a diet -- see
-    // .compact-reveal in style.css. Driven by the player count rather than a
-    // measured gap because the panel only exists for a few seconds a round:
-    // the layout must be decided before it is drawn, not after it overlaps.
-    oval.classList.toggle('compact-reveal', n >= 6);
-    // Nine and ten need one more notch -- the compact tier alone still left
-    // them 16px into each other. See .tight-reveal in style.css.
-    oval.classList.toggle('tight-reveal', n >= 9);
-    oval.style.setProperty('--table-w', px(tableW));
-    oval.style.setProperty('--seat-w', px(seatW));
-    oval.style.setProperty('--centre-card-w', px(centreCardW));
-    oval.style.setProperty('--centre-gap', px(centreGap));
-
-    seatOrder.forEach((p, i) => {
-      // Same arc-length angles the gap measurement above was based on -- these
-      // two used to compute the angle independently, which is the kind of
-      // duplicate that drifts the moment one of them is touched.
-      const angle = seatAngles[i];
-      const left = 50 + ringR * Math.cos(angle);
-      const top = 50 + ringR * Math.sin(angle);
-
-      const seatEl = document.createElement('div');
-      seatEl.className = 'seat';
-      seatEl.dataset.playerId = p.playerId;
-      if (game && !game.roundOver && game.currentPlayer === p.playerId) seatEl.classList.add('active');
-      if (game && game.eliminated && game.eliminated.includes(p.playerId)) seatEl.classList.add('eliminated');
-      if (game && game.quit && game.quit.includes(p.playerId)) seatEl.classList.add('quit');
-      if (p.playerId === myPlayerId && myTurnPulseActive) seatEl.classList.add('my-turn-pulse');
-      // The caller's chair, while their LEAST COUNT call is on screen.
-      if (declareSpotlightId && declareSpotlightId === p.playerId) seatEl.classList.add('declaring');
-      // Keep the seat fully on screen. The ring puts side seats at 7% and
-      // 93% of the table and, at 96px wide centred on that point, they hung
-      // 5px off each edge on a 375px phone -- measured on the live build,
-      // both sides, every game. Clamping against the table's real width
-      // fixes it at any screen size instead of nudging the radius by feel.
-      // Clamp against the seat's ACTUAL rendered width (which now shrinks
-      // with the table), not the 96px maximum -- otherwise a 71px seat on a
-      // narrow table gets pushed 12px further inboard than it needs to be,
-      // straight back into the centre cards this change exists to clear.
-      const halfSeatPct = (seatW / 2) / tableW * 100;
-      seatEl.style.left = Math.min(100 - halfSeatPct, Math.max(halfSeatPct, left)) + '%';
-      seatEl.style.top = top + '%';
-      // ------------------------------------------------------------------
-      // Seats are centred on their point, so ANY extra content makes them
-      // grow upward as much as downward. The seat at the top of the table
-      // now carries four rows -- name, card fan, points, last discard --
-      // and its top edge reaches into the round number in the header.
-      //
-      // This was first hit by the round-end reveal panel and fixed only for
-      // that case, which was too narrow: the seat is already tall enough
-      // during ordinary play to collide. Anchoring the top seat by its TOP
-      // edge is unconditional, so it can never grow toward the header in
-      // any phase of the game.
-      //
-      // Only the top band is anchored. Bottom seats grow toward the hand
-      // tray, which has clearance during play and is handled separately
-      // while a reveal panel is open.
-      // ------------------------------------------------------------------
-      if (top < 30) seatEl.classList.add('anchor-top');
-
-      // Tap a seat to report/mute that player -- never wired for yourself
-      // or for bots (nothing to report/mute there). Edge seats get an
-      // align class so the popover hugs the same edge it would otherwise
-      // spill past, same idea as the discard-history/GIF-bubble alignment.
-      if (!dealing && p.playerId !== myPlayerId && !p.isBot) {
-        seatEl.classList.add('tappable');
-        const alignClass = 'align-' + getSeatHAlign(seatEl);
-        seatEl.dataset.popoverAlign = alignClass;
-        seatEl.onclick = (e) => {
-          e.stopPropagation();
-          togglePlayerActionPopover(seatEl, p.playerId, p.name, alignClass);
-        };
-      } else if (!dealing && p.playerId === myPlayerId) {
-        // Tapping your own seat renames you. Always available mid-game, and
-        // never racing the round-result countdown.
-        seatEl.classList.add('tappable');
-        seatEl.onclick = (e) => { e.stopPropagation(); openNameDialog(); };
-      }
-
-      const count = game && game.handCounts ? game.handCounts[p.playerId] : (dealing ? 0 : undefined);
-      const score = game && game.scores ? (game.scores[p.playerId] ?? 0) : 0;
-      const isMe = p.playerId === myPlayerId;
-      if (isMe) seatEl.classList.add('own-seat');
-
-      // ------------------------------------------------------------------
-      // The chair (Oct 2026, step 2 of the game-screen redesign).
-      //
-      //   line 1:  Name            the whole line, so the name is readable
-      //   line 2:  12 cards · 40   the count and their score
-      //   line 3:  threw 7♦        the last card they threw, SAID as such
-      //
-      // Line 1 used to share its width with a 15px colour disc carrying the
-      // player's initial, a dash and the score, so the name got three or four
-      // letters ("Sre...") and players could not tell who was who. The disc
-      // existed only to tell chairs apart while names were cut off, so it's
-      // gone; the score moved down to sit with the card count; and the chair
-      // is a little wider (see wantW above). The fan of three card backs,
-      // which needed its own count underneath it, is gone too: "12 cards"
-      // says the same thing in one line.
-      //
-      // YOUR chair stays, so the table still has you sitting at it, but it
-      // carries your name only: your score and card count are on the line
-      // above your cards, where you look for them. While dealing it still
-      // counts up like everyone else's.
-      // ------------------------------------------------------------------
-      const chipEl = document.createElement('div');
-      chipEl.className = 'seat-chip';
-
-      const idRow = document.createElement('div');
-      idRow.className = 'seat-id';
-      const nameEl = document.createElement('div');
-      nameEl.className = 'seat-name';
-      nameEl.textContent = displayName(p.name);
-      idRow.appendChild(nameEl);
-      // Rating (Nov 2026), chess.com style: "Ravi (455)". The name gives way
-      // first (it ends in "..." but never below six letters -- see
-      // fitSeatName), and on a chair too narrow even for that
-      // the number moves under the name rather than being cut off.
-      // A bot shows its fixed one (Nov 2026); nothing for someone whose
-      // rating hasn't loaded or who has no account.
-      if (typeof p.rating === 'number') {
-        const rEl = document.createElement('span');
-        rEl.className = 'seat-rating';
-        rEl.innerHTML = ratingBracketHtml(p.rating);
-        rEl.title = 'Rating ' + Math.round(p.rating);
-        idRow.appendChild(rEl);
-        chipEl.classList.add('has-rating');
-      }
-      chipEl.appendChild(idRow);
-
-      const statsRow = document.createElement('div');
-      statsRow.className = 'seat-stats';
-      // Line 2. The count: on every chair while dealing (animateDealing ticks
-      // it up), on everyone's but yours in play, on nobody's during the
-      // reveal (the reveal panel shows the actual cards). The score: in play
-      // only, never on yours (it's on the line above your cards).
-      const line2 = document.createElement('div');
-      line2.className = 'seat-line2';
-      const metaEl = document.createElement('span');
-      metaEl.className = 'seat-meta';
-      metaEl.textContent = (revealPhaseActive || count === undefined || (isMe && !dealing))
-        ? '' : cardsLabel(count);
-      line2.appendChild(metaEl);
-      const scoreEl = document.createElement('span');
-      scoreEl.className = 'seat-score';
-      scoreEl.textContent = (dealing || revealPhaseActive || isMe) ? '' : String(score);
-      line2.appendChild(scoreEl);
-      statsRow.appendChild(line2);
-
-      // The last card they THREW -- in words. It used to be a bare mini card,
-      // and a card on its own at a chair reads just as easily as one they
-      // picked up; a player asked exactly that. "threw" settles it, and the
-      // card itself is a small white face in its own colours, so it still
-      // looks like a card. Only the latest: two side by side in a chair this
-      // size were hard to read, and the latest is the one that says
-      // something about their hand. (A crowded table drops the word -- see
-      // .compact-seats in style.css.)
-      const history = (!dealing && !isMe && game && game.discardHistory) ? game.discardHistory[p.playerId] : null;
-      if (history && history.length > 0 && !revealPhaseActive) {
-        const last = history[history.length - 1];   // oldest first, so the last is the latest
-        const threwEl = document.createElement('div');
-        threwEl.className = 'seat-threw';
-        const label = document.createElement('span');
-        label.className = 'seat-threw-label';
-        label.textContent = 'threw';
-        const face = document.createElement('span');
-        face.className = 'seat-threw-card ' + (last.rank === 'JOKER' || RED_SUITS.has(last.suit) ? 'red' : 'black')
-          + (last.rank === '2' ? ' trump' : '');
-        face.textContent = last.rank === 'JOKER' ? 'Joker' : last.rank + (SUIT_SYMBOL[last.suit] || '');
-        threwEl.appendChild(label);
-        threwEl.appendChild(face);
-        statsRow.appendChild(threwEl);
-      }
-      // Your chair in play has nothing on this line -- leave it out rather
-      // than reserve an empty row.
-      if (metaEl.textContent || scoreEl.textContent || statsRow.children.length > 1) chipEl.appendChild(statsRow);
-
-      // Missed three turns in a row (Nov 2026): a bot plays this seat until
-      // they come back -- said on the chair, for everyone at the table.
-      if (p.away && !p.isBot && !dealing) {
-        seatEl.classList.add('away');
-        const awayEl = document.createElement('div');
-        awayEl.className = 'seat-away';
-        awayEl.textContent = isMe ? 'bot playing for you' : 'bot playing';
-        awayEl.style.cssText = 'font-size:10px;line-height:1.3;font-weight:700;color:#f2c14e;letter-spacing:.02em;';
-        chipEl.appendChild(awayEl);
-      }
-
-      seatEl.innerHTML = '';
-      seatEl.appendChild(chipEl);
-
-      // ------------------------------------------------------------------
-      // Round-end reveal, MERGED INTO THE SEAT (Sept 2026).
-      //
-      // This used to be a separate absolutely-positioned box that dropped
-      // BELOW the seat, flipping above only when the seat sat low on the
-      // table. Two directions, six seats: at six players that produced two
-      // panel-on-panel and four panel-on-seat overlaps, and because the box
-      // carried no name, a panel that drifted onto a neighbour became
-      // genuinely unreadable -- you could not tell whose score it was.
-      //
-      // Appending INSIDE the chip fixes that by construction. The panel
-      // inherits the seat's avatar and name, so attribution is never in
-      // doubt; and it consumes no horizontal space at all, so it cannot
-      // collide sideways with the neighbouring seat.
-      //
-      // Your own seat is included now. It was skipped on the grounds that
-      // the hand tray already shows your cards -- but that left you as the
-      // only player with no round score on the table, which is precisely
-      // the number you most want to see.
-      // ------------------------------------------------------------------
-      if (revealPhaseActive) {
-        const revealBox = buildSeatRevealBox(game, p.playerId, top);
-        if (revealBox) {
-          chipEl.appendChild(revealBox);
-          // Lifts this seat above its neighbours. With panels now growing
-          // downward inside the chip, a tall hand at one seat can reach the
-          // seat below it at 8+ players; whoever is revealing wins the
-          // stacking order rather than being half-covered.
-          seatEl.classList.add('revealing');
-          // Seats are centred on their point (translate -50%,-50%), so a
-          // taller chip grows UPWARD as much as downward. For the seat at
-          // the top of the table that pushed its edge into the Round
-          // number in the header. Anchoring by edge instead means a panel
-          // only ever grows toward the middle of the screen, never off it.
-          // Top seats are already anchored unconditionally above; only the
-          // bottom band needs flipping while a panel is open, so a tall
-          // hand doesn't push the panel down into the hand tray.
-          if (top > 70) seatEl.classList.add('grow-up');
-        }
-      }
-
-      const reaction = seatReactions[p.playerId];
-      if (reaction) {
-        const elapsed = Date.now() - reaction.startedAt;
-        if (elapsed < REACTION_TOTAL_MS) {
-          const bubble = document.createElement('div');
-          bubble.className = 'seat-emoji-bubble';
-          bubble.textContent = reaction.emoji;
-          bubble.style.animationDelay = (-elapsed) + 'ms';
-          seatEl.appendChild(bubble);
-        } else {
-          delete seatReactions[p.playerId];
-        }
-      }
-
-      const chatBubble = chatBubbles[p.playerId];
-      if (chatBubble) {
-        const elapsed = Date.now() - chatBubble.startedAt;
-        if (elapsed < chatBubble.durationMs) {
-          const bubbleEl = document.createElement('div');
-          // Seats in the top half of the table show the bubble below
-          // themselves instead of above, so it never gets clipped by the
-          // screen's overflow:hidden near the top edge on mobile.
-          bubbleEl.className = 'seat-chat-bubble ' + (top < 50 ? 'below' : 'above');
-          if (chatBubble.variant) bubbleEl.classList.add(chatBubble.variant);
-          if (chatBubble.type === 'gif' && chatBubble.gifUrl) {
-            // GIFs render as a small thumbnail instead of a full-size image --
-            // at full chat-bubble width a GIF was tall enough to cover the
-            // joker/open card in the middle of the table. Same edge-aware
-            // left/right hugging as the discard history and old final-hand
-            // reveal, so it never runs off-screen on side seats either.
-            bubbleEl.classList.add('gif-thumb', 'align-' + getSeatHAlign(seatEl));
-            const img = document.createElement('img');
-            img.src = chatBubble.gifUrl;
-            img.className = 'seat-chat-gif';
-            img.alt = 'GIF';
-            bubbleEl.appendChild(img);
-            const tag = document.createElement('span');
-            tag.className = 'seat-chat-gif-tag';
-            tag.textContent = 'GIF';
-            bubbleEl.appendChild(tag);
-          } else {
-            bubbleEl.textContent = chatBubble.text;
-          }
-          // Same negative-animation-delay trick used for the emoji bubble
-          // above: renderOvalTable rebuilds every seat from scratch on every
-          // game update, which was restarting the little "pop in" animation
-          // each time and making the bubble look like it was blinking. A
-          // negative delay equal to how long it's already been showing makes
-          // the animation render as already-finished on every re-render
-          // after the first, instead of replaying from scratch.
-          bubbleEl.style.animationDelay = (-elapsed) + 'ms';
-          seatEl.appendChild(bubbleEl);
-        } else {
-          delete chatBubbles[p.playerId];
-        }
-      }
-
-      // Into the fragment, NOT into the live table. Nothing the player can
-      // see changes until every seat has been built successfully.
-      seatFrag.appendChild(seatEl);
-    });
-
-    // ------------------------------------------------------------------
-    // THE SWAP. This is the whole point of the fragment above.
-    //
-    // Old seats are removed and new ones attached in the same tick, after
-    // all the work that could fail has already succeeded. Three failure
-    // modes stop mattering as a result:
-    //
-    //   - latestRoom momentarily falsy  -> early return, old table stays
-    //   - zero seats resolved           -> early return, old table stays
-    //   - anything above throws         -> we never reach here, old table stays
-    //
-    // Previously the removal was the FIRST statement in this function, so
-    // all three left an empty oval with the open card still updating on
-    // top of it -- the 25 Sept video. A table one state stale is vastly
-    // better than no table.
-    //
-    // NOTE: removing here rather than at the top is also what stops seats
-    // accumulating. An earlier half-finished version of this fix deleted
-    // the removal without wiring up the fragment, which silently appended
-    // a fresh set of seats on top of the old ones on EVERY state push.
-    // ------------------------------------------------------------------
-    oval.querySelectorAll('.seat').forEach((el) => el.remove());
-    oval.appendChild(seatFrag);
-    // Names beside a rating get their six-letter minimum now, on the live
-    // table: inside the fragment there is nothing to measure.
-    oval.querySelectorAll('.seat-id').forEach((row) => {
-      const nm = row.querySelector('.seat-name');
-      if (nm && row.querySelector('.seat-rating')) fitSeatName(nm);
-    });
-    // The commentary lane fits itself between the chairs just drawn.
-    try { layoutCommentaryLane(); } catch (e) { /* layout only */ }
-
-    reopenPlayerActionPopoverIfNeeded(oval);
-  }
-
-  // ------------------------------------------------------------------
-  // Re-seat when the table changes size (Oct 2026). The chairs and the centre
-  // cards are sized from the table's measured size at the moment they're
-  // drawn, but the table can change size between state pushes: the +2 chain
-  // banner, the chain flash and the leave line all take height from it as
-  // they come and go. Without this, chairs sized for a bigger table sat on top
-  // of the open card until the next move redrew them.
-  // ------------------------------------------------------------------
-  (function watchTableSize() {
-    const oval = document.getElementById('oval-table');
-    if (!oval || typeof ResizeObserver === 'undefined') return;
-    let lastW = 0, lastH = 0, queued = false;
-    new ResizeObserver((entries) => {
-      const r = entries[0] && entries[0].contentRect;
-      if (!r) return;
-      if (Math.abs(r.width - lastW) < 2 && Math.abs(r.height - lastH) < 2) return;
-      lastW = r.width; lastH = r.height;
-      if (queued) return;
-      queued = true;
-      requestAnimationFrame(() => {
-        queued = false;
-        // Not mid-deal: those chairs belong to the deal animation.
-        if (startSeqActive || !latestGame) return;
-        const scr = document.getElementById('screen-game');
-        if (!scr || !scr.classList.contains('active')) return;
-        try { renderOvalTable(latestGame); } catch (e) { /* the next state push redraws anyway */ }
-      });
-    }).observe(oval);
-  })();
-
-  socket.on('seat_reaction', ({ type, affectedPlayerId }) => {
-    if (type === 'timeout') commentaryOnTimeout(affectedPlayerId);
-    const rule = SEAT_REACTION_RULES[type];
-    if (!rule || !latestRoom) return;
-    if (rule.self) triggerSeatReaction(affectedPlayerId, rule.self);
-    if (rule.others) {
-      latestRoom.players.forEach((p) => {
-        if (p.playerId !== affectedPlayerId) triggerSeatReaction(p.playerId, rule.others);
-      });
-    }
-  });
-
-  // ---------------- turn strip (Oct 2026) ----------------
-  // "Your turn -- pick a card" / "Mani's turn", with the seconds beside it.
-  // Before this the only signal was a gold glow on one chair and a bare
-  // "15s" in the top bar that never said whose fifteen seconds they were.
-  // The words are set here on every render; the seconds by the timer tick.
-  // Bots get no countdown: their "turn time" is a think-delay the server
-  // picks, and a clock running down on a bot reads as something wrong.
-  let turnStripShowsSeconds = false;
-  function renderTurnStrip(game) {
-    const strip = document.getElementById('turn-strip');
-    if (!strip) return;
-    const show = !!(game && !game.roundOver && game.currentPlayer && !revealPhaseActive);
-    strip.classList.toggle('hidden', !show);
-    if (!show) { turnStripShowsSeconds = false; return; }
-    const mine = game.currentPlayer === myPlayerId;
-    const chain = game.chainCount > 0;
-    const who = mine ? 'Your turn' : playerName(game.currentPlayer) + '\u2019s turn';
-    const hint = mine ? (chain ? ' \u2014 play a 2 or take the penalty' : ' \u2014 pick a card') : '';
-    document.getElementById('turn-strip-text').textContent = who + hint;
-    strip.classList.toggle('mine', mine);
-    // A commentary line docked over this strip gives way the moment it
-    // becomes your turn (see cmDocked).
-    if (mine && cmDocked && cmShowing) { try { cmEndLine(); } catch (e) { /* cosmetic */ } }
-    const cur = latestRoom && (latestRoom.players || []).find((p) => p && p.playerId === game.currentPlayer);
-    turnStripShowsSeconds = !(cur && cur.isBot);
-    // A running clock: the premium game screen (gs2) draws it as a bar that
-    // drains along the strip's bottom edge, from --turn-pct (set by the tick).
-    strip.classList.toggle('timed', !!game.turnDeadline && turnStripShowsSeconds);
-    if (!game.turnDeadline || !turnStripShowsSeconds) {
-      document.getElementById('turn-strip-time').textContent = '';
-      strip.classList.remove('low');
-    }
-  }
-
-  // ---------------- turn timer ----------------
-  let turnTimerSpanFor = null;
-  let turnTimerSpan = 1;
-  function updateTurnTimerDisplay(deadline) {
-    const el = document.getElementById('turn-timer');
-    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
-    if (!deadline) {
-      el.classList.add('hidden');
-      const stripTime = document.getElementById('turn-strip-time');
-      if (stripTime) stripTime.textContent = '';
-      return;
-    }
-
-    // How long this turn was given, measured rather than hardcoded: the server
-    // uses TURN_SECONDS for people and a shorter, per-character delay for bots,
-    // and a ring drawn against the wrong span would drain at the wrong rate.
-    // Measured once PER DEADLINE (Nov 2026). renderGame calls this on every
-    // update -- someone's reaction, a chat line, a room change -- and measuring
-    // again each time made the bar jump back to full every few seconds.
-    if (deadline !== turnTimerSpanFor) {
-      turnTimerSpanFor = deadline;
-      turnTimerSpan = Math.max(1, deadline - Date.now());
-    }
-    const span = turnTimerSpan;
-    function tick() {
-      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-      // The ring on the active chair. One style write per tick on one element.
-      const activeChip = document.querySelector('.seat.active .seat-chip');
-      if (activeChip) {
-        const pct = Math.max(0, Math.min(100, ((deadline - Date.now()) / span) * 100));
-        activeChip.style.setProperty('--turn-pct', pct.toFixed(1));
-        // Red for the last three seconds -- the same warning .low already
-        // gives the global timer, moved to where the eye actually is.
-        activeChip.style.setProperty('--turn-ring', remaining <= 3 ? '#e4564f' : 'var(--gold-bright)');
-      }
-      document.getElementById('timer-seconds').textContent = remaining;
-      el.classList.remove('hidden');
-      el.classList.toggle('low', remaining <= 10);
-      // The same seconds in the turn strip, next to whose turn it is.
-      const strip = document.getElementById('turn-strip');
-      const stripTime = document.getElementById('turn-strip-time');
-      const mineNow = !!(latestGame && !latestGame.roundOver && latestGame.currentPlayer === myPlayerId);
-      if (stripTime) stripTime.textContent = turnStripShowsSeconds ? remaining + 's' : '';
-      if (strip) strip.classList.toggle('low', turnStripShowsSeconds && mineNow && remaining <= 5);
-      // The same share of the turn left, for the strip's draining bar.
-      if (strip) strip.style.setProperty('--turn-pct', Math.max(0, Math.min(100, ((deadline - Date.now()) / span) * 100)).toFixed(1));
-      // The second of the two things that vibrate. Guarded to YOUR turn --
-      // buzzing while a bot's clock runs down would mean nothing, and this
-      // tick runs for every player's timer, not just yours.
-      const isMyTurn = !!(latestGame && !latestGame.roundOver
-        && latestGame.currentPlayer === myPlayerId);
-      maybeBuzzTurnTimer(remaining, isMyTurn);
-    }
-    tick();
-    timerInterval = setInterval(tick, 250);
-  }
-
-  // Renders one row of grouped-card tiles (used for both the normal hand
-  // row and the separate joker/wild row) into the given container.
-  function renderHandTiles(container, groups, isMyTurn, game, duringChain) {
-    container.innerHTML = '';
-    const wildRank = game.roundJokerRank;
-    const hintCardIds = (currentHint && currentHint.type !== 'declare') ? currentHint.cardIds : null;
-    groups.forEach((g) => {
-      const rep = g.cards[0];
-      // Printed Joker or this round's wild rank -- both score zero, and the
-      // engine now refuses to discard either (see playTurn). Blocking the
-      // tap here means a player never triggers that error in the first
-      // place: the rule shows up as a card you can't pick, not a telling-off
-      // after you've picked it.
-      const isJoker = rep.rank === 'JOKER' || (wildRank && rep.rank === wildRank);
-      // The engine's one exception: a hand holding nothing BUT jokers has to
-      // be able to play something, or the turn can never end.
-      const hasNonJoker = (game.yourHand || []).some(
-        (c) => c.rank !== 'JOKER' && !(wildRank && c.rank === wildRank)
-      );
-      let selectable = isMyTurn && !game.roundOver && !(isJoker && hasNonJoker);
-      if (duringChain) selectable = selectable && g.rank === '2';
-      const allSelected = g.cards.every((c) => selectedIds.has(c.id));
-      const isWild = rep.rank !== 'JOKER' && wildRank && rep.rank === wildRank;
-      const hinted = !!(hintCardIds && hintCardIds.length && g.cards.some((c) => hintCardIds.includes(c.id)));
-      const el = cardEl(rep, { selectable, selected: allSelected, wild: isWild, hinted });
-      if (isJoker) {
-        // Marks BOTH kinds, so the printed Joker and the wild rank read as
-        // one category. Previously only the wild rank got a gold border and
-        // the printed Joker looked like any other card.
-        el.classList.add('is-joker');
-        el.title = 'Worth 0 — jokers can’t be discarded';
-      }
-      // Several of one rank: a small pile with a quiet "2x" (Oct 2026). The
-      // red "x2" badge it replaces read as a warning -- and red now belongs
-      // to the +2 card.
-      if (g.cards.length > 1) {
-        el.classList.add('stacked', g.cards.length > 2 ? 'stacked-3' : 'stacked-2');
-        const badge = document.createElement('span');
-        badge.className = 'card-count-badge';
-        badge.textContent = g.cards.length + '\u00d7';
-        el.appendChild(badge);
-      }
-      // The +2 card's tag -- and while a +2 chain is aimed at you, a glow on
-      // your way out of it, with everything you can't play stepping back.
-      // (2s are never grouped -- see groupHand -- so a tag never meets a pile.)
-      const chainOnMe = duringChain && isMyTurn && !game.roundOver;
-      if (rep.rank === '2') {
-        const tag = document.createElement('span');
-        tag.className = 'trump-tag';
-        tag.textContent = '+2';
-        el.appendChild(tag);
-        if (chainOnMe) el.classList.add('trump-ready');
-      } else if (chainOnMe) {
-        el.classList.add('chain-dim');
-      }
-      // A card you just drew is marked NEW for a moment (see showDrawReveal).
-      // The negative delay keeps the fade continuous across re-renders --
-      // every state push rebuilds these tiles, and without it the mark would
-      // restart from full strength each time.
-      const drawnAgo = Date.now() - recentDrawAt;
-      if (recentDrawIds && recentDrawIds.size && drawnAgo < DRAW_NEW_MS && g.cards.some((c) => recentDrawIds.has(c.id))) {
-        el.classList.add('just-drawn');
-        el.style.animationDelay = -drawnAgo + 'ms';
-        const tag = document.createElement('span');
-        tag.className = 'new-tag';
-        tag.textContent = 'NEW';
-        tag.style.animationDelay = -drawnAgo + 'ms';
-        el.appendChild(tag);
-      }
-      if (selectable) {
-        el.onclick = duringChain ? () => submitChainTwo(rep) : () => toggleSelectGroup(g);
-      }
-      container.appendChild(el);
-    });
-  }
-
-  // ---------------- main game rendering ----------------
-  function renderGame(game) {
-    // The host's "Next Round" click only hides the round-result popup on
-    // their own screen. Everyone else keeps seeing it (blocking the table
-    // underneath, which HAS actually updated) until they manually refresh.
-    // Once a live round is confirmed in progress, force it closed for everyone.
-    if (!game.roundOver) {
-      document.getElementById('overlay-round-result').classList.add('hidden');
-      // Same treatment for the start-sequence chrome.
-      //
-      // THE BUG THIS GATE USED TO CAUSE. This block read:
-      //
-      //     if (!startSeqActive) { hide the dealing badge }
-      //
-      // which is exactly backwards for the case it was written to catch. When
-      // a backgrounded WebView freezes this page's timers, the only two
-      // things that ever set startSeqActive back to false are themselves
-      // timer callbacks -- so the flag stays stuck at TRUE, and this guard
-      // then refuses to clean up precisely when cleanup is the whole point.
-      // The catch-all could never fire in the one situation it existed for.
-      //
-      // So the wall clock decides first, and the flag is only consulted
-      // afterwards for the ordinary case. sweepStaleStartUi() also clears
-      // startSeqActive itself, so the check below sees the truth.
-      sweepStaleOverlays('game_state');
-      if (!startSeqActive) {
-        document.getElementById('deal-phase-badge').classList.add('hidden');
-      }
-    }
-
-    // A leave that was queued mid-round (see btn-leave-game-confirm) fires
-    // the moment the round is over, which is the first point the server will
-    // accept it.
-    // ...or sooner, if this state push is the one that knocked them out:
-    // an eliminated player holds no cards, so the server will take the leave
-    // right now and there's nothing left to wait for.
-    const nowSpectating =
-      myPlayerId &&
-      (game.eliminated || []).concat(game.quit || []).indexOf(myPlayerId) !== -1;
-    if (leaveAfterRound && (game.roundOver || game.gameOver || nowSpectating)) {
-      setLeavePending(false);   // clears the flag AND the button's pending look
-      leaveRoom();
-      return;
-    }
-
-    const isMyTurn = game.currentPlayer === myPlayerId;
-    const currentName = playerName(game.currentPlayer);
-    // Only on the TRANSITION to your turn, so a chat you deliberately
-    // reopened mid-turn isn't slammed shut on every game_state push.
-    if (isMyTurn && !game.roundOver && prevCurrentPlayerForChat !== myPlayerId) closeChatForMyTurn();
-    prevCurrentPlayerForChat = game.currentPlayer;
-
-    // Round number went into the LEFT of the game bar, which was empty --
-    // .game-top was justify-content:flex-end, so everything sat on the right.
-    // It was pulled out of this bar once before for crowding it; this time it
-    // occupies space nothing else wanted.
-    const roundEl = document.getElementById('game-round');
-    if (roundEl) roundEl.textContent = game.roundNumber ? 'Round ' + game.roundNumber : '';
-
-    // The turn strip first, so the timer tick below can write its seconds
-    // into a strip that already says whose turn it is.
-    renderTurnStrip(game);
-    updateTurnTimerDisplay(game.roundOver ? null : game.turnDeadline);
-    // (Shown BEFORE the table is drawn: the banner takes height from the
-    // table, and the chairs are sized from the table's measured size.)
-    // The +2 chain status is now visible to EVERYONE at the table (not just
-    // whoever must respond), so the whole table can follow the drama. Only
-    // the player actually facing the chain gets the "Take Penalty" button.
-    const duringChain = game.chainCount > 0;
-    const chainBanner = document.getElementById('chain-banner');
-    const showChain = duringChain && !game.roundOver;
-    chainBanner.classList.toggle('hidden', !showChain);
-    if (showChain) {
-      const respondingName = isMyTurn ? 'You' : currentName;
-      document.getElementById('chain-banner-text').textContent =
-        `🔥 +2 Chain! ${respondingName} must play a 2 or draw ${game.chainCount * 2} cards`;
-      document.getElementById('penalty-count').textContent = game.chainCount * 2;
-      document.getElementById('btn-take-penalty').classList.toggle('hidden', !isMyTurn);
-    }
-
-    renderOvalTable(game);
-
-    document.getElementById('stock-count').textContent = game.stockCount;
-    const openSlot = document.getElementById('open-card-slot');
-    openSlot.innerHTML = '';
-    // Every state push rebuilds these two cards. While the round-start
-    // turn-over is playing (showStartReveal), give each new element a delay
-    // that picks the animation up where the last one was -- otherwise a
-    // state arriving mid-reveal (the first turn timer starting, say) flips
-    // the cards over a second time.
-    const revealAgo = roundRevealAt ? Date.now() - roundRevealAt : Infinity;
-    const midReveal = revealAgo < 2500;
-    if (game.openCard) {
-      const openEl = cardEl(game.openCard);
-      if (midReveal) openEl.style.animationDelay = (550 - revealAgo) + 'ms';
-      // A 2 on the table carries the same "+2" tag as one in your hand.
-      if (game.openCard.rank === '2') {
-        const tag = document.createElement('span');
-        tag.className = 'trump-tag';
-        tag.textContent = '+2';
-        openEl.appendChild(tag);
-      }
-      openSlot.appendChild(openEl);
-    }
-
-    // Show the round's wild rank as an actual mini card, same treatment as
-    // the Open Card, instead of bare text -- no suit, gold border to mark
-    // it as "worth 0 this round" (matches the wild-card highlight in hand).
-    const jokerSlot = document.getElementById('joker-indicator');
-    jokerSlot.innerHTML = '';
-    const jokerEl = game.roundJokerRank
-      ? cardEl({ rank: game.roundJokerRank, suit: null }, { wild: true })
-      : cardEl({ rank: 'JOKER', suit: null });
-    // Two animations on the joker (turn-over, then glow) -- two delays.
-    if (midReveal) jokerEl.style.animationDelay = (0 - revealAgo) + 'ms, ' + (450 - revealAgo) + 'ms';
-    jokerSlot.appendChild(jokerEl);
-    // What the joker MEANS (Oct 2026): "= 0", written on the joker card
-    // itself under its rank, so the card reads "Q = 0". It used to be a
-    // line hanging under the card ("Every Q = 0"), which crowded the space
-    // below the two cards -- the space the live commentary now uses.
-    const zero = document.createElement('span');
-    zero.className = 'joker-zero';
-    zero.textContent = '= 0';
-    (jokerEl.querySelector('.card-center') || jokerEl).appendChild(zero);
-    const jokerCaption = document.getElementById('joker-caption');
-    if (jokerCaption) jokerCaption.textContent = '';
-
-    const handValue = game.yourHandValue ?? 0;
-    document.getElementById('hand-value').textContent = handValue;
-    // The line above your cards (Oct 2026): SCORE (your total, against the
-    // max score) in the gold box, then HAND (what your cards are worth this
-    // round), which turns green at 5 or less -- when you're allowed to call.
-    // See the markup comment in index.html. The card count sits in the same
-    // box as the value now, so the two read as one thing; #hand-stats stays,
-    // empty, as the place the "You drew…" note appears.
-    const myCardCount = (game.yourHand || []).length;
-    const valuePill = document.getElementById('hand-value-pill');
-    if (valuePill) valuePill.classList.toggle('can-call', myCardCount > 0 && handValue <= 5 && !game.roundOver);
-    const myTotal = game.scores ? (game.scores[myPlayerId] ?? 0) : 0;
-    const scoreEl = document.getElementById('hand-score');
-    if (scoreEl) scoreEl.textContent = String(myTotal);
-    const scoreMaxEl = document.getElementById('hand-score-max');
-    if (scoreMaxEl) scoreMaxEl.textContent = game.eliminationScore ? '/' + game.eliminationScore : '';
-    // Your cards and their worth, together: "12 cards = 69 pts".
-    const handCount = document.getElementById('hand-count');
-    if (handCount) handCount.textContent = myCardCount > 0 ? cardsLabel(myCardCount) : '';
-    const handStats = document.getElementById('hand-stats');
-    if (handStats) handStats.textContent = '';
-    const hand = sortHand(game.yourHand || []);
-    const groups = groupHand(hand);
-
-    // Cards worth 0 this round (actual Jokers, and this round's wild rank)
-    // get pulled into their own private row so you can spot them at a
-    // glance -- opponents never see this breakdown, only your total card count.
-    const wildRank = game.roundJokerRank;
-    const isWildGroup = (g) => g.rank === 'JOKER' || (wildRank && g.rank === wildRank);
-    const jokerGroups = groups.filter(isWildGroup);
-    const normalGroups = groups.filter((g) => !isWildGroup(g));
-
-    // Divider only shows when there's actually a joker/wild group to
-    // separate from the normal cards -- with none, #hand-jokers is empty
-    // and (being display:contents) takes up no space of its own anyway.
-    document.getElementById('hand-divider').classList.toggle('hidden', jokerGroups.length === 0);
-    renderHandTiles(document.getElementById('hand-jokers'), jokerGroups, isMyTurn, game, duringChain);
-    renderHandTiles(document.getElementById('hand-normal'), normalGroups, isMyTurn, game, duringChain);
-
-    const discardBtn = document.getElementById('btn-discard');
-    const declareBtn = document.getElementById('btn-declare');
-    // Declaring is blocked only while a +2 chain is actively pending
-    // (duringChain) -- not just because the open card happens to show a 2.
-    // The chain-banner already explains that case, so no separate hint needed.
-    discardBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && selectedIds.size > 0);
-    declareBtn.disabled = !(isMyTurn && !game.roundOver && !duringChain && handValue <= 5);
-    // "Discard 2": how many cards are picked (Oct 2026). And while the value
-    // is over 5, Least Count! says when it can be used.
-    discardBtn.textContent = selectedIds.size > 0 ? 'Discard ' + selectedIds.size : 'Discard';
-    const declareSub = document.getElementById('declare-sub');
-    if (declareSub) declareSub.classList.toggle('off', handValue <= 5);
-    // Hidden during the reveal too, not merely disabled. They were sitting
-    // there fully coloured while the round result was on screen -- two large
-    // buttons that do nothing, in the spot the eye goes to act, directly
-    // above the ad banner.
-    discardBtn.classList.toggle('hidden', duringChain || revealPhaseActive);
-    declareBtn.classList.toggle('hidden', duringChain || revealPhaseActive);
-
-    // "Help me play" -- only ever shown in a solo game against bots (no
-    // other real player at the table), never in Play Online/Friends. One
-    // button, tap any turn -- no separate on/off toggle needed.
-    const soloBotMode = !!(latestRoom && latestRoom.players.filter((p) => !p.isBot).length === 1);
-
-    // Clear any hint that belonged to a now-past turn (hand size, current
-    // player, chain state, or round changing all mean the old hint is stale).
-    const turnKey = `${game.currentPlayer}|${hand.length}|${game.chainCount}|${game.roundNumber}`;
-    if (turnKey !== hintTurnKey) {
-      currentHint = null;
-      hintTurnKey = turnKey;
-    }
-
-    const showHintBtn = document.getElementById('btn-show-hint');
-    const hintBanner = document.getElementById('hint-banner');
-    const canHint = soloBotMode && isMyTurn && !game.roundOver;
-    showHintBtn.classList.toggle('hidden', !(canHint && !currentHint));
-    if (canHint && !currentHint) {
-      showHintBtn.classList.toggle('attn-pulse', localStorage.getItem(HELP_EVER_USED_KEY) !== '1');
-    }
-    hintBanner.classList.toggle('hidden', !(canHint && currentHint));
-    if (canHint && currentHint) {
-      document.getElementById('hint-text').textContent = '💡 ' + currentHint.reason;
-      if (currentHint.type === 'declare') declareBtn.classList.add('hint-suggested');
-    } else {
-      declareBtn.classList.remove('hint-suggested');
-    }
-
-    // Every round, once it's over, show the merged result screen -- medals,
-    // everyone's revealed cards, and the round-score math, all in one place
-    // (see showRoundResult / renderHandRevealRows). On the final round this
-    // same screen appears too (minus the Next Round button); the celebratory
-    // trophy screen only shows once the player taps through it.
-    if (game.roundOver && game.lastRoundResult && game.roundNumber !== window.__lastRoundResultShownFor) {
-      // Marked as shown up front, not inside startRevealPhase -- renderGame
-      // runs again for every game_state push that arrives DURING the reveal
-      // hold, and without this the same round would re-trigger the phase on
-      // each one.
-      window.__lastRoundResultShownFor = game.roundNumber;
-      try {
-        logAnalytics('round_completed', Object.assign({ round: game.roundNumber }, analyticsGameInfo(game)));
-      } catch (e) { /* never let analytics touch the reveal */ }
-      // The call first -- who said LEAST COUNT, then whether it was right
-      // (see announceDeclare) -- then cards face-up at each chair; the
-      // scorecard follows once the player taps or the hold elapses (see
-      // startRevealPhase above).
-      announceDeclare(game, () => startRevealPhase(game));
-    }
-  }
-
-  // --------------------------------------------------------------------
-  // Round-end reveal phase.
-  //
-  // When a round ends the table now holds for a moment with everyone's
-  // remaining cards face-up at their own chair, BEFORE the scorecard
-  // appears. Two reasons this exists:
-  //   - It's how the game is actually played: cards go face-up on the
-  //     table, everyone looks, then you tally. Splitting the reveal from
-  //     the scoring is the natural seam.
-  //   - It lets the scorecard drop its card rows entirely, which is what
-  //     frees enough height there to fit every player without scrolling.
-  //
-  // Layout notes, all settled by testing against the real table rather
-  // than guessed (see REVEAL_BOX_* constants in style.css):
-  //   - The box hangs directly off its own chair, never dragged toward the
-  //     middle. Hanging it INWARD works at 4 players but collapses at 6 --
-  //     the top, upper-left and upper-right boxes all land in a heap. So
-  //     it sits under the chip instead (over it, for bottom seats), which
-  //     survives a full 6-player table with zero collisions.
-  //   - The open card / joker / stock badge are hidden for the duration:
-  //     the round is over, so they carry no information any more, and
-  //     hiding them is what frees the middle of the oval for the boxes.
-  // --------------------------------------------------------------------
-  const REVEAL_MAX_SEAT_TILES = 5;
-  // 4s, was 8s (Oct 2026): with the LEAST COUNT call now played first (2.4s),
-  // the table sat still for over ten seconds before the scorecard, and
-  // players read it as frozen. Any tap still skips straight to the scores.
-  // server.js counts this in ROUND_REVEAL_HOLD_MS -- change them together.
-  const REVEAL_HOLD_MS = 4000;
-  let revealPhaseActive = false;
-  // Whose turn it was on the previous render -- used to spot the moment the
-  // turn becomes yours (see closeChatForMyTurn).
-  let prevCurrentPlayerForChat = null;
-  // Someone tapped Leave mid-round. The server won't remove a player whose
-  // cards are in play, so the departure waits for the round to end.
-  let leaveAfterRound = false;
-  let revealTimer = null;
-  let revealPendingGame = null;
-
-  // States the outcome in the middle of the table while the cards are on
-  // show. Without this the reveal was all evidence and no verdict -- you
-  // could see everyone's hands but had to work out for yourself who'd won,
-  // and a penalty looked identical to a clean declare.
-  function renderRevealBanner(game) {
-    const el = document.getElementById('reveal-banner');
-    if (!el) return;
-    const r = game && game.lastRoundResult;
-    if (!revealPhaseActive || !r) {
-      el.classList.add('hidden');
-      el.innerHTML = '';
-      return;
-    }
-    const declarer = playerName(r.declaredBy);
-    const myScore = (r.roundScores || {})[myPlayerId];
-    const parts = [];
-    parts.push(`<div class="reveal-banner-title${r.correct ? '' : ' wrong'}">` +
-      (r.correct
-        ? `${escapeHtml(declarer)} got Least Count`
-        : `${escapeHtml(declarer)} called wrong`) +
-      '</div>');
-    if (!r.correct) {
-      const penalty = (r.roundScores || {})[r.declaredBy];
-      if (penalty !== undefined) {
-        parts.push(`<div class="reveal-banner-sub penalty">+${penalty} penalty</div>`);
-      }
-    }
-    // Your own seat gets no reveal box (your cards are already face-up in
-    // the tray), so this is the only place your result appears during the
-    // reveal.
-    if (myScore !== undefined) {
-      parts.push(`<div class="reveal-banner-sub">You ${myScore === 0 ? 'scored 0' : '+' + myScore}</div>`);
-    }
-    // A still table reads as a frozen one -- say that a tap moves on.
-    parts.push('<div class="reveal-banner-tap">Tap for scores</div>');
-    el.innerHTML = parts.join('');
-    el.classList.remove('hidden');
-  }
-
-  // Who came out of this round best. On a correct declare that's the
-  // declarer (they score 0); on a wrong one it's whoever actually held the
-  // lowest hand, which is exactly what makes a bad declare sting. Returns a
-  // Set because ties are possible and both should be marked.
-  function roundWinnerIds(game) {
-    const scores = (game && game.lastRoundResult && game.lastRoundResult.roundScores) || {};
-    const ids = Object.keys(scores);
-    if (!ids.length) return new Set();
-    const best = Math.min(...ids.map((id) => scores[id]));
-    return new Set(ids.filter((id) => scores[id] === best));
-  }
-
-  function buildSeatRevealBox(game, playerId, topPercent) {
-    const hand = (game.finalHands || {})[playerId];
-    if (!hand) return null;
-    const r = game.lastRoundResult;
-    const wildRank = game.roundJokerRank;
-    const roundScore = (r && r.roundScores) ? r.roundScores[playerId] : undefined;
-    const isDeclarer = !!(r && r.declaredBy === playerId);
-    // A wrong declare is the one genuinely punitive outcome in this game, so
-    // it gets its own treatment rather than sharing the declarer's gold.
-    const isPenalty = isDeclarer && r && !r.correct;
-    const isWinner = roundWinnerIds(game).has(playerId);
-
-    const box = document.createElement('div');
-    // No more 'above' flip: the box is now a child of the seat chip and
-    // flows under the name, so there is no edge to run off and no direction
-    // to choose. topPercent is kept in the signature for call-site
-    // compatibility and is deliberately unused.
-    void topPercent;
-    // Severity, so +25 does not look identical to +6. Everything that isn't
-    // a declare shared one gold before this, which made a quarter of the way
-    // to elimination read the same as a scratch.
-    const severity = roundScore === undefined ? ''
-      : roundScore === 0 ? ' sev-none'
-      : roundScore < 10 ? ' sev-low'
-      : roundScore < 25 ? ' sev-mid'
-      : ' sev-high';
-    box.className = 'seat-reveal-box' + severity
-      + (isDeclarer ? ' declared' : '')
-      + (isPenalty ? ' penalty' : '')
-      + (isWinner && !isPenalty ? ' winner' : '');
-
-    const seatCount = (game.turnOrder && game.turnOrder.length)
-      || (latestRoom && latestRoom.players && latestRoom.players.length) || 6;
-    // The separate "DECLARED / LOWEST" line is what tips the panel over the
-    // height budget on a crowded table. Above five players the same fact is
-    // already carried by the panel's border -- gold for the declarer, red for
-    // a wrong call -- so the line is dropped rather than the cards.
-    const revealCompact = seatCount >= 6;
-    if ((isDeclarer || isWinner) && !revealCompact) {
-      const tag = document.createElement('div');
-      tag.className = 'seat-reveal-tag';
-      // Says what HAPPENED, not just that they acted -- "DECLARED" alone
-      // left you reading cards to work out whether it had gone their way.
-      tag.textContent = isPenalty ? 'WRONG CALL'
-        : isDeclarer ? 'DECLARED ✓'
-        : 'LOWEST';
-      box.appendChild(tag);
-    }
-
-    // What the round cost them, then where that leaves them. The bare hand
-    // value used to lead this line, but for everyone except the declarer it
-    // IS the round score -- so the same number was printed twice, with the
-    // running total sitting a few pixels below in the seat chip as a third.
-    // Only the declarer's two numbers ever differed, and their cards are
-    // right underneath to be counted.
-    const valEl = document.createElement('div');
-    valEl.className = 'seat-reveal-value';
-    if (roundScore !== undefined) {
-      const scoreEl = document.createElement('span');
-      scoreEl.className = 'seat-reveal-score' + (roundScore === 0 ? ' zero' : '') + (isPenalty ? ' penalty' : '');
-      scoreEl.textContent = roundScore === 0 ? '+0' : '+' + roundScore;
-      valEl.appendChild(scoreEl);
-    }
-    const runningTotal = game.scores ? game.scores[playerId] : undefined;
-    // In round one the running total IS the round score, so showing both
-    // reintroduces exactly the duplicate this panel was changed to remove --
-    // "+11 › 11". Only show where it leads once that tells you something new.
-    if (runningTotal !== undefined && runningTotal !== roundScore) {
-      const arrow = document.createElement('span');
-      arrow.className = 'seat-reveal-arrow';
-      arrow.textContent = '\u203a';
-      valEl.appendChild(arrow);
-      const totalEl = document.createElement('span');
-      totalEl.className = 'seat-reveal-total';
-      totalEl.textContent = String(runningTotal);
-      valEl.appendChild(totalEl);
-    }
-    box.appendChild(valEl);
-
-    // Same grouping + ordering as the hand tray and the old scorecard rows:
-    // duplicates collapse into one tile with a ×N badge, and the priciest
-    // cards come first so the "+N more" chip only ever hides cheap ones.
-    const grid = document.createElement('div');
-    grid.className = 'seat-reveal-grid';
-    const groups = groupHand(hand)
-      .slice()
-      .sort((a, b) => cardValueClient(b.cards[0], wildRank) - cardValueClient(a.cards[0], wildRank));
-    // ------------------------------------------------------------------
-    // The cap is back, and this is the third position on it -- worth saying
-    // why, because both previous ones were wrong in opposite directions.
-    //
-    //  1. Fixed cap of 5 with a "+N more" chip. Hid cards, and hid them
-    //     hardest for the player holding the most, whose hand is the most
-    //     interesting one at the table.
-    //  2. No cap at all. The panel grows inside the seat, so a 13-card hand
-    //     made a very tall seat that ran into its neighbours -- reported
-    //     from a real game.
-    //
-    // Neither "always 5" nor "unlimited" is right, because the amount of
-    // room a seat has depends entirely on how many seats there are. At 2-4
-    // players there is space to show a whole hand; at 8-10 there is barely
-    // room for one row. So the cap scales with the table.
-    // ------------------------------------------------------------------
-    //  3. A single cap of 5 for every table size, with the rest behind the
-    //     "+N more" chip and the round value carrying what the hidden cards
-    //     cost. Sliding the cap with the player count was an attempt to show
-    //     as much as would fit, but it meant the panel changed shape between
-    //     tables AND still did not fit -- measured at six players the panels
-    //     overlapped by 94px. A fixed five fits one row at every size once
-    //     the grid is allowed to go wider than three columns (see
-    //     .compact-reveal in style.css), so the panel is one row of cards
-    //     plus one line of numbers, always.
-    //
-    //  4. Three. Five tiles plus the "+N more" chip is six items, and six
-    //     across an 84px panel leaves each card 13px wide -- a card you can
-    //     see but not read, which is worse than one you are told is hidden.
-    //     Three tiles plus the chip is four items at ~19px each: the three
-    //     priciest cards legible, and the round value carrying the rest.
-    const maxTiles = 3;
-    const shown = groups.slice(0, maxTiles);
-    shown.forEach((g) => {
-      const el = cardEl(g.cards[0]);
-      el.classList.add('mini');
-      if (g.cards.length > 1) {
-        const badge = document.createElement('span');
-        badge.className = 'card-count-badge';
-        badge.textContent = '×' + g.cards.length;
-        el.appendChild(badge);
-      }
-      grid.appendChild(el);
-    });
-    const shownCount = shown.reduce((sum, g) => sum + g.cards.length, 0);
-    const remaining = hand.length - shownCount;
-    if (remaining > 0) {
-      const more = document.createElement('div');
-      more.className = 'seat-reveal-more';
-      // Reads "+2 more", not just "+2": the same grid already carries ×N
-      // badges meaning "two copies of THIS card", and the two numbers sit
-      // millimetres apart at this size. The word is what keeps "two more
-      // cards you can't see" from being read as another multiplier.
-      more.textContent = '+' + remaining + ' more';
-      grid.appendChild(more);
-    }
-    box.appendChild(grid);
-    return box;
-  }
-
-  // Holds the table for a beat, then hands off to the scorecard. Ends early
-  // on any tap -- players who've already looked shouldn't be made to wait,
-  // and players who want longer than the timeout can't be given it anyway
-  // (the host controls when the next round actually starts).
-  function startRevealPhase(game) {
-    if (revealPhaseActive) return;
-    revealPhaseActive = true;
-    revealPendingGame = game;
-    document.getElementById('screen-game').classList.add('reveal-phase');
-    renderGame(game);
-
-    const finish = () => endRevealPhase();
-    // Diwali: the bomb's longer fuse comes out of this hold (DIWALI PATAKAS).
-    revealTimer = setTimeout(finish, isDiwali()
-      ? Math.max(1200, REVEAL_HOLD_MS - DIWALI_EXTRA_CALL_MS) : REVEAL_HOLD_MS);
-    // Captured on the game screen only, and removed the moment it fires, so
-    // it can never leak into the scorecard's own taps underneath.
-    document.getElementById('screen-game').addEventListener('click', finish, { once: true });
-  }
-
-  function endRevealPhase() {
-    if (!revealPhaseActive) return;
-    revealPhaseActive = false;
-    if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
-    document.getElementById('screen-game').classList.remove('reveal-phase');
-    const game = revealPendingGame || latestGame;
-    revealPendingGame = null;
-    if (game) {
-      renderGame(game);
-      showRoundResult(game);
-    }
-  }
-
-  // --------------------------------------------------------------------
-  // The LEAST COUNT call (Oct 2026).
-  //
-  // The biggest moment in the game -- someone stakes the round on having
-  // the lowest hand -- used to arrive as one plain line of text in the
-  // middle of the table, at the same instant as the cards going face-up.
-  // Players asked how everyone else is even told it happened.
-  //
-  // Now every player sees it in two beats before the cards turn over:
-  //   1. THE CALL  -- "Mani calls" over LEAST COUNT in the wordmark's gold
-  //                   capitals, stamped onto the table; their chair lights up.
-  //   2. THE VERDICT -- "Correct" (with a short burst of confetti) or
-  //                   "Wrong call · +75" (with a shake), and its sound.
-  // Then the existing reveal takes over: hands face-up at each chair, and
-  // the scorecard after it. About 2.3 seconds in all.
-  //
-  // `var` for the same dead-zone reason as the draw marks above:
-  // renderOvalTable reads declareSpotlightId and sits far above this block.
-  // --------------------------------------------------------------------
-  var declareSpotlightId = null;
-  var declareCalloutTimers = [];
-  var DECLARE_CALL_MS = 1100;
-  var DECLARE_VERDICT_MS = 1300;
-
-  function clearDeclareCallout() {
-    (declareCalloutTimers || []).forEach(clearTimeout);
-    declareCalloutTimers = [];
-    declareSpotlightId = null;
-    const el = document.getElementById('declare-callout');
-    if (el) el.classList.add('hidden');
-    // A Diwali bomb still burning belongs to the call that is going.
-    try { DiwaliPatakas.stopBomb(); } catch (e) { /* not built yet, or nothing lit */ }
-    releaseTransient('declare-callout');
-  }
-
-  // A correct call (Oct 2026): LEAST COUNT catches the light, a ring of gold
-  // light opens out from it and a few gold sparkles twinkle round it. This
-  // replaced a burst of confetti, which fired on every correct call -- most
-  // rounds -- and felt cheap that often. Confetti is kept for the end of a
-  // game. The shine and glow are CSS (.declare-callout.correct); this adds
-  // the ring and the sparkles, and takes them away again.
-  const CALL_SPARKS = 9;
-  function celebrateCall(el) {
-    if (!el) return;
-    const old = el.querySelector('.call-flair');
-    if (old) old.remove();
-    const flair = document.createElement('div');
-    flair.className = 'call-flair';
-    flair.setAttribute('aria-hidden', 'true');
-    const ring = document.createElement('span');
-    ring.className = 'cf-ring';
-    flair.appendChild(ring);
-    const SVG_NS = 'http://www.w3.org/2000/svg';
-    for (let i = 0; i < CALL_SPARKS; i++) {
-      // Spread round an oval just outside the words, a little uneven.
-      const a = (i / CALL_SPARKS) * Math.PI * 2 + (Math.random() - 0.5) * 0.45;
-      const rx = 74 + Math.random() * 30;
-      const ry = 46 + Math.random() * 22;
-      const size = 9 + Math.round(Math.random() * 9);
-      const s = document.createElementNS(SVG_NS, 'svg');
-      s.setAttribute('class', 'cf-spark');
-      s.setAttribute('width', String(size));
-      s.setAttribute('height', String(size));
-      s.setAttribute('viewBox', '0 0 24 24');
-      const use = document.createElementNS(SVG_NS, 'use');
-      use.setAttribute('href', '#lc-spark');
-      s.appendChild(use);
-      s.style.left = 'calc(50% + ' + Math.round(Math.cos(a) * rx) + 'px)';
-      s.style.top = 'calc(50% + ' + Math.round(Math.sin(a) * ry) + 'px)';
-      s.style.animationDelay = Math.round(80 + Math.random() * 420) + 'ms';
-      flair.appendChild(s);
-    }
-    el.appendChild(flair);
-    setTimeout(() => { if (flair.parentNode) flair.parentNode.removeChild(flair); }, 1700);
-  }
-
-  function announceDeclare(game, done) {
-    const r = game && game.lastRoundResult;
-    const el = document.getElementById('declare-callout');
-    if (!r || !r.declaredBy || !el) { done(); return; }
-    clearDeclareCallout();
-    const mine = r.declaredBy === myPlayerId;
-    commentaryHush();   // the call is the commentary now
-    document.getElementById('declare-callout-who').textContent =
-      mine ? 'You call' : playerName(r.declaredBy) + ' calls';
-    const verdict = document.getElementById('declare-callout-verdict');
-    verdict.className = 'declare-callout-verdict hidden';
-    verdict.textContent = '';
-    verdict.style.marginLeft = '';
-    el.classList.remove('correct', 'wrong', 'hidden');
-    // Restart the stamp animation even if the last call is still fading.
-    el.classList.remove('calling');
-    void el.offsetWidth;
-    el.classList.add('calling');
-    declareSpotlightId = r.declaredBy;
-    renderOvalTable(game);   // light up the caller's chair
-    // The declarer already heard their own tap; everyone else hears the call.
-    if (!mine) { try { Sound.declareTap(); } catch (e) { /* sound never blocks */ } }
-    // Diwali: a sutli bomb is lit under LEAST COUNT, and the verdict waits
-    // for the fuse (see DIWALI PATAKAS). Longer, so the cards stay face-up
-    // that much less afterwards -- the scorecard opens at the same moment.
-    const festive = isDiwali();
-    const callMs = festive ? DIWALI_FUSE_MS : DECLARE_CALL_MS;
-    const verdictMs = festive ? DIWALI_VERDICT_MS : DECLARE_VERDICT_MS;
-    if (festive) { try { DiwaliPatakas.lightBomb(el, callMs); } catch (e) { /* decoration */ } }
-    holdTransient('declare-callout', callMs + verdictMs);
-
-    declareCalloutTimers.push(setTimeout(() => {
-      const penalty = (r.roundScores || {})[r.declaredBy];
-      verdict.textContent = r.correct
-        ? (festive ? '\ud83d\udca5 Right call!' : '\u2713 Correct')
-        : (festive ? 'Dud call' : '\u2717 Wrong call') + (penalty !== undefined ? ' \u00b7 +' + penalty : '');
-      verdict.className = 'declare-callout-verdict ' + (r.correct ? 'ok' : 'bad');
-      el.classList.add(r.correct ? 'correct' : 'wrong');
-      if (festive) {
-        // Centred on the table over the bomb's place (.dw-call, style.css):
-        // left: 50% there, half its own width back here.
-        verdict.style.marginLeft = -Math.round(verdict.offsetWidth / 2) + 'px';
-        try { DiwaliPatakas.bombResult(r.correct); } catch (e) { /* decoration */ }
-      } else {
-        try { if (r.correct) Sound.declareCorrect(); else Sound.declareWrong(); } catch (e) { /* never block */ }
-        if (r.correct) { try { celebrateCall(el); } catch (e) { /* decoration */ } }
-      }
-    }, callMs));
-
-    declareCalloutTimers.push(setTimeout(() => {
-      el.classList.add('hidden');
-      el.classList.remove('calling', 'correct', 'wrong');
-      try { DiwaliPatakas.stopBomb(); } catch (e) { /* nothing lit */ }
-      releaseTransient('declare-callout');
-      declareSpotlightId = null;
-      declareCalloutTimers = [];
-      done();
-    }, callMs + verdictMs));
-  }
-
-  // Selecting a grouped tile selects/deselects every card in that rank-group
-  // together (they're always discarded as a set anyway, matching-rank or not).
-  function toggleSelectGroup(group) {
-    const allSelected = group.cards.every((c) => selectedIds.has(c.id));
-    // Sound goes AFTER the selection changes, and guarded -- same rule as
-    // the discard and declare handlers. Played first (as it was), a throw in
-    // the audio path would have made cards impossible to select at all,
-    // which is a dead game from a decoration.
-    try {
-      if (allSelected) Sound.deselect(); else Sound.select();
-    } catch (e) { /* audio is never worth a tap */ }
-    if (allSelected) {
-      group.cards.forEach((c) => selectedIds.delete(c.id));
-    } else {
-      const firstId = [...selectedIds][0];
-      if (firstId) {
-        const firstCard = (latestGame.yourHand || []).find((c) => c.id === firstId);
-        if (firstCard && firstCard.rank !== group.rank) selectedIds.clear();
-      }
-      group.cards.forEach((c) => selectedIds.add(c.id));
-    }
-    renderGame(latestGame);
-    // The lesson moves on the moment the right cards are picked (and points
-    // at them again if they are not). Never in a real game.
-    if (Tutorial.isActive()) Tutorial.onSelect();
-  }
-
-  function submitChainTwo(card) {
-    // The tutorial owns this tap too. During a +2 chain the Discard button is
-    // hidden and tapping a 2 plays it straight away -- so this, not the
-    // Discard handler, is the ONLY way through tutorial step 6. It used to emit
-    // to the server even inside the tutorial, where there is no room: the tap
-    // failed with an error and the lesson could never advance. Every learner
-    // who reached step 6 was stuck there (GA4, Oct 2026: 10 started, 0 finished).
-    if (Tutorial.tryDiscard([card.id])) return;
-    socket.emit('play_turn', { roomCode: myRoomCode, cardIds: [card.id] }, (res) => {
-      if (!res.ok) setGameError(res.error);
-      else setGameError('');
-    });
-    // Pushing the +2 chain on to the next player is the most aggressive
-    // move in the game and it made no sound at all. Emit first, as always.
-    try {
-      lastDiscardInfo = null;   // a chain 2 draws nothing back; no pairing
-      Sound.chainTwoPlay();
-    } catch (e) { /* never worth a turn */ }
-  }
-
-  document.getElementById('btn-discard').onclick = () => {
-    const ids = [...selectedIds];
-
-    // The tutorial owns this tap while it is running: there is no room and
-    // no server to emit to, so the emit below would be answered with an
-    // error. Checked first, before anything else reads game state.
-    if (Tutorial.tryDiscard(ids)) return;
-
-    // ------------------------------------------------------------------
-    // THE MOVE GOES FIRST. Nothing decorative may sit in front of it.
-    //
-    // This previously ran Sound.discard() and the card-flight animation
-    // BEFORE this emit. Both are cosmetic, but a throw in either one meant
-    // the emit below never executed -- so the tap did nothing, the turn
-    // timer ran down, and the server auto-played on the player's behalf.
-    // From the table that reads as the game freezing and then playing
-    // itself. Decoration must never be able to cost someone a turn.
-    //
-    // emit() is non-blocking and its ack is async, so the flourish below
-    // still measures the hand in the same tick, before any re-render.
-    // ------------------------------------------------------------------
-    socket.emit('play_turn', { roomCode: myRoomCode, cardIds: ids }, (res) => {
-      if (!res.ok) return setGameError(res.error);
-      selectedIds = new Set();
-      setGameError('');
-    });
-
-    // Everything below here is flourish. It is wrapped so that a failure --
-    // a missing element, an audio context the OS refused, anything -- is
-    // logged and forgotten rather than propagating into the turn.
-    try {
-      // Remember what just left the hand, so that when the penalty card
-      // comes back we can tell a good trade from a bad one. Must happen
-      // here, while yourHand still holds the cards -- the next state push
-      // removes them. Inside the flourish try/catch: if this ever fails the
-      // sound simply falls back to neutral, it can never cost a turn.
-      const handNow = (latestGame && latestGame.yourHand) || [];
-      noteDiscardForValence(
-        handNow.filter((c) => ids.indexOf(c.id) !== -1),
-        latestGame && latestGame.roundJokerRank
-      );
-      Sound.discard();
-      const first = document.querySelector('#hand .card.selected') || document.querySelector('#hand .card');
-      const to = openCardSlotRect();
-      if (first && to) {
-        const from = flyRect(first);
-        const hand = (latestGame && latestGame.yourHand) || [];
-        const card = hand.find((c) => c.id === ids[0]);
-        flyCard({ left: from.left, top: from.top, w: to.w, h: to.h }, to, card || null);
-      }
-    } catch (e) {
-      console.warn('[fx] discard flourish failed (turn was still sent):', e && e.message);
-    }
-  };
-
-  document.getElementById('btn-declare').onclick = () => {
-    if (Tutorial.tryDeclare()) return;   // see the note on the discard handler
-
-    // Declare emits first for the same reason as discard: a sound must never
-    // be able to swallow the single most consequential tap in the game.
-    socket.emit('declare', { roomCode: myRoomCode }, (res) => {
-      if (!res.ok) setGameError(res.error);
-    });
-    // Declaring used to make no sound at all until the RESULT came back from
-    // the server, so the riskiest tap you can make was also the deadest one.
-    try { Sound.declareTap(); } catch (e) { /* never worth a turn */ }
-  };
-
-  document.getElementById('btn-take-penalty').onclick = () => {
-    // Step 6 offers this as one of its two choices, so the tutorial handles it
-    // rather than letting it reach a server that has no game to apply it to.
-    if (Tutorial.tryDiscard([])) return;
-    socket.emit('play_turn', { roomCode: myRoomCode, cardIds: [] }, (res) => {
-      if (!res.ok) setGameError(res.error);
-    });
-    // Accepting the +2/+4/+6 used to be completely silent: you tapped a
-    // button, nothing acknowledged it, and the cards appeared a beat later.
-    // Nothing is being given up here, so there is no trade to weigh --
-    // clear any remembered discard so the incoming draw is judged on its
-    // own (it will be 'brutal' anyway, being multi-card).
-    try {
-      lastDiscardInfo = null;
-      Sound.takePenalty();
-    } catch (e) { /* never worth a turn */ }
-  };
-
-  document.getElementById('btn-show-hint').onclick = () => {
-    localStorage.setItem(HELP_EVER_USED_KEY, '1'); // stop pulsing once they've tapped it once, ever
-    socket.emit('request_hint', { roomCode: myRoomCode }, (res) => {
-      if (!res.ok) return setGameError(res.error);
-      currentHint = res.hint;
-      setGameError('');
-      renderGame(latestGame);
-    });
-  };
-
-  function setGameError(msg) {
-    document.getElementById('game-error').textContent = friendlyError(msg) || '';
-  }
-
-  // ------------------------------------------------------------------
-  // The chat sheet covers the hand tray and both action buttons -- measured
-  // on the live build, it takes the bottom ~55% of the screen. The turn
-  // timer stays visible above it, so with chat open on your turn you can
-  // watch 15 seconds run out while unable to reach your cards.
-  //
-  // So the sheet yields: the moment the turn becomes yours, it closes. The
-  // alternative (shrinking it) leaves a cramped chat AND a cramped hand, and
-  // still hides the buttons on shorter phones.
-  // ------------------------------------------------------------------
-  function closeChatForMyTurn() {
-    const panel = document.getElementById('chat-panel');
-    if (!panel || panel.classList.contains('hidden')) return;
-    document.getElementById('btn-chat-close').click();
-  }
-
-  // Remembers every name this client has ever seen for a playerId, and never
-  // forgets one -- unlike latestRoom.players, which the server actively
-  // DELETES someone from the moment they call leave_room (see server.js'
-  // leave_room handler: room.players.delete(playerId)). That's correct for
-  // the live lobby/seat list, but it broke the final "Ashok wins!" scoreboard:
-  // an eliminated player who then left showed up with their real score but
-  // the name "?" instead, because by the time that screen rendered,
-  // latestRoom no longer had any record of them at all. This cache is
-  // populated every time a name is seen (see the room_update handler below)
-  // and is the fallback playerName() reaches for once the live lookup misses.
-  const knownPlayerNames = {};
-
-  // ------------------------------------------------------------------
-  // Bots are named "\u{1F916} Bot 1" on the server, which predates them having
-  // faces. Now that every bot renders a voxel robot avatar, the emoji is a
-  // second robot sitting next to the first one on every seat.
-  //
-  // Stripped here rather than renamed on the server, for three reasons: it
-  // needs no server deploy, it fixes rooms that already exist, and the
-  // server's name is still the thing stored and broadcast -- so nothing
-  // downstream that matches on it breaks.
-  //
-  // Written as an escaped surrogate pair rather than a literal emoji so the
-  // file stays pure ASCII and cannot be mangled by an editor or a transfer
-  // that is not UTF-8 clean.
-  // ------------------------------------------------------------------
-  function displayName(n) {
-    return String(n == null ? '' : n).replace(/^\uD83E\uDD16\s*/, '');
-  }
-
-  function playerName(playerId) {
-    const p = latestRoom && latestRoom.players.find((x) => x.playerId === playerId);
-    if (p) return displayName(p.name);
-    return displayName(knownPlayerNames[playerId]) || '?';
-  }
-
-  // ---------------- round result / scores / game over overlays ----------------
-  // Ranks everyone by cumulative total score, ascending -- lowest total is
-  // rank 1, since Least Count rewards staying low. Re-derived fresh every
-  // round, so the medals and rows are always re-sorted by the latest totals.
-  function rankedPlayers(game) {
-    return (latestRoom.players || [])
-      .map((p) => ({ ...p, total: game.scores[p.playerId] ?? 0 }))
-      .sort((a, b) => a.total - b.total);
-  }
-
-  // Same rank-value rule as gameLogic.js's cardValue() -- a printed Joker or
-  // this round's wild rank scores 0, Ace is 1, face cards are 10, everything
-  // else is its face value. Kept in sync manually since the client only ever
-  // receives final hand *values* from the server, not a shared value table.
-  function cardValueClient(card, wildRank) {
-    if (card.rank === 'JOKER') return 0;
-    if (wildRank && card.rank === wildRank) return 0;
-    if (card.rank === 'A') return 1;
-    if (card.rank === 'J' || card.rank === 'Q' || card.rank === 'K') return 10;
-    return parseInt(card.rank, 10);
-  }
-
-  // Per-player reveal rows on the merged round-result screen -- replaces the
-  // old plain scoreboard table AND the old separate at-the-seat card reveal.
-  // Shows each player's actual final hand for the round (priciest cards
-  // first, same-rank grouped into a x N tile just like your own hand tray,
-  // capped to a few tiles with a "+N" count for the rest so a 15+ card hand
-  // never blows up the layout), the hand's point value, and the round-score
-  // math (this round's points + what they had before = new total).
-  const REVEAL_MAX_TILES = 4;
-  function renderHandRevealRows(game, ranked) {
-    const body = document.getElementById('round-result-hands');
-    body.innerHTML = '';
-    const r = game.lastRoundResult;
-    const finalHands = game.finalHands || {};
-    const finalValues = game.finalHandValues || {};
-    const wildRank = game.roundJokerRank;
-
-    ranked.forEach((p, i) => {
-      const roundScore = r && r.roundScores ? r.roundScores[p.playerId] : undefined;
-      const newTotal = p.total;
-      const prevTotal = roundScore !== undefined ? newTotal - roundScore : undefined;
-      const elim = game.eliminated && game.eliminated.includes(p.playerId);
-      const isDeclarer = r && r.declaredBy === p.playerId;
-
-      // v2 (Oct 2026): one line per player -- a medal or a place, the name,
-      // the sum. The rows are in order of total (lowest first), so the 3D
-      // gold, silver and bronze medals go to the first three: they replace
-      // the podium, which only ever showed those same three. Mid-game nobody
-      // who is out gets one; once the game is over (when everyone but the
-      // winner is out) they are the final standings. The caller's row is
-      // outlined in gold.
-      const row = document.createElement('div');
-      row.className = 'reveal-row' + (isDeclarer ? ' declared' : '') + (elim ? ' eliminated' : '')
-        + (p.playerId === myPlayerId ? ' is-me' : '');
-
-      const rankEl = document.createElement('span');
-      if (i < 3 && (!elim || game.gameOver)) {
-        rankEl.className = 'reveal-rank art ' + MEDAL_ART[i];
-        rankEl.setAttribute('role', 'img');
-        rankEl.setAttribute('aria-label', String(i + 1));
-      } else {
-        rankEl.className = 'reveal-rank';
-        rankEl.textContent = String(i + 1);
-      }
-      row.appendChild(rankEl);
-
-      const nameEl = document.createElement('div');
-      nameEl.className = 'reveal-name';
-      const nameText = document.createElement('span');
-      nameText.className = 'reveal-name-text';
-      nameText.textContent = displayName(p.name);
-      nameEl.appendChild(nameText);
-      const tag = (cls, text) => {
-        const t = document.createElement('span');
-        t.className = cls;
-        t.textContent = text;
-        nameEl.appendChild(t);
-      };
-      if (p.playerId === myPlayerId) tag('reveal-you', '(you)');
-      if (isDeclarer) tag('reveal-tag called', 'called');
-      if (elim) tag('reveal-tag out', 'out');
-      row.appendChild(nameEl);
-
-      // No card tiles and no hand value here: both are shown at each
-      // player's chair during the reveal that runs just before this screen.
-      // The round-score sum (this round + previous = new total) is what this
-      // screen is for.
-      const mathEl = document.createElement('div');
-      mathEl.className = 'reveal-math';
-      if (roundScore !== undefined) {
-        mathEl.append(`${roundScore} + ${prevTotal} = `);
-        const strong = document.createElement('b');
-        strong.textContent = String(newTotal);
-        mathEl.appendChild(strong);
-      } else {
-        mathEl.textContent = `${newTotal} pts`;
-      }
-      row.appendChild(mathEl);
-      body.appendChild(row);
-    });
-  }
-
-  // Re-applies the Next-Round button + max-score dropdown visibility for
-  // WHOEVER is currently host. Split out from showRoundResult() (which only
-  // runs once per round) so it can also be re-run from the room_update
-  // handler -- fixing the bug where, if the host who was showing this screen
-  // got eliminated and left (handing host to someone else), the remaining
-  // players' already-open popup never found out they were now the host and
-  // the Next Round button stayed hidden for everyone.
-  // ---------------- auto-advance countdown ----------------
-  // The next round now starts on a server timer (see AUTO_NEXT_ROUND_MS in
-  // server.js) instead of waiting on the host, who could previously freeze
-  // the whole table indefinitely just by putting their phone down. The server
-  // sends the REMAINING milliseconds with every game_state; we convert that
-  // to a local deadline each time rather than trusting one reading, so a
-  // player who reconnects, unbackgrounds, or joins mid-countdown still sees
-  // the correct number instead of a stale one.
-  let autoNextRoundDeadline = null;
-  let autoNextRoundTicker = null;
-
-  function setAutoNextRoundDeadline(ms) {
-    if (ms === null || ms === undefined) {
-      autoNextRoundDeadline = null;
-      if (autoNextRoundTicker) { clearInterval(autoNextRoundTicker); autoNextRoundTicker = null; }
-      return;
-    }
-    autoNextRoundDeadline = Date.now() + ms;
-    // 250ms rather than 1000ms so the displayed second changes promptly after
-    // the deadline is re-synced, instead of lagging up to a full second.
-    if (!autoNextRoundTicker) {
-      autoNextRoundTicker = setInterval(updateRoundResultHostControls, 250);
-    }
-  }
-
-  function autoNextRoundSecondsLeft() {
-    if (autoNextRoundDeadline === null) return null;
-    return Math.max(0, Math.ceil((autoNextRoundDeadline - Date.now()) / 1000));
-  }
-
-  function updateRoundResultHostControls() {
-    const overlay = document.getElementById('overlay-round-result');
-    if (!latestGame || overlay.classList.contains('hidden')) return;
-    const game = latestGame;
-    // Anyone at the table can move the round on, not just the host -- same
-    // reasoning as Start Game in the lobby. The countdown starts it anyway;
-    // this is only the "we're all ready, skip the wait" shortcut.
-    const nextBtn = document.getElementById('btn-next-round');
-    nextBtn.classList.toggle('hidden', game.gameOver);
-    // Held for a player the host has already approved who is part-way through
-    // their rewarded ad. The server refuses next_round throughout, so leaving
-    // the button live just invites a tap that cannot work -- which is how the
-    // frozen screen above was reached in the first place. Disable it and say
-    // who we are waiting for.
-    const waitingFor = latestRoom && latestRoom.awaitingSeat;
-    // An eliminated player has asked to come back and the host hasn't answered
-    // yet (Nov 2026). The server holds the round for that too, and only the
-    // host was ever told: everyone else saw the countdown disappear and a
-    // Start Now that did nothing. Same treatment as a seat being taken.
-    const rejoinAsk = !waitingFor && latestRoom && latestRoom.awaitingRejoin;
-    nextBtn.disabled = !!(waitingFor || rejoinAsk);
-    nextBtn.classList.toggle('waiting-seat', !!(waitingFor || rejoinAsk));
-    // On the final round there's no next round to start -- instead everyone
-    // (not just the host) gets a "See Final Result" button that leads into
-    // the separate celebratory trophy screen, at their own pace rather than
-    // an automatic timer.
-    document.getElementById('btn-see-final-result').classList.toggle('hidden', !game.gameOver);
-
-    // Everyone now sees the same countdown, host included -- previously
-    // non-hosts got "Waiting for host to start next round..." with no idea
-    // whether that would ever happen. The host's button is a "start early"
-    // override on top of the countdown, not the only way forward.
-    const hintEl = document.getElementById('round-result-hint');
-    const secs = autoNextRoundSecondsLeft();
-    if (waitingFor) {
-      // Takes priority over the countdown: the countdown is paused anyway, and
-      // "Next round in 3s..." sitting there while nothing happens is precisely
-      // the thing that reads as a freeze.
-      hintEl.textContent = waitingFor.name + ' is taking their seat\u2026';
-    } else if (rejoinAsk) {
-      const iAmHost = latestRoom.hostPlayerId === myPlayerId;
-      hintEl.textContent = rejoinAsk.playerId === myPlayerId
-        ? 'Waiting for the host to answer\u2026'
-        : iAmHost
-          ? rejoinAsk.name + ' wants to rejoin. Answer at the top.'
-          : 'Waiting for the host to answer ' + rejoinAsk.name + '\u2026';
-    } else if (game.gameOver) {
-      hintEl.textContent = ''; // final scorecard is read at each player's own pace
-    } else if (secs !== null) {
-      hintEl.textContent = secs > 0
-        ? `Next round in ${secs}s...`
-        : 'Starting next round...';
-    } else {
-      // No countdown reported (older server, or a state we didn't expect) --
-      // fall back to the previous wording rather than showing nothing.
-      hintEl.textContent = '';
-    }
-
-    const maxScoreRow = document.getElementById('round-maxscore-row');
-    if (!game.gameOver) {
-      const maxCurrentScore = Math.max(0, ...Object.values(game.scores));
-      // Rebuilt only when the SERVER's numbers change -- never just because
-      // the countdown ticked. This function runs every 250ms while the
-      // countdown shows, and rebuilding the list each time put the old value
-      // straight back: pick 300, and a quarter of a second later it read 200
-      // again. That was the "can't change the max score" bug (Oct 2026). A
-      // new round, a confirmed change, or someone else changing it all alter
-      // the key, so the dropdown still follows the real value.
-      const maxSel = document.getElementById('round-maxscore-select');
-      const builtFor = game.roundNumber + ':' + game.eliminationScore + ':' + maxCurrentScore;
-      if (maxSel.dataset.builtFor !== builtFor) {
-        populateMaxScoreSelect(maxSel, game.eliminationScore, maxCurrentScore);
-        maxSel.dataset.builtFor = builtFor;
-      }
-      maxScoreRow.classList.remove('hidden');
-    } else {
-      maxScoreRow.classList.add('hidden');
-    }
-    // Kept in step here (not only when the overlay opens) so a change made
-    // on this screen shows up in "Playing to ..." at once.
-    const playingTo = document.getElementById('round-result-maxscore');
-    if (playingTo && game.eliminationScore) playingTo.textContent = `Playing to ${game.eliminationScore} pts`;
-  }
-
-  // ---- max score: applied the moment it is picked ----
-  // Sent to the server as soon as it changes (set_max_score), rather than
-  // saved up for the "Start Now" tap. The countdown starts the next round far
-  // more often than the button does -- in a bot game, always -- and that path
-  // never carried the new value, so the pick was silently lost.
-  document.getElementById('round-maxscore-select').addEventListener('change', (e) => {
-    const sel = e.target;
-    const status = document.getElementById('round-maxscore-status');
-    const picked = Number(sel.value);
-    if (!picked || !myRoomCode) return;
-    if (status) status.textContent = '';
-    socket.emit('set_max_score', { roomCode: myRoomCode, eliminationScore: picked }, (res) => {
-      // Accepted: the game_state that follows carries the new value and
-      // rebuilds the list around it.
-      if (res && res.ok) return;
-      // Refused (a score already past it, the round already started...): put
-      // the real value back, so the dropdown never claims something untrue.
-      sel.dataset.builtFor = '';
-      updateRoundResultHostControls();
-      if (status) status.textContent = friendlyError((res && res.error) || 'Could not change the max score.');
-    });
-  });
-  // ---- end max score ----
-
-  // Round-result ad: DISABLED. See the long note in admob-init.js -- showing
-  // an ad here means swapping the single native banner slot, and every
-  // attempt at that swap broke the bottom banner and/or the interstitial
-  // (both of which earn) while the scorecard ad itself never rendered. This
-  // keeps the reserved gap hidden so the panel doesn't show 100px of empty
-  // space waiting for an ad that isn't coming.
-  function showRoundResultAd() {
-    const slot = document.getElementById('round-result-ad');
-    if (slot) slot.classList.add('hidden');
-  }
-
-  function hideRoundResultAd() {
-    if (window.LCAds) window.LCAds.hideResultAd();
-  }
-
-  // The round-result overlay gets closed from six different places (Next
-  // Round, See Final Result, leaving the room, the game-over handoff, the
-  // rejoin path...). Hooking each one means one of them eventually gets
-  // missed, and a missed one strands a 300x250 native ad floating over the
-  // table with no way to dismiss it. Watching the element itself catches
-  // every path, including any added later.
-  (function watchRoundResultOverlay() {
-    const overlay = document.getElementById('overlay-round-result');
-    if (!overlay || typeof MutationObserver !== 'function') return;
-    let wasHidden = overlay.classList.contains('hidden');
-    new MutationObserver(() => {
-      const isHidden = overlay.classList.contains('hidden');
-      if (isHidden && !wasHidden) hideRoundResultAd();
-      wasHidden = isHidden;
-    }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
-  })();
-
-  function showRoundResult(game) {
-    window.__lastRoundResultShownFor = game.roundNumber;
-    const r = game.lastRoundResult;
-    // The declarer's own penalty is no longer always a flat 75 (a tied
-    // wrong declare now costs just their own hand value) -- show whatever
-    // it actually was instead of hardcoding the old flat number.
-    const declarerScore = r.roundScores[r.declaredBy];
-    // v2: shorter. "Mani called too early +75" (the +75 in red) rather than
-    // "Mani declared wrong! (+75 penalty)"; "You" when it was you.
-    const titleEl = document.getElementById('round-result-title');
-    const caller = r.declaredBy === myPlayerId ? 'You' : playerName(r.declaredBy);
-    if (r.correct) {
-      titleEl.textContent = `${caller} called it right!`;
-    } else {
-      titleEl.textContent = `${caller} called too early `;
-      const pen = document.createElement('span');
-      pen.className = 'rr-penalty';
-      pen.textContent = '+' + declarerScore;
-      titleEl.appendChild(pen);
-    }
-    const rrRound = document.getElementById('round-result-round');
-    if (rrRound) rrRound.textContent = game.roundNumber ? 'Round ' + game.roundNumber : '';
-    document.getElementById('round-result-maxscore').textContent = `Playing to ${game.eliminationScore} pts`;
-    const maxStatus = document.getElementById('round-maxscore-status');
-    if (maxStatus) maxStatus.textContent = '';   // a refusal from last round is stale
-    // ...and so is a Start Now tap from last round still waiting on a reply.
-    document.getElementById('overlay-round-result').classList.remove('busy');
-    // Fresh list for every new result screen (this runs once per round, see
-    // __lastRoundResultShownFor), so nothing from a previous game can linger.
-    const maxSelEl = document.getElementById('round-maxscore-select');
-    if (maxSelEl) maxSelEl.dataset.builtFor = '';
-
-    // Declare emojis show here (not at a seat) since the game redirects to
-    // this screen almost instantly after a declare -- a seat reaction
-    // would barely be visible before getting covered by this overlay.
-    const emojiEl = document.getElementById('round-result-emoji');
-    emojiEl.textContent = r.correct ? '🎉' : '😬';
-    emojiEl.style.animation = 'none';
-    void emojiEl.offsetWidth;
-    emojiEl.style.animation = 'scoreCardEmojiPop 3.4s ease 1 both';
-
-    const ranked = rankedPlayers(game);
-    // The podium (shown only once the game was over) is retired with v2:
-    // the medals on the first three rows below say the same thing, on every
-    // round, without a second copy of three names above the list.
-    const podiumEl = document.getElementById('podium');
-    if (podiumEl) { podiumEl.classList.add('hidden'); podiumEl.innerHTML = ''; }
-    renderHandRevealRows(game, ranked);
-
-    const noteEl = document.getElementById('round-result-note');
-    noteEl.textContent = (r.newlyEliminated && r.newlyEliminated.length)
-      ? `Eliminated: ${r.newlyEliminated.map(playerName).join(', ')}`
-      : '';
-
-    // Offer the way back BEFORE the overlay is shown, so an eliminated
-    // player sees the choice as the screen arrives rather than watching it
-    // pop in a frame later. Eligibility is entirely the engine's call
-    // (game.canRejoin, per viewer).
-    renderRejoinOffer(game);
-    renderRoundRating();
-
-    document.getElementById('overlay-round-result').classList.remove('hidden');
-    // Deliberately AFTER the overlay is unhidden. It used to run before, and
-    // relied on requestAnimationFrame firing late enough for the panel to
-    // have been laid out -- but until the overlay loses .hidden the whole
-    // subtree is display:none, so the slot measures as zero height and the
-    // ad request was being skipped. Calling it here means the panel is
-    // already visible and measurable, with no timing assumption at all.
-    showRoundResultAd();
-    updateRoundResultHostControls();
-  }
-
-  let nextRoundBusyGuard = null;
-  document.getElementById('btn-next-round').onclick = () => {
-    const overlay = document.getElementById('overlay-round-result');
-    const maxScoreRow = document.getElementById('round-maxscore-row');
-    const sel = document.getElementById('round-maxscore-select');
-    const eliminationScore = !maxScoreRow.classList.contains('hidden') && sel.value
-      ? Number(sel.value) : undefined;
-    // The scorecard used to be hidden HERE, before asking the server. When the
-    // server refused -- and it legitimately does, while an approved player is
-    // watching their rewarded ad -- the overlay was already gone and the
-    // player was left looking at the previous round's game screen with nothing
-    // running on it. Reported from a real game as "the screen froze".
-    //
-    // So the dismissal now waits for the answer. The round-start sequence
-    // arrives on its own (game_starting) and hides this overlay anyway, so
-    // nothing is lost on the success path.
-    overlay.classList.add('busy');
-    const status = document.getElementById('round-maxscore-status');
-    if (status) status.textContent = '';
-    // A reply that never comes (the connection dropped mid-tap) used to leave
-    // the button dimmed and untappable for the rest of the game. The countdown
-    // still starts the round, so just give the button back.
-    clearTimeout(nextRoundBusyGuard);
-    nextRoundBusyGuard = setTimeout(() => overlay.classList.remove('busy'), 5000);
-    socket.emit('next_round', { roomCode: myRoomCode, eliminationScore }, (res) => {
-      clearTimeout(nextRoundBusyGuard);
-      overlay.classList.remove('busy');
-      if (res && res.ok) { overlay.classList.add('hidden'); return; }
-      // Lost the race with the countdown: the round is already starting, and
-      // the start sequence has closed this panel by itself. Nothing to say.
-      if (overlay.classList.contains('hidden')) return;
-      // Anything else: stay, and say why ON this panel. It used to go to
-      // #game-error, which sits on the table underneath -- so the tap looked
-      // like it did nothing at all. (It also used to close the panel for one
-      // refusal, leaving a dead table; see next_round in server.js.)
-      if (status) status.textContent = friendlyError((res && res.error) || 'Could not start the next round.');
-    });
-  };
-
-  // Final round only -- everyone reads the merged reveal+scorecard screen at
-  // their own pace, then taps through to the separate trophy/confetti screen.
-  document.getElementById('btn-see-final-result').onclick = () => {
-    if (latestGame) showGameOver(latestGame);
-  };
-
-  // Mute toggle, back on the game screen after being removed from the top
-  // bar in an earlier redesign -- the mute state/logic in Sound itself
-  // (isMuted/setMuted, localStorage-backed) was never actually removed, so
-  // this just restores the button that controls it.
-  const btnMute = document.getElementById('btn-mute');
-  const btnMuteIconOn = btnMute.querySelector('.icon-sound-on');
-  const btnMuteIconOff = btnMute.querySelector('.icon-sound-off');
-  function refreshMuteBtn() {
-    const isMuted = Sound.isMuted();
-    btnMuteIconOn.classList.toggle('hidden', isMuted);
-    btnMuteIconOff.classList.toggle('hidden', !isMuted);
-    btnMute.setAttribute('aria-label', isMuted ? 'Unmute sound' : 'Mute sound');
-  }
-  refreshMuteBtn();
-  btnMute.onclick = () => {
-    Sound.setMuted(!Sound.isMuted());
-    refreshMuteBtn();
-  };
-
-  // ------------------------------------------------------------------
-  // Standings pane of the scorecard sheet.
-  //
-  // Every row carries a bar showing the player's score against the
-  // elimination limit, because that is the actual question this screen
-  // answers. "Bot 2: 120" means nothing on its own; "Bot 2 is 60% of the way
-  // to out" is the thing you change your play over. Three states match the
-  // table's own colour language -- safe, close, gone -- so the sheet and the
-  // seats never disagree.
-  // ------------------------------------------------------------------
-  function renderScorecardTotals() {
-    const body = document.getElementById('scorecard-totals');
-    body.innerHTML = '';
-    if (!latestGame || !latestRoom) return;
-    const limit = latestGame.eliminationScore || 200;
-    const players = (latestRoom.players || []).slice()
-      .sort((a, b) => (latestGame.scores[a.playerId] || 0) - (latestGame.scores[b.playerId] || 0));
-
-    players.forEach((p, i) => {
-      const score = latestGame.scores[p.playerId] ?? 0;
-      const isOut = (latestGame.eliminated || []).includes(p.playerId)
-        || (latestGame.quit || []).includes(p.playerId);
-      const pct = Math.max(0, Math.min(100, Math.round((score / limit) * 100)));
-
-      const row = document.createElement('div');
-      row.className = 'sc-row'
-        + (isOut ? ' out' : (pct >= 60 ? ' warn' : ''))
-        + (p.playerId === myPlayerId ? ' is-me' : '');
-
-      const top = document.createElement('div');
-      top.className = 'sc-row-top';
-      // Text nodes, not innerHTML -- player names are user-supplied and this
-      // is the one place they'd otherwise be interpolated into markup.
-      const rank = document.createElement('span');
-      rank.className = 'sc-rank'; rank.textContent = String(i + 1);
-      const name = document.createElement('span');
-      name.className = 'sc-name'; name.textContent = displayName(p.name);
-      top.appendChild(rank); top.appendChild(name);
-      if (isOut) {
-        const tag = document.createElement('span');
-        tag.className = 'sc-tag'; tag.textContent = 'OUT';
-        top.appendChild(tag);
-      }
-      const val = document.createElement('span');
-      val.className = 'sc-score'; val.textContent = String(score);
-      top.appendChild(val);
-
-      const bar = document.createElement('div');
-      bar.className = 'sc-bar';
-      const fill = document.createElement('span');
-      fill.style.width = pct + '%';
-      bar.appendChild(fill);
-
-      row.appendChild(top); row.appendChild(bar);
-      body.appendChild(row);
-    });
-
-    document.getElementById('scorecard-foot').textContent = 'Out at ' + limit;
-  }
-
-  // One sheet, two panes. `view` is 'totals' or 'rounds' -- the round-result
-  // screen's link opens straight onto the round-by-round grid, the top bar's
-  // Scores button onto the standings, but it's the same sheet either way so
-  // nothing ever stacks on top of anything else.
-  function setScorecardView(view) {
-    const rounds = view === 'rounds';
-    document.getElementById('scorecard-totals').classList.toggle('hidden', rounds);
-    document.getElementById('scorecard-rounds').classList.toggle('hidden', !rounds);
-    document.getElementById('seg-scorecard-totals').classList.toggle('active', !rounds);
-    document.getElementById('seg-scorecard-rounds').classList.toggle('active', rounds);
-    const body = document.querySelector('#overlay-scorecard .sheet-body');
-    if (body) body.scrollTop = 0;
-  }
-
-  function openScorecard(view) {
-    if (!latestGame) return;
-    renderScorecardTotals();
-    renderFullScorecard();
-    setScorecardView(view || 'totals');
-    document.getElementById('overlay-scorecard').classList.remove('hidden');
-  }
-  function closeScorecard() {
-    document.getElementById('overlay-scorecard').classList.add('hidden');
-  }
-
-  document.getElementById('btn-scores').onclick = () => openScorecard('totals');
-  document.getElementById('btn-close-scorecard').onclick = closeScorecard;
-  document.getElementById('seg-scorecard-totals').onclick = () => setScorecardView('totals');
-  document.getElementById('seg-scorecard-rounds').onclick = () => setScorecardView('rounds');
-  // Tap the dimmed area above the sheet to dismiss, like the chat sheet.
-  document.getElementById('overlay-scorecard').onclick = (e) => {
-    if (e.target.id === 'overlay-scorecard') closeScorecard();
-  };
-
-  // Full round-by-round scorecard -- players as rows (capped at 10, so this
-  // axis never needs scrolling), rounds as columns (a long game scrolls
-  // sideways instead, with the player-name column frozen via CSS so context
-  // never scrolls away). Built from game.roundHistory, one entry per
-  // completed round; the Total column reads straight from game.scores (the
-  // same authoritative cumulative total elimination is based on) rather than
-  // summing history client-side, so it can never drift out of sync.
-  //
-  // This is now the "By round" pane of #overlay-scorecard (was its own
-  // dedicated overlay (#overlay-full-scorecard),
-  // opened from either the in-game Scores overlay or the round-result
-  // screen's own link -- previously this expanded INLINE underneath
-  // whichever screen opened it, which made an already-tall round-result
-  // panel (podium + full hand reveal) even taller/more cluttered once
-  // expanded. A separate screen keeps both entry points short, with only
-  // one scorecard table to ever keep in sync.
-  function renderFullScorecard() {
-    if (!latestGame || !latestRoom) return;
-    const history = latestGame.roundHistory || [];
-    const table = document.getElementById('scorecard-table');
-    table.innerHTML = '';
-
-    const headRow = document.createElement('tr');
-    headRow.innerHTML = '<th>Player</th>' +
-      history.map((r) => `<th>R${r.round}</th>`).join('') +
-      '<th>Total</th>';
-    table.appendChild(headRow);
-
-    (latestRoom.players || []).forEach((p) => {
-      const row = document.createElement('tr');
-      const isOut = latestGame.eliminated.includes(p.playerId) || latestGame.quit.includes(p.playerId);
-      const outTag = isOut ? '<span class="scorecard-out">OUT</span>' : '';
-      let cells = `<td>${escapeHtml(p.name)}${outTag}</td>`;
-      history.forEach((r) => {
-        const has = Object.prototype.hasOwnProperty.call(r.roundScores, p.playerId);
-        cells += has ? `<td>${r.roundScores[p.playerId]}</td>` : '<td class="scorecard-dash">—</td>';
-      });
-      cells += `<td>${latestGame.scores[p.playerId] ?? 0}</td>`;
-      row.innerHTML = cells;
-      table.appendChild(row);
-    });
-
-    document.getElementById('scorecard-swipe-hint').classList.toggle('hidden', history.length <= 3);
-  }
-
-  // The round-result screen's "See full scorecard" link now opens the shared
-  // sheet straight onto its By round tab, instead of a second overlay that
-  // used to stack on top of the Scores one. #btn-open-full-scorecard (the
-  // link that lived inside the old Scores dialog) is gone with that dialog --
-  // the segmented control replaces it.
-  document.getElementById('btn-open-full-scorecard-rr').onclick = () => openScorecard('rounds');
-
-  document.getElementById('btn-game-rules').onclick = () => document.getElementById('overlay-rules').classList.remove('hidden');
-  document.getElementById('btn-close-rules').onclick = () => document.getElementById('overlay-rules').classList.add('hidden');
-
-  // ---------------- confetti celebration (item 7) ----------------
-  // Pure canvas + requestAnimationFrame, no external library or assets --
-  // a burst of colored rectangles falling with gravity and a little spin,
-  // fading out near the end. Fires once when the game-over screen appears.
-  let confettiRunning = false;
-  // opts (Oct 2026): { pieces, durationMs } -- a correct LEAST COUNT call
-  // gets a shorter, lighter burst than winning the whole game.
-  // Diwali: fireworks instead of confetti -- bursts of gold, orange, red and
-  // white sparks that open, trail and fall away. Same canvas, same switch.
-  function launchFireworks(opts) {
-    opts = opts || {};
-    if (confettiRunning) return;
-    const canvas = document.getElementById('confetti-canvas');
-    const ctx = canvas && canvas.getContext('2d');
-    if (!ctx) return;
-    confettiRunning = true;
-    canvas.classList.remove('hidden');
-    const W = canvas.width = window.innerWidth;
-    const H = canvas.height = window.innerHeight;
-    const colors = ['#ffd166', '#f2c14e', '#ff9f1c', '#ff5d3a', '#ff4d8d', '#7bdff2'];
-    const durationMs = opts.durationMs || 4200;
-    const bursts = opts.bursts || 7;
-    const startedAt = Date.now();
-    const sparks = [];
-    const plan = Array.from({ length: bursts }, (_, i) => ({
-      at: (i * Math.max(400, durationMs - 1600)) / bursts + Math.random() * 200,
-      x: W * (0.15 + Math.random() * 0.7),
-      y: H * (0.14 + Math.random() * 0.38),
-      color: colors[Math.floor(Math.random() * colors.length)],
-      done: false,
-    }));
-    const stop = () => {
-      ctx.clearRect(0, 0, W, H);
-      canvas.classList.add('hidden');
-      confettiRunning = false;
-    };
-    function frame() {
-      const t = Date.now() - startedAt;
-      // Fade what is already drawn, so every spark leaves a short trail.
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = 'rgba(0,0,0,0.28)';
-      ctx.fillRect(0, 0, W, H);
-      ctx.globalCompositeOperation = 'lighter';
-      plan.forEach((b) => {
-        if (b.done || t < b.at) return;
-        b.done = true;
-        try { Sound.diwaliSkyShot(); } catch (e) { /* sound never blocks */ }
-        const n = 44 + Math.floor(Math.random() * 18);
-        for (let i = 0; i < n; i++) {
-          const a = (i / n) * Math.PI * 2 + Math.random() * 0.1;
-          const sp = 2.2 + Math.random() * 2.6;
-          sparks.push({ x: b.x, y: b.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1,
-            decay: 0.012 + Math.random() * 0.01, r: 1.5 + Math.random() * 1.5,
-            color: Math.random() < 0.78 ? b.color : '#ffffff' });
-        }
-      });
-      for (let i = sparks.length - 1; i >= 0; i--) {
-        const s = sparks[i];
-        s.x += s.vx; s.y += s.vy;
-        s.vx *= 0.985; s.vy = s.vy * 0.985 + 0.045;
-        s.life -= s.decay;
-        if (s.life <= 0) { sparks.splice(i, 1); continue; }
-        ctx.globalAlpha = s.life;
-        ctx.fillStyle = s.color;
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-      if ((t >= durationMs && !sparks.length) || t >= durationMs + 1500) { stop(); return; }
-      requestAnimationFrame(frame);
-    }
-    requestAnimationFrame(frame);
-  }
-
-  // ====================================================================
-  // DIWALI PATAKAS (Nov 2026)
-  //
-  // Four moments of a game, each with its own firecracker, while the Diwali
-  // theme is on (isDiwali):
-  //   1. LEAST COUNT call -> a sutli bomb. Its fuse burns while the whole
-  //      table waits; a right call goes BOOM, a wrong one fizzles: "Phusss".
-  //   2. A 2 thrown       -> a rocket from the thrower's chair to the
-  //      target's, bursting into "+2" (a bigger one for a stacked "+4").
-  //   3. A last card      -> a phuljhadi sparkling on that player's chair.
-  //   4. Game won         -> sky shots (launchFireworks) and the title.
-  // One canvas over the screen carries every spark, flash and puff of smoke;
-  // the bomb, rocket and sparkler themselves are small SVGs. None of it can
-  // take a tap (pointer-events: none), and all of it is decoration: every
-  // entry point is wrapped, so a failure only ever costs the effect.
-  // ====================================================================
-  const DIWALI_FUSE_MS = 2600;      // the call, while the fuse burns
-  const DIWALI_VERDICT_MS = 1300;   // BOOM (or the dud) and the verdict
-  // A Diwali call takes this much longer than the usual 1100 + 1300ms, and
-  // the cards stay face-up this much less (startRevealPhase), so the
-  // scorecard still opens when the server's countdown expects it.
-  const DIWALI_EXTRA_CALL_MS = (DIWALI_FUSE_MS + DIWALI_VERDICT_MS) - (1100 + 1300);
-  const DIWALI_CALM = (() => {
-    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
-  })();
-
-  // The particle layer: sparks (bright streaks with gravity), smoke puffs,
-  // flashes and shock rings, all on one canvas, one animation loop that runs
-  // only while something is alive.
-  const DiwaliFX = (() => {
-    let canvas = null;
-    let ctx = null;
-    let parts = [];
-    let raf = 0;
-    let W = 0;
-    let H = 0;
-    function size() {
-      if (!canvas || !ctx) return;
-      const d = Math.min(2, window.devicePixelRatio || 1);
-      W = window.innerWidth;
-      H = window.innerHeight;
-      canvas.width = Math.round(W * d);
-      canvas.height = Math.round(H * d);
-      ctx.setTransform(d, 0, 0, d, 0, 0);
-    }
-    function ensure() {
-      if (canvas && canvas.isConnected && ctx) return true;
-      try {
-        canvas = document.createElement('canvas');
-        canvas.className = 'diwali-fx';
-        canvas.setAttribute('aria-hidden', 'true');
-        document.body.appendChild(canvas);
-        ctx = canvas.getContext('2d');
-        size();
-        window.addEventListener('resize', size);
-        return !!ctx;
-      } catch (e) { return false; }
-    }
-    function frame() {
-      raf = 0;
-      if (!ctx) return;
-      ctx.clearRect(0, 0, W, H);
-      for (let i = parts.length - 1; i >= 0; i--) {
-        const p = parts[i];
-        p.life -= p.decay;
-        if (p.life <= 0) { parts.splice(i, 1); continue; }
-        if (p.kind === 'smoke') {
-          p.x += p.vx; p.y += p.vy; p.r += p.grow;
-          ctx.globalCompositeOperation = 'source-over';
-          ctx.globalAlpha = p.life * 0.5;
-          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
-          g.addColorStop(0, 'rgba(205,205,205,0.9)');
-          g.addColorStop(1, 'rgba(120,120,120,0)');
-          ctx.fillStyle = g;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-          continue;
-        }
-        ctx.globalCompositeOperation = 'lighter';
-        if (p.kind === 'flash') {
-          p.r *= 1.05;
-          ctx.globalAlpha = p.life;
-          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
-          g.addColorStop(0, 'rgba(255,250,225,1)');
-          g.addColorStop(0.35, 'rgba(255,200,90,0.75)');
-          g.addColorStop(1, 'rgba(255,120,20,0)');
-          ctx.fillStyle = g;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-          continue;
-        }
-        if (p.kind === 'ring') {
-          p.r += p.vr; p.vr *= 0.95;
-          ctx.globalAlpha = p.life * 0.9;
-          ctx.strokeStyle = p.color;
-          ctx.lineWidth = 3 * p.life + 0.5;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.stroke();
-          continue;
-        }
-        // A spark: a short bright streak along the way it is travelling.
-        p.vx *= p.drag;
-        p.vy = p.vy * p.drag + p.g;
-        p.x += p.vx; p.y += p.vy;
-        ctx.globalAlpha = Math.min(1, p.life * 1.4);
-        ctx.strokeStyle = p.color;
-        ctx.lineWidth = p.r;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(p.x - p.vx * p.tail, p.y - p.vy * p.tail);
-        ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-      if (parts.length) raf = requestAnimationFrame(frame);
-      else ctx.clearRect(0, 0, W, H);
-    }
-    function push(p) {
-      if (DIWALI_CALM || !ensure()) return;
-      if (parts.length > 900) return;   // a busy table never piles up work
-      parts.push(p);
-      if (!raf) raf = requestAnimationFrame(frame);
-    }
-    const GOLD = ['#fff3c4', '#ffd166', '#f2c14e', '#ff9f1c', '#ff6b35'];
-    function sparks(x, y, n, o) {
-      o = o || {};
-      const colors = o.colors || GOLD;
-      for (let i = 0; i < n; i++) {
-        const a = o.angle !== undefined
-          ? o.angle + (Math.random() - 0.5) * (o.spread || Math.PI * 2)
-          : Math.random() * Math.PI * 2;
-        const sp = (o.speed || 4) * (0.35 + Math.random() * 0.75);
-        push({ kind: 'spark', x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
-          g: o.g === undefined ? 0.12 : o.g, drag: o.drag || 0.96, life: 1,
-          decay: (o.decay || 0.022) * (0.7 + Math.random() * 0.6),
-          r: (o.size || 2) * (0.6 + Math.random() * 0.7), tail: o.tail || 2.2,
-          color: colors[Math.floor(Math.random() * colors.length)] });
-      }
-    }
-    function smoke(x, y, n) {
-      for (let i = 0; i < (n || 5); i++) {
-        push({ kind: 'smoke', x: x + (Math.random() - 0.5) * 18, y: y + (Math.random() - 0.5) * 10,
-          vx: (Math.random() - 0.5) * 0.6, vy: -0.45 - Math.random() * 0.7,
-          r: 8 + Math.random() * 7, grow: 0.5 + Math.random() * 0.35, life: 1, decay: 0.011 + Math.random() * 0.007 });
-      }
-    }
-    function flash(x, y, r) { push({ kind: 'flash', x, y, r: r || 60, life: 1, decay: 0.07 }); }
-    function ring(x, y, color, speed) { push({ kind: 'ring', x, y, r: 10, vr: speed || 9, life: 1, decay: 0.035, color: color || '#ffd166' }); }
-    return { sparks, smoke, flash, ring };
-  })();
-
-  const DiwaliPatakas = (() => {
-    function centreOf(el) {
-      const r = el && el.getBoundingClientRect();
-      return r && r.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
-    }
-    function seatCentre(id) {
-      let seat = null;
-      try { seat = id && document.querySelector('.seat[data-player-id="' + CSS.escape(id) + '"] .seat-chip'); } catch (e) { /* no seat */ }
-      return centreOf(seat) || centreOf(document.querySelector('#oval-table .table-center'));
-    }
-    // Words that jump out of a pataka: "BOOM!", "Phusss...", "+2", with an
-    // optional smaller line under them.
-    function pop(text, x, y, cls, sub) {
-      const el = document.createElement('div');
-      el.className = 'dw-pop ' + (cls || '');
-      el.textContent = text;
-      if (sub) {
-        const s = document.createElement('small');
-        s.textContent = sub;
-        el.appendChild(s);
-      }
-      el.style.left = Math.round(x) + 'px';
-      el.style.top = Math.round(y) + 'px';
-      document.body.appendChild(el);
-      setTimeout(() => el.remove(), 1500);
-    }
-    function shake(el) {
-      if (!el || DIWALI_CALM) return;
-      el.classList.remove('dw-shake');
-      void el.offsetWidth;
-      el.classList.add('dw-shake');
-      setTimeout(() => el.classList.remove('dw-shake'), 450);
-    }
-
-    // ---- 1. The sutli bomb ----
-    const BOMB_SVG = '<svg viewBox="0 0 80 80" aria-hidden="true">'
-      + '<defs><radialGradient id="dwBombG" cx="38%" cy="35%" r="70%">'
-      + '<stop offset="0" stop-color="#e09a58"/><stop offset="0.55" stop-color="#8f4c22"/><stop offset="1" stop-color="#3d1d0b"/>'
-      + '</radialGradient></defs>'
-      // The fuse: a dark edge under a light jute wick, so it reads on the
-      // dark table. Both burn down together (lightBomb).
-      + '<path class="dw-fuse dw-fuse-edge" d="M40 30 C 36 20, 47 17, 50 11 S 58 0, 66 -4" fill="none" stroke="#2a1708" stroke-width="5" stroke-linecap="round"/>'
-      + '<path class="dw-fuse" d="M40 30 C 36 20, 47 17, 50 11 S 58 0, 66 -4" fill="none" stroke="#d9b07a" stroke-width="2.8" stroke-linecap="round"/>'
-      + '<circle cx="40" cy="52" r="22" fill="url(#dwBombG)"/>'
-      + '<path d="M21 45 Q40 37 59 45 M18 53 Q40 45 62 53 M20 61 Q40 53 60 61 M26 68 Q40 62 54 68" fill="none" stroke="#f0d4a0" stroke-width="1.5" opacity="0.5"/>'
-      + '<path d="M30 33 Q37 52 33 72 M50 33 Q43 52 47 72" fill="none" stroke="#f0d4a0" stroke-width="1.2" opacity="0.35"/>'
-      + '<rect x="35" y="28" width="10" height="6" rx="2" fill="#c9a227"/>'
-      + '</svg>';
-    let bomb = null;   // { el, raf, stopped }
-
-    function stopBomb() {
-      if (!bomb) return;
-      bomb.stopped = true;
-      if (bomb.raf) cancelAnimationFrame(bomb.raf);
-      if (bomb.el && bomb.el.parentNode) bomb.el.parentNode.removeChild(bomb.el);
-      if (bomb.callout) bomb.callout.classList.remove('dw-call');
-      bomb = null;
-    }
-
-    // Lights the fuse under LEAST COUNT. It burns down for `ms`, throwing
-    // sparks, and the bomb shakes harder as the fuse gets short.
-    function lightBomb(callout, ms) {
-      stopBomb();
-      const verdict = callout.querySelector('.declare-callout-verdict');
-      const el = document.createElement('div');
-      el.className = 'dw-bomb lit';
-      el.innerHTML = BOMB_SVG + '<span class="dw-spark"></span><span class="dw-ask">Right call… or dud?</span>';
-      callout.insertBefore(el, verdict || null);
-      const fuses = el.querySelectorAll('.dw-fuse');
-      const fuse = fuses[fuses.length - 1];
-      const spark = el.querySelector('.dw-spark');
-      const svg = el.querySelector('svg');
-      let len = 50;
-      try { len = fuse.getTotalLength(); } catch (e) { /* default */ }
-      // dw-call: the verdict is laid over the bomb's place instead of being
-      // added below it, so nothing on the table jumps when the bomb goes.
-      callout.classList.add('dw-call');
-      const h = { el, callout, raf: 0, stopped: false };
-      bomb = h;
-      const t0 = performance.now();
-      let lastEmit = 0;
-      function step(now) {
-        if (h.stopped) return;
-        const t = Math.min(1, (now - t0) / ms);
-        const left = len * (1 - t);
-        fuses.forEach((f) => { f.style.strokeDasharray = left + ' ' + (len + 10); });
-        let pt = { x: 40, y: 30 };
-        try { pt = fuse.getPointAtLength(left); } catch (e) { /* the bomb's neck */ }
-        const box = svg.getBoundingClientRect();
-        const k = box.width / 80;
-        spark.style.left = (pt.x * k) + 'px';
-        spark.style.top = (pt.y * k) + 'px';
-        if (now - lastEmit > 28) {
-          lastEmit = now;
-          DiwaliFX.sparks(box.left + pt.x * k, box.top + pt.y * k, 5,
-            { angle: -Math.PI / 2, spread: Math.PI * 1.6, speed: 2.9, g: 0.1, decay: 0.036, size: 2.1, tail: 2 });
-        }
-        if (t > 0.7) el.classList.add('tense');
-        if (t < 1) h.raf = requestAnimationFrame(step);
-      }
-      h.raf = requestAnimationFrame(step);
-      try { Sound.diwaliFuse(ms); } catch (e) { /* sound never blocks */ }
-    }
-
-    // The fuse reaches the bomb: BOOM for a right call, a dud for a wrong one.
-    function bombResult(correct) {
-      const h = bomb;
-      if (!h || h.stopped) return;
-      h.stopped = true;
-      if (h.raf) cancelAnimationFrame(h.raf);
-      const svg = h.el.querySelector('svg');
-      const c = centreOf(svg) || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-      if (correct) {
-        h.el.classList.add('gone');
-        // Sized to stay on the table: the ring and the sparks open to about
-        // the rangoli, not out over the chairs.
-        DiwaliFX.flash(c.x, c.y, 80);
-        DiwaliFX.ring(c.x, c.y, '#ffd166', 6.5);
-        DiwaliFX.sparks(c.x, c.y, 110, { speed: 6, g: 0.1, decay: 0.019, size: 2.4 });
-        setTimeout(() => DiwaliFX.sparks(c.x, c.y, 45, { speed: 3.8, g: 0.08, decay: 0.022, size: 1.9,
-          colors: ['#ffffff', '#fff3c4', '#7bdff2', '#ff4d8d'] }), 140);
-        pop('BOOM!', c.x, c.y - 6, 'boom');
-        shake(document.getElementById('oval-table'));
-        try { Sound.diwaliBoom(); } catch (e) { /* sound never blocks */ }
-        try { buzz([30, 40, 70]); } catch (e) { /* no haptics */ }
-      } else {
-        h.el.classList.add('dud');
-        const spark = h.el.querySelector('.dw-spark');
-        const sc = centreOf(spark) || c;
-        if (spark) spark.style.opacity = '0';
-        DiwaliFX.smoke(sc.x, sc.y, 10);
-        pop('Phusss…', c.x + 26, c.y - 34, 'dud');
-        try { Sound.diwaliDud(); } catch (e) { /* sound never blocks */ }
-      }
-      // The bomb keeps its place (empty, or a sorry-looking dud) until the
-      // call is over, and the verdict appears over it (.dw-call in
-      // style.css); announceDeclare takes it away with the call.
-    }
-
-    // ---- 2. The +2 rocket ----
-    const ROCKET_SVG = '<svg viewBox="0 0 24 48" aria-hidden="true">'
-      + '<path d="M12 1 L17.5 12 L6.5 12 Z" fill="#ffd166"/>'
-      + '<rect x="6.5" y="12" width="11" height="20" rx="2" fill="#d62839"/>'
-      + '<rect x="6.5" y="17" width="11" height="3" fill="#ffd166"/>'
-      + '<rect x="6.5" y="25" width="11" height="3" fill="#ffd166"/>'
-      + '<path d="M6.5 27 L2 35 L6.5 32 Z M17.5 27 L22 35 L17.5 32 Z" fill="#9d0208"/>'
-      + '<rect x="11.2" y="32" width="1.6" height="15" fill="#c9a227"/>'
-      + '</svg>';
-    function rocket(fromId, toId, label, big) {
-      const a = seatCentre(fromId);
-      const b = seatCentre(toId);
-      if (!a || !b || DIWALI_CALM) return;
-      const el = document.createElement('div');
-      el.className = 'dw-rocket' + (big ? ' big' : '');
-      el.innerHTML = ROCKET_SVG;
-      document.body.appendChild(el);
-      const flight = big ? 1050 : 900;
-      // An arc up and over the table, never a flat line between chairs.
-      const mid = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) - 90 };
-      const t0 = performance.now();
-      let lastEmit = 0;
-      try { Sound.diwaliRocket(flight); } catch (e) { /* sound never blocks */ }
-      function step(now) {
-        const t = Math.min(1, (now - t0) / flight);
-        const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-        const x = (1 - e) * (1 - e) * a.x + 2 * (1 - e) * e * mid.x + e * e * b.x;
-        const y = (1 - e) * (1 - e) * a.y + 2 * (1 - e) * e * mid.y + e * e * b.y;
-        const dx = 2 * (1 - e) * (mid.x - a.x) + 2 * e * (b.x - mid.x);
-        const dy = 2 * (1 - e) * (mid.y - a.y) + 2 * e * (b.y - mid.y);
-        const ang = Math.atan2(dy, dx);
-        el.style.transform = 'translate(' + x + 'px,' + y + 'px) rotate(' + (ang * 180 / Math.PI + 90) + 'deg)';
-        if (now - lastEmit > 16) {
-          lastEmit = now;
-          DiwaliFX.sparks(x - Math.cos(ang) * 14, y - Math.sin(ang) * 14, 3,
-            { angle: ang + Math.PI, spread: 0.8, speed: 2.4, g: 0.05, decay: 0.06, size: 1.8,
-              colors: ['#ffd166', '#ff9f1c', '#fff3c4'] });
-        }
-        if (t < 1) { requestAnimationFrame(step); return; }
-        el.remove();
-        DiwaliFX.flash(b.x, b.y, big ? 75 : 55);
-        DiwaliFX.sparks(b.x, b.y, big ? 95 : 65, { speed: big ? 6.2 : 5,
-          colors: ['#ff4d6d', '#ffd166', '#ff9f1c', '#ffffff', '#7bdff2'] });
-        pop(label, b.x, b.y - 28, 'hit');
-      }
-      requestAnimationFrame(step);
-    }
-
-    // ---- 2b. The +2 lands: whoever picks the cards up takes the hit ----
-    // A blast on their chair, the chair jolts and glows red, a chakri spins
-    // round it for a moment, and "+4 cards!" with a line of banter.
-    const HIT_LINES = ['Direct hit!', 'Pataka landed!', 'Ouch, full blast!', 'Bomb delivered!'];
-    function hit(id, n) {
-      const c = seatCentre(id);
-      if (!c) return;
-      let seat = null;
-      try { seat = document.querySelector('.seat[data-player-id="' + CSS.escape(id) + '"]'); } catch (e) { /* no seat */ }
-      if (seat && !DIWALI_CALM) {
-        seat.classList.remove('dw-hit');
-        void seat.offsetWidth;
-        seat.classList.add('dw-hit');
-        setTimeout(() => seat.classList.remove('dw-hit'), 650);
-      }
-      DiwaliFX.flash(c.x, c.y, 70);
-      DiwaliFX.ring(c.x, c.y, '#ff4d6d', 5);
-      DiwaliFX.sparks(c.x, c.y, 80, { speed: 5.2, colors: ['#ff4d6d', '#ff6b35', '#ffd166', '#ffffff'] });
-      DiwaliFX.smoke(c.x, c.y - 4, 6);
-      if (!DIWALI_CALM) {
-        const t0 = performance.now();
-        let a = 0;
-        const spin = (now) => {
-          if (now - t0 > 1200) return;
-          a += 0.55;
-          for (let k = 0; k < 2; k++) {
-            const ang = a + k * Math.PI;
-            DiwaliFX.sparks(c.x + Math.cos(ang) * 17, c.y + Math.sin(ang) * 17, 2,
-              { angle: ang + Math.PI / 2, spread: 0.4, speed: 3.2, g: 0.04, decay: 0.06, size: 1.7,
-                colors: ['#ffd166', '#7bdff2', '#ff6fa5', '#ffffff'] });
-          }
-          requestAnimationFrame(spin);
-        };
-        requestAnimationFrame(spin);
-      }
-      pop('+' + n + ' cards!', c.x, c.y - 40, 'ouch', HIT_LINES[Math.floor(Math.random() * HIT_LINES.length)]);
-      try { Sound.diwaliHit(); } catch (e) { /* sound never blocks */ }
-    }
-
-    // ---- 3. The phuljhadi ----
-    function sparkler(id) {
-      const c = seatCentre(id);
-      if (!c || DIWALI_CALM) return;
-      const el = document.createElement('div');
-      el.className = 'dw-sparkler';
-      el.innerHTML = '<span class="dw-stick"></span><span class="dw-tip"></span>';
-      el.style.left = Math.round(c.x + 18) + 'px';
-      el.style.top = Math.round(c.y - 26) + 'px';
-      document.body.appendChild(el);
-      const tip = el.querySelector('.dw-tip');
-      const ms = 2400;
-      const t0 = performance.now();
-      let lastEmit = 0;
-      try { Sound.diwaliSparkler(ms); } catch (e) { /* sound never blocks */ }
-      pop('Last card!', c.x, c.y - 44, 'last');
-      function step(now) {
-        const t = (now - t0) / ms;
-        if (t >= 1 || !el.isConnected) { el.remove(); return; }
-        if (now - lastEmit > 24) {
-          lastEmit = now;
-          const p = centreOf(tip);
-          if (p) DiwaliFX.sparks(p.x, p.y, 5, { speed: 3, g: 0.06, decay: 0.07, size: 1.3, tail: 2.6,
-            colors: ['#ffffff', '#fff3c4', '#ffd166'] });
-        }
-        requestAnimationFrame(step);
-      }
-      requestAnimationFrame(step);
-    }
-
-    return { lightBomb, bombResult, stopBomb, rocket, hit, sparkler, pop };
-  })();
-
-  // Reads each game update for moments 2 and 3. Called next to
-  // checkChainFlash in the game_state handler.
-  function diwaliOnState(prev, next) {
-    if (!prev || !next || !isDiwali()) return;
-    try {
-      if (next.roundOver || prev.roundOver || prev.roundNumber !== next.roundNumber) return;
-      if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
-      const pc = prev.handCounts || {};
-      const nc = next.handCounts || {};
-      // 2. A 2 thrown: a chain started, or grew.
-      if ((next.chainCount || 0) > (prev.chainCount || 0) && prev.currentPlayer && next.currentPlayer) {
-        DiwaliPatakas.rocket(prev.currentPlayer, next.currentPlayer, '+' + (next.chainCount * 2), next.chainCount > 1);
-      }
-      // 2b. The chain ends on someone with no 2 to answer: they pick up.
-      if ((prev.chainCount || 0) > 0 && (next.chainCount || 0) === 0 && prev.currentPlayer) {
-        const got = (nc[prev.currentPlayer] || 0) - (pc[prev.currentPlayer] || 0);
-        if (got > 0) DiwaliPatakas.hit(prev.currentPlayer, got);
-      }
-      // 3. Somebody is down to their last card.
-      Object.keys(nc).forEach((id) => {
-        if (nc[id] === 1 && (pc[id] || 0) > 1) DiwaliPatakas.sparkler(id);
-      });
-    } catch (e) { /* decoration only */ }
-  }
-
-  function launchConfetti(opts) {
-    opts = opts || {};
-    if (isDiwali()) { launchFireworks(opts.pieces ? { bursts: 3, durationMs: 2000 } : {}); return; }
-    if (confettiRunning) return;
-    const canvas = document.getElementById('confetti-canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    confettiRunning = true;
-    canvas.classList.remove('hidden');
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-
-    // Matches the current jade/gold/red design tokens (style.css :root) --
-    // this used to still be the pre-redesign gold/green/purple palette,
-    // clashing with the theme for the ~3 seconds it's on screen.
-    const colors = ['#d4a017', '#f2c14e', '#e5252c', '#a8151a', '#ffffff'];
-    const pieces = Array.from({ length: opts.pieces || 140 }, () => ({
-      x: Math.random() * canvas.width,
-      y: -20 - Math.random() * canvas.height * 0.5,
-      w: 6 + Math.random() * 6,
-      h: 8 + Math.random() * 10,
-      vx: -1.5 + Math.random() * 3,
-      vy: 2 + Math.random() * 3,
-      rot: Math.random() * Math.PI * 2,
-      vrot: -0.2 + Math.random() * 0.4,
-      color: colors[Math.floor(Math.random() * colors.length)],
-    }));
-
-    const durationMs = opts.durationMs || 3200;
-    const startedAt = Date.now();
-
-    function frame() {
-      const elapsed = Date.now() - startedAt;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (elapsed >= durationMs) {
-        canvas.classList.add('hidden');
-        confettiRunning = false;
-        return;
-      }
-      const fadeStart = durationMs - 500;
-      const alpha = elapsed > fadeStart ? Math.max(0, 1 - (elapsed - fadeStart) / 500) : 1;
-      ctx.globalAlpha = alpha;
-      pieces.forEach((p) => {
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vy += 0.03;
-        p.rot += p.vrot;
-        ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(p.rot);
-        ctx.fillStyle = p.color;
-        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
-        ctx.restore();
-      });
-      requestAnimationFrame(frame);
-    }
-    requestAnimationFrame(frame);
-  }
-
-  // ---------------- seat edge-aware positioning ----------------
-  // Shared by anything pinned to a seat that can grow wider than the seat
-  // chip itself (discard history, GIF thumbnails, etc). Seats near the
-  // table's left/right edge get a class telling the element to hug that same
-  // edge and grow inward toward the center, instead of always centering on
-  // the seat -- centering meant it could spill past the screen's clipped
-  // edge and vanish entirely for side seats. Seats near top/bottom-center
-  // stay centered as before. Pairs with the .align-left/.align-right/
-  // (default centered) CSS rules.
-  function getSeatHAlign(seatEl) {
-    const leftPct = parseFloat(seatEl.style.left);
-    if (!Number.isFinite(leftPct)) return 'center';
-    if (leftPct < 35) return 'left';
-    if (leftPct > 65) return 'right';
-    return 'center';
-  }
-
-  // ---------------- install prompt (website -> Play Store) ----------------
-  // 47 of 56 players in the fortnight to 19 Sept were on the website, and Play
-  // can only count app installs -- which is why production access was refused.
-  // This card is the ONLY channel to those players: they're anonymous, so
-  // there is no email, no phone, nothing but a nickname to reach them by.
-  //
-  // Shown only after a FINISHED game, deliberately. A first-time visitor who
-  // bounces is exactly the tester Google later flags as unengaged, so pushing
-  // them to install costs more than it earns; someone who played a game to the
-  // scorecard has already demonstrated the one thing that matters.
-  //
-  // While the app is in CLOSED TESTING this must be the opt-in url, not the
-  // store listing. Verified 19 Sept 2026 from a browser that is not on the
-  // tester list:
-  //   /store/apps/details?id=com.manikanta.leastcount -> "the requested URL
-  //     was not found on this server"  (dead end for every web player)
-  //   /apps/testing/com.manikanta.leastcount -> Google sign-in, then
-  //     "Become a tester"               (works)
-  //
-  // The opt-in page still only admits people whose Google account is on the
-  // tester list, so this link converts nobody unless that list is a Google
-  // Group anyone can join. Swap to the /store/apps/details url once production
-  // access is granted -- that is the only change needed here.
-  // Production access granted Oct 2026, so this is now the public listing.
-  // DEPLOY TIMING: this URL only resolves once a production release is
-  // actually published. Before that it 404s ("requested URL was not found"),
-  // which is worse than the old testing link -- so ship this change together
-  // with, or after, the first production rollout, never before it.
-  const INSTALL_URL = 'https://play.google.com/store/apps/details?id=com.manikanta.leastcount';
-  const INSTALL_CHOICE_KEY = 'leastcount_install_prompt';
-  // ------------------------------------------------------------------
-  // Website players into the app (Nov 2026). GA4, last 28 days: about 40%
-  // of all rounds were played on the website, where no ads run, and most
-  // NEW players started there -- through invite links, which open the site.
-  // The one prompt we had (a card at game over, hidden for 3 days on "Not
-  // now") was shown to ~26 people and taken by nobody. Now four places, all
-  // on Android browsers only (there is no iPhone or computer app):
-  //   invite  -- the invite-link card leads with "Play in the app"
-  //   home    -- a slim bar under the three ways to play
-  //   lobby   -- a slim bar while you wait for friends
-  //   gameover-- the card that was already there
-  // "Not now" (×) hides home/lobby/game over for a day, not three; Install
-  // hides them for three days (they may well not finish installing). Every
-  // shown / accepted / dismissed event says where, and the Play link carries
-  // the same tag, so Play Console can count installs per place.
-  // ------------------------------------------------------------------
-  const INSTALL_SNOOZE_MS = 24 * 60 * 60 * 1000;
-  const INSTALL_TAPPED_SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
-
-  // The Play Store page for this app, tagged with where the tap came from.
-  function installUrl(where) {
-    return INSTALL_URL + '&referrer=' + encodeURIComponent('utm_source=website&utm_medium=' + (where || 'other'));
-  }
-
-  // The website, on an Android phone: the only place an install makes sense.
-  function onAndroidWebsite() {
-    if (!FEATURES.installPrompt) return false;
-    // Already inside the Capacitor app -- nothing to install.
-    if (CLIENT_PLATFORM !== 'web') return false;
-    // There is no iOS or desktop build, so the prompt would be a dead end.
-    return /Android/i.test(navigator.userAgent || '');
-  }
-
-  function installPromptAllowed() {
-    if (!onAndroidWebsite()) return false;
-    let stored = null;
-    try { stored = localStorage.getItem(INSTALL_CHOICE_KEY); } catch (e) { stored = null; }
-    // (An old "installed" from before Nov 2026 counts as nothing: whoever is
-    // still on the website has not moved, whatever they once tapped.)
-    const until = Number(stored);
-    if (until && Date.now() < until) return false;
-    return true;
-  }
-
-  // The home and lobby bars. Called whenever either screen is drawn -- which
-  // can be during start-up, before the constants above exist; the next
-  // call (the end of wireAppPromos below) puts it right.
-  function updateAppPromos() {
-    try {
-      const allowed = installPromptAllowed();
-      const homeBar = document.getElementById('home-app-bar');
-      if (homeBar) {
-        // Not over an invite card: that one has its own, bigger choice.
-        const show = allowed && !inviteJoinKey;
-        homeBar.classList.toggle('hidden', !show);
-        if (show) logInstallShown('home');
-      }
-      const lobbyBar = document.getElementById('lobby-app-bar');
-      if (lobbyBar) {
-        const lobby = document.getElementById('screen-lobby');
-        const show = allowed && !!lobby && lobby.classList.contains('active');
-        lobbyBar.classList.toggle('hidden', !show);
-        if (show) logInstallShown('lobby');
-      }
-    } catch (e) { /* not set up yet */ }
-  }
-
-  (function wireAppPromos() {
-    [['home', 'btn-home-app', 'btn-home-app-close', 'home-app-bar'],
-      ['lobby', 'btn-lobby-app', 'btn-lobby-app-close', 'lobby-app-bar']].forEach(([where, goId, xId, barId]) => {
-      const go = document.getElementById(goId);
-      const x = document.getElementById(xId);
-      if (go) {
-        go.href = installUrl(where);
-        go.addEventListener('click', () => {
-          logAnalytics('install_prompt_accepted', { where });
-          rememberInstallChoice(String(Date.now() + INSTALL_TAPPED_SNOOZE_MS));
-          setTimeout(updateAppPromos, 300);   // after the Play Store has taken over
-        });
-      }
-      if (x) {
-        x.addEventListener('click', () => {
-          logAnalytics('install_prompt_dismissed', { where });
-          rememberInstallChoice(String(Date.now() + INSTALL_SNOOZE_MS));
-          const bar = document.getElementById(barId);
-          if (bar) bar.classList.add('hidden');
-          updateAppPromos();
-        });
-      }
-    });
-    updateAppPromos();
-  })();
-
-  function rememberInstallChoice(value) {
-    // Private browsing throws on setItem; the prompt reappearing is a far
-    // smaller problem than the game erroring out on the scorecard.
-    try { localStorage.setItem(INSTALL_CHOICE_KEY, value); } catch (e) { /* ignore */ }
-  }
-
-  function buildInstallCard() {
-    const card = document.createElement('div');
-    card.className = 'install-card';
-
-    const title = document.createElement('div');
-    title.className = 'install-card-title';
-    title.textContent = 'Playing a lot? Get the app';
-
-    const hint = document.createElement('p');
-    hint.className = 'install-card-hint';
-    hint.textContent = 'Opens straight to the table, keeps you signed in, and works better on a phone than the browser does.';
-
-    const actions = document.createElement('div');
-    actions.className = 'install-card-actions';
-
-    const install = document.createElement('a');
-    install.className = 'primary install-card-btn';
-    install.href = installUrl('gameover');
-    install.target = '_blank';
-    install.rel = 'noopener';
-    install.textContent = 'Install';
-    install.addEventListener('click', () => {
-      logAnalytics('install_prompt_accepted', { where: 'gameover' });
-      rememberInstallChoice(String(Date.now() + INSTALL_TAPPED_SNOOZE_MS));
-      card.remove();
-    });
-
-    const later = document.createElement('button');
-    later.type = 'button';
-    later.className = 'secondary install-card-btn';
-    later.textContent = 'Not now';
-    later.addEventListener('click', () => {
-      logAnalytics('install_prompt_dismissed', { where: 'gameover' });
-      // Snooze rather than suppress forever: someone on their third game is a
-      // better prospect than the same person on their first. A day, not
-      // three (Nov 2026): three days was most of a regular's week.
-      rememberInstallChoice(String(Date.now() + INSTALL_SNOOZE_MS));
-      card.remove();
-    });
-
-    actions.appendChild(install);
-    actions.appendChild(later);
-    card.appendChild(title);
-    card.appendChild(hint);
-    card.appendChild(actions);
-    return card;
-  }
-
-  function maybeShowInstallCard(container) {
-    if (!container || !installPromptAllowed()) return;
-    // Every game over counts here (not once per page load like the bars):
-    // each one is a fresh moment to ask.
-    logAnalytics('install_prompt_shown', { where: 'gameover' });
-    container.appendChild(buildInstallCard());
-  }
-
-  // ---- After a bot game: play with friends (Oct 2026) ----
-  // GA4, Oct 2026: people at a friend's table finished games about twice as
-  // often as people playing bots (14 of 22 against 11 of 33). So the end of a
-  // bot game -- the moment someone has just enjoyed one -- points them at a
-  // table of their own. One tap leaves this game, makes a table (asking for a
-  // name first if there isn't one: other people will see it) and opens the
-  // lobby, where Invite on WhatsApp is the big button.
-  //
-  // Opening WhatsApp by itself after all that would need window.open from
-  // inside a server reply, which browsers block as a popup -- and the fallback
-  // navigates away from the game. So the last tap stays the player's own.
-  //
-  // A button of its own above Play Again, not a card in the results: the
-  // results list scrolls when space is short, and a card at its foot was cut
-  // off on a normal phone. Made once, from existing classes (a green
-  // secondary button with Home's handshake picture), so it needs no new styles
-  // and ships in app.js alone.
-  // The line over the button (Mani's idea): a nudge with a grin, not a sales
-  // pitch. Which one depends on how the game went. Both short enough for one
-  // line on a 360px phone -- a word left alone on a second line looked broken.
-  const FRIENDS_LINE_WON = 'You beat the bots. Your friends are next!';
-  const FRIENDS_LINE_LOST = 'Bots this fun? Imagine your friends!';
-
-  function friendsButton() {
-    let btn = document.getElementById('btn-gameover-friends');
-    if (btn) return btn;
-    const again = document.getElementById('btn-new-game');
-    if (!again || !again.parentNode) return null;
-    const line = document.createElement('p');
-    line.id = 'gameover-friends-line';
-    line.className = 'hint hidden';
-    line.style.cssText = 'margin:12px 4px 0;font-size:14px;font-weight:600;line-height:1.35;color:#fff;text-wrap:balance;';
-    again.parentNode.insertBefore(line, again);
-    btn = document.createElement('button');
-    btn.type = 'button';
-    btn.id = 'btn-gameover-friends';
-    btn.className = 'secondary hidden';
-    // The words in a span of their own: an .icon that is its button's only
-    // element loses its right margin (button .icon:only-child).
-    btn.innerHTML = '<span class="icon art art-friends" aria-hidden="true"></span><span>Play with Friends</span>';
-    // Space from the results above and from Play Again below. Inline, so no
-    // style.css change is needed for one button.
-    btn.style.margin = '8px 0 10px';
-    btn.addEventListener('click', playWithFriendsFromBots);
-    again.parentNode.insertBefore(btn, again);
-    return btn;
-  }
-
-  function playWithFriendsFromBots() {
-    logAnalytics('friends_card_tapped');
-    inviteNudgePending = true;
-    // Through the Create Room button itself, so a missing name is asked for
-    // and the table is made straight after, exactly as on Home (promptForName
-    // resumes the last button tapped). No interstitial on this way out.
-    leaveRoom({ noAd: true, then: () => document.getElementById('btn-create').click() });
-  }
-
-  function showGameOver(game) {
-    logAnalytics('game_completed', {
-      player_count: latestRoom ? latestRoom.players.length : undefined,
-      round_count: game.roundNumber,
-      you_won: game.winner === myPlayerId,
-    });
-    document.getElementById('overlay-round-result').classList.add('hidden');
-    // v2: the trophy is a 3D picture above the title now, so no 🏆 in it.
-    document.getElementById('gameover-title').textContent = isDiwali()
-      ? (game.winner === myPlayerId ? 'Diwali champion: You! 🪔' : `Diwali champion: ${playerName(game.winner)}! 🪔`)
-      : (game.winner === myPlayerId ? 'You win!' : `${playerName(game.winner)} wins!`);
-    const body = document.getElementById('gameover-body');
-    body.innerHTML = '';
-    // The final round's score change is what actually ended the game --
-    // call it out distinctly (a dedicated banner, not just a small inline
-    // badge easy to miss) next to each player's cumulative total.
-    const lastRoundScores = (game.lastRoundResult && game.lastRoundResult.roundScores) || {};
-    const hasDeltas = Object.keys(lastRoundScores).length > 0;
-    if (hasDeltas) {
-      const banner = document.createElement('div');
-      banner.className = 'final-round-banner';
-      const parts = Object.entries(lastRoundScores).map(([pid, delta]) =>
-        `${escapeHtml(playerName(pid))} <b>+${delta}</b>`
-      );
-      banner.innerHTML = `<div class="final-round-banner-label">Final round</div><div>${parts.join(' &nbsp;·&nbsp; ')}</div>`;
-      body.appendChild(banner);
-    }
-    // The places (Nov 2026): the server's own final standings when it sent
-    // them -- the same places the rating is worked out from, so the list and
-    // the rating changes can never disagree. Winner first, then whoever was
-    // knocked out later, and anyone who left at the bottom. Older servers
-    // send no standings: lowest total first, winner on top, as before.
-    const standings = Array.isArray(game.standings) && game.standings.length ? game.standings : null;
-    const placeOf = new Map((standings || []).map((x) => [x.playerId, x]));
-    const ordered = standings
-      ? standings.map((x) => [x.playerId, game.scores[x.playerId]])
-      : Object.entries(game.scores).sort((a, b) =>
-        ((b[0] === game.winner) - (a[0] === game.winner)) || (a[1] - b[1]));
-    ordered.forEach(([pid, score], i) => {
-      const row = document.createElement('div');
-      row.className = 'result-row gameover-row' + (pid === game.winner ? ' winner-row' : '');
-      row.dataset.playerId = pid;
-      const delta = lastRoundScores[pid];
-      // Two short lines, "+4 this round" over "62 pts total" (Nov 2026): on
-      // one line the score took half the row and left the name four letters.
-      const deltaHtml = delta !== undefined
-        ? `<span class="go-sc-round"><span class="final-round-delta">+${delta}</span> this round</span>`
-        : '';
-      const st = placeOf.get(pid);
-      const place = st ? st.place : i + 1;
-      // v2: the final standings get the round result's medals.
-      const rank = place <= 3
-        ? `<span class="go-rank art ${MEDAL_ART[place - 1]}" role="img" aria-label="${place}"></span>`
-        : `<span class="go-rank">${place}</span>`;
-      const leftTag = st && st.left ? '<span class="go-left">left</span>' : '';
-      row.innerHTML = rank
-        + `<span class="go-name"><span class="go-nm">${escapeHtml(playerName(pid))}</span><span class="go-rating hidden"></span>${leftTag}</span>`
-        + `<span class="go-score">${deltaHtml}<span class="go-sc-total">${Number(score) || 0} pts total</span></span>`;
-      body.appendChild(row);
-    });
-    // Your rating: counts up when the server's numbers arrive (usually
-    // before this screen opens). "Updating..." only when the game looks like
-    // it counts; it gives up quietly if nothing comes.
-    const ratingBox = document.getElementById('gameover-rating');
-    if (ratingBox) {
-      ratingBox.dataset.shown = '';
-      // Any game of 3+ rounds counts now, bots or not (Nov 2026).
-      if (!latestRatingUpdate && currentFirebaseUid() && (game.roundHistory || []).length >= 3) {
-        ratingBox.className = 'go-rating-card pending';
-        ratingBox.innerHTML = '<span class="gr-label">Your rating</span><span class="gr-wait">Updating\u2026</span>';
-        clearTimeout(ratingPendingTimer);
-        ratingPendingTimer = setTimeout(() => {
-          if (!latestRatingUpdate) ratingBox.className = 'go-rating-card hidden';
-        }, 8000);
-      } else {
-        ratingBox.className = 'go-rating-card hidden';
-        ratingBox.innerHTML = '';
-      }
-    }
-    // A bot game ends with "Play with friends"; any other game with the
-    // install card (web only). Never both -- one ask at a time.
-    const soloGame = amSoloVsBots();
-    const friendsBtn = friendsButton();
-    if (friendsBtn) friendsBtn.classList.toggle('hidden', !soloGame);
-    const friendsLine = document.getElementById('gameover-friends-line');
-    if (friendsLine) {
-      friendsLine.textContent = game.winner === myPlayerId ? FRIENDS_LINE_WON : FRIENDS_LINE_LOST;
-      friendsLine.classList.toggle('hidden', !soloGame);
-    }
-    if (soloGame) logAnalytics('friends_card_shown');
-    else maybeShowInstallCard(body);
-    // "(same room)" only means something when other people are at the table:
-    // it says the same friends play again. Against bots it is just Play Again,
-    // and it starts the next game straight away (see soloRestartPending).
-    const againBtn = document.getElementById('btn-new-game');
-    if (againBtn) againBtn.textContent = soloGame ? 'Play Again' : 'Play Again (same room)';
-    const isHost = latestRoom && latestRoom.hostPlayerId === myPlayerId;
-    document.getElementById('btn-new-game').classList.toggle('hidden', !isHost);
-    document.getElementById('gameover-hint').textContent = isHost ? '' : 'Waiting for host to start a new game...';
-    document.getElementById('overlay-gameover').classList.remove('hidden');
-    renderGameOverRatings();
-    launchConfetti();
-  }
-
-  // Play Again against bots goes straight into the next game (Oct 2026): with
-  // nobody to wait for, the lobby in between was only one more tap. The flag
-  // is read by room_update's lobby branch, and is set BEFORE the emit because
-  // the server sends that lobby update ahead of its reply.
-  let soloRestartPending = false;
-  document.getElementById('btn-new-game').onclick = () => {
-    soloRestartPending = amSoloVsBots();
-    logAnalytics('play_again', { mode: soloRestartPending ? 'bots' : 'friends' });
-    socket.emit('new_game', { roomCode: myRoomCode }, (res) => {
-      if (!res.ok) { soloRestartPending = false; setGameError(res.error); }
-    });
-  };
-
-  // ------------------------------------------------------------------
-  // How far people actually get (Oct 2026).
-  //
-  // game_completed only fires when someone stays to the very end and taps
-  // "See Final Result" -- so a bot game abandoned after a few rounds, or a
-  // player who leaves once eliminated, counted as nothing at all. These two
-  // events measure the part in between:
-  //   round_completed -- every round a player sees through to the result.
-  //                      The highest round each player reaches is how far they
-  //                      got, even if they then just closed the app (which no
-  //                      event can catch).
-  //   game_left       -- tapped Leave before the game was over, with how many
-  //                      rounds they had played and whether they were out.
-  // ------------------------------------------------------------------
-  function analyticsGameInfo(game) {
-    const humans = latestRoom && latestRoom.players
-      ? latestRoom.players.filter((p) => !p.isBot).length : 0;
-    return {
-      mode: humans <= 1 ? 'bots' : 'friends',
-      players: (game && game.turnOrder && game.turnOrder.length) || (latestRoom && latestRoom.players.length) || 0,
-      you_out: !!(game && game.eliminated && game.eliminated.includes(myPlayerId)),
-    };
-  }
-
-  // ---------------- leave room ----------------
-  // opts (optional): { then: fn } runs once the leave has gone through and
-  // Home is showing; { noAd: true } skips the interstitial. Used by "Play with
-  // friends" after a bot game, which goes straight on to making a table. The
-  // buttons that call this directly pass a click event, which has neither.
-  function leaveRoom(opts) {
-    const after = opts && typeof opts.then === 'function' ? opts.then : null;
-    const noAd = !!(opts && opts.noAd === true);
-    try {
-      if (latestGame && !latestGame.gameOver && latestGame.roundNumber) {
-        logAnalytics('game_left', Object.assign({ rounds_played: latestGame.roundNumber }, analyticsGameInfo(latestGame)));
-      }
-    } catch (e) { /* analytics must never block leaving */ }
-    socket.emit('leave_room', { roomCode: myRoomCode }, (res) => {
-      if (!res.ok) {
-        setGameError(res.error);
-        document.getElementById('lobby-error').textContent = res.error;
-        return;
-      }
-      localStorage.removeItem('leastcount_session');
-      mySessionToken = null;  // the seat is gone; do not keep a credential for it
-      ratingLeftAs = myPlayerId;   // this game's numbers may still be on their way
-      myRoomCode = null;
-      myPlayerId = null;
-      latestRoom = null;
-      latestGame = null;
-      setLeavePending(false);   // don't carry a queued leave into the next room
-      commentaryReset();        // ...nor this game's commentary
-      window.__lastRoundResultShownFor = null;
-      // Leaving mid-reveal would otherwise strand the phase flag as true,
-      // and the next room's table would render every seat's reveal box
-      // over a live game.
-      revealPhaseActive = false;
-      if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
-      revealPendingGame = null;
-      document.getElementById('screen-game').classList.remove('reveal-phase');
-      closePlayerActionPopover();
-      playerStatsCache.clear();
-      // A LEAST COUNT call still on screen would otherwise finish after we
-      // have left and open that round's scorecard over the home screen.
-      clearDeclareCallout();
-      hideChatUI();
-      document.getElementById('overlay-round-result').classList.add('hidden');
-      document.getElementById('overlay-gameover').classList.add('hidden');
-      document.getElementById('overlay-scorecard').classList.add('hidden');
-      // A pending rejoin belongs to the room being left -- drop the offer,
-      // its countdown interval and the host banner with it, or the next room
-      // inherits a stale prompt and a ticking timer for a finished game.
-      hideRejoinOffer();
-      rejoinAsked = false;
-      document.getElementById('rejoin-requests-banner').classList.add('hidden');
-      showScreen('screen-landing');
-      // Full-screen interstitial on the way out of a room -- a natural
-      // stopping point, never mid-game. Deliberately fired AFTER the leave
-      // has fully completed and the landing screen is already showing, so
-      // the player is never held up by it: if the ad is missing, slow, or
-      // fails outright, they're already where they wanted to be and simply
-      // see no ad. It also self-limits (see MIN_MS_BETWEEN_INTERSTITIALS in
-      // admob-init.js), so repeatedly hopping in and out of rooms won't
-      // produce an ad every time. adsRemoved covers the paid Remove Ads
-      // purchase -- those players must never see this.
-      if (window.LCAds && !adsRemoved && !noAd) window.LCAds.showInterstitial();
-      if (after) {
-        try { after(); } catch (e) { console.warn('[leave] follow-on step failed:', e && e.message); }
-      }
-    });
-  }
-  // Leaving from the TABLE. Until now the only exits were the lobby, the
-  // round-result overlay (which auto-advances in 10 seconds) and game over --
-  // so mid-round there was no way out at all, and because a refresh
-  // auto-rejoins the stored room there was no way back to the menu either.
-  // Confirmed, because it forfeits the game.
-  const leaveDialog = () => document.getElementById('leave-game-dialog');
-
-  // ------------------------------------------------------------------
-  // Queued-leave state (fixed Sept 2026).
-  //
-  // The server refuses to let anyone go mid-round ("Cannot leave in the
-  // middle of a round"), and it always has -- removing a player whose cards
-  // are in play would mean rewriting the turn rotation underneath everyone.
-  // So a mid-round leave is QUEUED: the intent is recorded, their turns keep
-  // being auto-played as they already would be, and the moment the round
-  // ends renderGame() calls leaveRoom() for them.
-  //
-  // That part worked. What didn't was telling them. The only feedback was
-  // setGameError('You'll leave as soon as this round finishes.') -- and the
-  // game_state handler clears the error line on every turn change:
-  //
-  //     if (prev.currentPlayer !== game.currentPlayer || ...) setGameError('');
-  //
-  // Turns change every few seconds, so the message was gone almost at once
-  // and nothing replaced it. Tap, brief flash, silence -- indistinguishable
-  // from a dead button, which is exactly how it was reported. There was also
-  // no way to change your mind once queued.
-  //
-  // Now the state lives on the button itself (a class, so it survives every
-  // state push) and tapping again offers to cancel.
-  // ------------------------------------------------------------------
-  function setLeavePending(on, notify) {
-    const was = leaveAfterRound;
-    leaveAfterRound = !!on;
-    // Said in words under the turn strip (Oct 2026), with Stay to call it
-    // off. It used to be a pulsing dot on the Leave button.
-    const line = document.getElementById('leave-line');
-    if (line) line.classList.toggle('hidden', !on);
-    // ...and the rest of the table is told, so a chair doesn't just empty at
-    // the next deal. Only for a change the player made -- not the automatic
-    // clear when the round ends and the leave actually happens.
-    if (notify && was !== !!on && myRoomCode) {
-      try { socket.emit('announce_leave', { roomCode: myRoomCode, leaving: !!on }, () => {}); } catch (e) { /* a heads-up, never a blocker */ }
-    }
-    const btn = document.getElementById('btn-leave-game');
-    if (!btn) return;
-    btn.classList.toggle('leave-pending', !!on);
-    // The control is a bare icon, so the accessible name is the only label it
-    // has. Keep title in step too -- it's what a long-press surfaces.
-    const label = on ? 'Leaving when this round ends — tap to stay' : 'Leave game';
-    btn.setAttribute('aria-label', label);
-    btn.setAttribute('title', label);
-  }
-
-  // Am I out of the game but still sitting at the table? Mirrors the engine's
-  // isSpectator(): eliminated or quit. Such a player holds no cards and isn't
-  // in the rotation, so the server now lets them go mid-round -- there's no
-  // hand of theirs to wait for. Without this the person most likely to want
-  // out (they've just been knocked out and the table plays on for another
-  // ten minutes) was the only one who couldn't.
-  // True when this player is the only human at the table -- everyone else is a
-  // bot. Read from the room rather than from how the game was created: a solo
-  // room someone was later admitted into is a real multiplayer game, and a
-  // multiplayer game everyone else has left is effectively solo. Mirrors the
-  // same test on the server (see leave_room), so the two cannot disagree about
-  // who is allowed to walk out mid-round.
-  function amSoloVsBots() {
-    if (!latestRoom || !Array.isArray(latestRoom.players)) return false;
-    const humans = latestRoom.players.filter((p) => p && !p.isBot);
-    return humans.length === 1 && humans[0].playerId === myPlayerId;
-  }
-
-  function amSpectator() {
-    if (!latestGame || !myPlayerId) return false;
-    const out = (latestGame.eliminated || []).concat(latestGame.quit || []);
-    return out.indexOf(myPlayerId) !== -1;
-  }
-
-  document.getElementById('btn-leave-game').onclick = () => {
-    // In the tutorial there is no game to leave -- the leave button just ends
-    // the lesson, the same as Skip (logged as tutorial_skipped, with the step
-    // reached). Before, it asked "forfeit the game?", logged a game_left for a
-    // game that never existed, and sent a leave to the server for no room.
-    if (Tutorial.isActive()) { Tutorial.skip(); return; }
-    const t = document.getElementById('leave-game-title');
-    const p = document.getElementById('leave-game-text');
-    const cancel = document.getElementById('btn-leave-game-cancel');
-    const confirm = document.getElementById('btn-leave-game-confirm');
-    if (amSpectator()) {
-      // No "you'll forfeit the game" here -- they already lost it. And no
-      // queueing: this leaves at once, so the copy shouldn't imply a wait.
-      t.textContent = 'Leave the table?';
-      p.textContent = 'You’re out of this game, so you can go now. You’ll head back to the menu.';
-      cancel.textContent = 'Keep watching';
-      confirm.textContent = 'Leave';
-      leaveDialog().classList.remove('hidden');
-      return;
-    }
-    if (leaveAfterRound) {
-      // Already queued -- this dialog is now "do you want to call it off?"
-      t.textContent = 'Leaving when this round ends';
-      p.textContent = 'You’ll go back to the menu as soon as this hand finishes. Your turns are being played for you until then.' + leaveRatingNote();
-      cancel.textContent = 'Stay in the game';
-      confirm.textContent = 'Keep leaving';
-    } else {
-      t.textContent = 'Leave this game?';
-      p.textContent = 'You’ll forfeit the game and go back to the menu. The others carry on without you.' + leaveRatingNote();
-      cancel.textContent = 'Stay';
-      confirm.textContent = 'Leave';
-    }
-    leaveDialog().classList.remove('hidden');
-  };
-
-  document.getElementById('btn-leave-game-cancel').onclick = () => {
-    leaveDialog().classList.add('hidden');
-    // In the queued state the secondary button means "call it off", so it has
-    // to actually clear the queue -- otherwise they'd be dropped anyway and
-    // rightly think the game ignored them.
-    if (leaveAfterRound) {
-      setLeavePending(false, true);
-      setGameError('You’re staying in the game.');
-    }
-  };
-
-  // Stay, on the line under the turn strip -- the same as "Stay in the
-  // game" in the dialog, one tap closer.
-  document.getElementById('btn-leave-stay').onclick = () => {
-    if (!leaveAfterRound) return;
-    setLeavePending(false, true);
-    setGameError('You’re staying in the game.');
-  };
-
-  document.getElementById('btn-leave-game-confirm').onclick = () => {
-    leaveDialog().classList.add('hidden');
-    // Spectators go immediately -- checked BEFORE the queued-leave branch, so
-    // a leave queued while still playing turns into an instant exit the
-    // moment they're knocked out, rather than making them sit through the
-    // rest of a hand they're no longer in.
-    if (amSpectator()) { setLeavePending(false); leaveRoom(); return; }
-    // Solo vs bots goes immediately too (Oct 2026). The server now permits a
-    // mid-round exit when no other human is seated -- there is nobody whose
-    // hand would be disrupted. Without this branch the client would still
-    // queue the leave and the player would be told to wait for a round they
-    // had already decided to stop playing, with the server's permission going
-    // unused.
-    if (amSoloVsBots()) { setLeavePending(false); leaveRoom(); return; }
-    if (leaveAfterRound) return;   // "Keep leaving" -- nothing to change
-    if (latestGame && !latestGame.roundOver && !latestGame.gameOver) {
-      setLeavePending(true, true);
-      return;   // the line under the turn strip says it now, and stays
-    }
-    leaveRoom();
-  };
-
-  document.getElementById('btn-leave-lobby').onclick = leaveRoom;
-  document.getElementById('btn-leave-round-result').onclick = leaveRoom;
-  document.getElementById('btn-leave-gameover').onclick = leaveRoom;
-
-  // ---------------- chat ----------------
-  function showChatFab() { document.getElementById('chat-fab').classList.remove('hidden'); }
-  function hideChatUI() {
-    document.getElementById('chat-fab').classList.add('hidden');
-    document.getElementById('chat-panel').classList.add('hidden');
-    document.getElementById('chat-backdrop').classList.add('hidden');
-    chatSheetClosed();
-    chatUnread = 0;
-    updateChatBadge();
-  }
-
-  function updateChatBadge() {
-    // Two buttons open the same table chat: #chat-fab on the game screen's
-    // hand row, and #btn-lobby-chat in the lobby's top bar (Oct 2026). Both
-    // show the same unread count.
-    // The toggle is a quiet outlined button, not a red floating circle, so
-    // unread needs to register on the button itself -- at that size the
-    // little badge alone is easy to miss mid-turn.
-    [['chat-badge', 'chat-fab'], ['lobby-chat-badge', 'btn-lobby-chat']].forEach(([badgeId, btnId]) => {
-      const badge = document.getElementById(badgeId);
-      const btn = document.getElementById(btnId);
-      if (!badge) return;
-      if (chatUnread > 0) {
-        badge.textContent = chatUnread > 9 ? '9+' : chatUnread;
-        badge.classList.remove('hidden');
-        if (btn) btn.classList.add('has-unread');
-      } else {
-        badge.classList.add('hidden');
-        if (btn) btn.classList.remove('has-unread');
-      }
-    });
-  }
-
-  // Stable per-player avatar colour: same name/id always gets the same hue,
-  // for everyone in the room, with no server round-trip. A plain string hash
-  // is enough -- this only needs to be consistent, not unpredictable.
-
-  function chatAvatarHue(seed) {
-    let h = 0;
-    const s = String(seed || '');
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
-    return h;
-  }
-
-  // "22:24"-style short clock, matching the reference comment sheet's
-  // relative-time column. Falls back to nothing if the server didn't stamp
-  // the message (older history entries).
-  function chatShortTime(ts) {
-    if (!ts) return '';
-    const diff = Date.now() - ts;
-    if (diff < 60000) return 'now';
-    if (diff < 3600000) return Math.floor(diff / 60000) + 'm';
-    return Math.floor(diff / 3600000) + 'h';
-  }
-
-  // How long a silence has to be before the chat bothers printing a time.
-  const CHAT_GAP_MS = 5 * 60 * 1000;
-
-  function playerNameById(id) {
-    if (!latestRoom || !id) return '';
-    const p = latestRoom.players.find((x) => x.playerId === id);
-    return p ? p.name : '';
-  }
-
-  // ------------------------------------------------------------------
-  // Renders message text with @mentions highlighted, WITHOUT putting user
-  // input anywhere near innerHTML. Every fragment -- including the name
-  // inside the tag, which is user-supplied too -- goes in as a text node.
-  //
-  // This matters more than it looks: chat text was safe precisely because it
-  // was escaped and never treated as markup, and "highlight part of it" is
-  // exactly the change that quietly undoes that if done by string joining.
-  // ------------------------------------------------------------------
-  function renderChatText(target, text, mentions, nameOf, meId) {
-    const known = (mentions || [])
-      .map((id) => ({ id, name: nameOf(id) }))
-      .filter((x) => x.name)
-      // Longest name first, or "@Ravi Kumar" gets matched as "@Ravi".
-      .sort((a, b) => b.name.length - a.name.length);
-    let rest = String(text || '');
-    let guard = 0;
-    while (rest && known.length && guard++ < 80) {
-      let hit = null;
-      for (const k of known) {
-        const i = rest.indexOf('@' + k.name);
-        if (i >= 0 && (!hit || i < hit.i)) hit = { i, k };
-      }
-      if (!hit) break;
-      if (hit.i > 0) target.appendChild(document.createTextNode(rest.slice(0, hit.i)));
-      const tag = document.createElement('span');
-      tag.className = 'chat-mention' + (hit.k.id === meId ? ' me' : '');
-      tag.textContent = '@' + hit.k.name;
-      target.appendChild(tag);
-      rest = rest.slice(hit.i + 1 + hit.k.name.length);
-    }
-    if (rest) target.appendChild(document.createTextNode(rest));
-  }
-
-  // Mentions are worked out from the finished text at send time rather than
-  // tracked as you type. Tracking a selection list means keeping it in step
-  // with every edit and backspace; re-reading the text can't drift.
-  //
-  // This CONSUMES each match rather than just testing indexOf per person --
-  // the first version didn't, and "@Ravi Kumar" therefore also matched the
-  // shorter "@Ravi", so a different Ravi at the same table was told he'd been
-  // mentioned. Scanning left to right, longest name first, mirrors exactly
-  // what renderChatText does, so what gets highlighted and who gets flagged
-  // can no longer disagree.
-  function collectMentions(text, people) {
-    const sorted = (people || []).filter((p) => p && p.name)
-      .sort((a, b) => b.name.length - a.name.length);
-    const out = [];
-    let rest = String(text || '');
-    let guard = 0;
-    while (rest && sorted.length && guard++ < 80) {
-      let hit = null;
-      for (const p of sorted) {
-        const i = rest.indexOf('@' + p.name);
-        if (i >= 0 && (!hit || i < hit.i)) hit = { i, p };
-      }
-      if (!hit) break;
-      if (out.indexOf(hit.p.id) < 0) out.push(hit.p.id);
-      rest = rest.slice(hit.i + 1 + hit.p.name.length);
-    }
-    return out.slice(0, 8);
-  }
-
-  // Shared by both chats: shows name chips while an @ is being typed, and
-  // hides itself the rest of the time so it costs no height.
-  function wireMentionBar(inputId, barId, peopleFn) {
-    const input = document.getElementById(inputId);
-    const bar = document.getElementById(barId);
-    if (!input || !bar) return;
-    function insert(name) {
-      const v = input.value || '';
-      const at = v.lastIndexOf('@');
-      input.value = (at < 0 ? v : v.slice(0, at)) + '@' + name + ' ';
-      input.focus();
-      bar.classList.add('hidden');
-    }
-    function refresh() {
-      const v = input.value || '';
-      const at = v.lastIndexOf('@');
-      const frag = at >= 0 ? v.slice(at + 1) : null;
-      // Only while an @ is actively being typed -- no whitespace after it.
-      if (frag === null || /\s/.test(frag)) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
-      const q = frag.toLowerCase();
-      const hits = peopleFn().filter((p) => p.name && p.name.toLowerCase().indexOf(q) === 0).slice(0, 6);
-      bar.innerHTML = '';
-      if (!hits.length) { bar.classList.add('hidden'); return; }
-      hits.forEach((p) => {
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'mention-chip';
-        chip.textContent = p.name;
-        chip.onclick = () => insert(p.name);
-        bar.appendChild(chip);
-      });
-      bar.classList.remove('hidden');
-    }
-    input.addEventListener('input', refresh);
-    input.addEventListener('blur', () => setTimeout(() => bar.classList.add('hidden'), 180));
-  }
-
-  function tableChatPeople() {
-    if (!latestRoom) return [];
-    return latestRoom.players
-      .filter((p) => !p.isBot && p.playerId !== myPlayerId)
-      .map((p) => ({ id: p.playerId, name: p.name }));
-  }
-
-  function appendChatMessage(msg, opts) {
-    opts = opts || {};
-    const container = document.getElementById('chat-messages');
-    const emptyEl = container.querySelector('.chat-empty');
-    if (emptyEl) emptyEl.remove();
-
-    // Comment-sheet row: avatar | (name + text on one wrapped paragraph).
-    // Replaces the old flat "Name: text" line -- with 4-6 people talking at
-    // once during a round, the avatar column is what makes it scannable
-    // without reading every line.
-    const isMine = msg.playerId === myPlayerId;
-    const ts = msg.ts || Date.now();
-    // Only follow the conversation down if the reader is already at (or
-    // near) the bottom, or it's their own message. Someone scrolled up
-    // reading what was said earlier shouldn't be yanked away from it by
-    // every new line.
-    const followLatest = isMine || opts.silent ||
-      (container.scrollHeight - container.scrollTop - container.clientHeight) < 60;
-
-    // Read the previous row off the DOM rather than keeping "last sender"
-    // in a variable. A variable would have to be reset every time the chat
-    // is cleared or a player is muted, and a stale one here would silently
-    // eat somebody's name -- this project has lost enough days to flags that
-    // latched. The DOM is the state.
-    const prev = container.lastElementChild;
-    const prevIsMsg = !!(prev && prev.classList && prev.classList.contains('chat-msg'));
-    const prevPid = prevIsMsg ? (prev.dataset.playerId || null) : null;
-    const prevTs = prevIsMsg ? Number(prev.dataset.ts || 0) : 0;
-
-    // A time is printed only after a real silence. Every message used to
-    // carry one on its own line -- a full line each, to say "now" to people
-    // who are all sat at the same table playing the same round.
-    let brokeByGap = false;
-    if (prevTs && ts - prevTs > CHAT_GAP_MS) {
-      const sep = document.createElement('div');
-      sep.className = 'chat-gap';
-      sep.textContent = chatShortTime(ts) || '';
-      container.appendChild(sep);
-      brokeByGap = true;
-    }
-
-    // Consecutive messages from one person share an avatar and name, the way
-    // every messaging app does it. People type in bursts, so this is where
-    // most of the space was actually going.
-    const grouped = !brokeByGap && prevPid && msg.playerId === prevPid;
-    const mentionsMe = Array.isArray(msg.mentions) && msg.mentions.indexOf(myPlayerId) >= 0;
-
-    const div = document.createElement('div');
-    div.className = 'chat-msg' + (isMine ? ' me' : '') + (grouped ? ' grouped' : '')
-      + (mentionsMe ? ' mentions-me' : '');
-    div.dataset.playerId = msg.playerId || '';
-    div.dataset.ts = String(ts);
-
-    if (!grouped) {
-      const avatar = document.createElement('div');
-      avatar.className = 'chat-avatar';
-      const hue = chatAvatarHue(msg.playerId || msg.name);
-      avatar.style.background = `linear-gradient(135deg, hsl(${hue} 55% 42%), hsl(${(hue + 40) % 360} 55% 30%))`;
-      avatar.textContent = (msg.name || '?').trim().charAt(0) || '?';
-      div.appendChild(avatar);
-    }
-
-    const body = document.createElement('div');
-    body.className = 'chat-body';
-    if (!grouped) {
-      const nameEl = document.createElement('span');
-      nameEl.className = 'chat-name';
-      nameEl.textContent = displayName(msg.name) || '?';
-      body.appendChild(nameEl);
-      body.appendChild(document.createTextNode(' '));
-    }
-    if (msg.type === 'gif' && msg.gifUrl) {
-      const img = document.createElement('img');
-      img.src = msg.gifUrl;
-      img.className = 'chat-gif';
-      img.alt = 'GIF';
-      body.appendChild(img);
-    } else {
-      const textEl = document.createElement('span');
-      textEl.className = 'chat-text';
-      renderChatText(textEl, msg.text, msg.mentions, playerNameById, myPlayerId);
-      body.appendChild(textEl);
-    }
-    div.appendChild(body);
-
-    // Report/mute used to live here as icons on every message -- moved to a
-    // tap-on-their-seat/lobby-row popover instead (see the player action
-    // popover section below), so nothing gets attached per-message anymore.
-
-    container.appendChild(div);
-    if (followLatest) container.scrollTop = container.scrollHeight;
-
-    const panelOpen = !document.getElementById('chat-panel').classList.contains('hidden');
-    if (!panelOpen && msg.playerId !== myPlayerId && !opts.silent) {
-      chatUnread += 1;
-      updateChatBadge();
-    }
-  }
-
-  // Mutes a player for the rest of this session (this device only -- never
-  // sent to the server, so nobody else is affected). Also clears anything of
-  // theirs already sitting in the chat panel, not just future messages.
-  function mutePlayer(playerId, name) {
-    if (!playerId || mutedPlayerIds.has(playerId)) return;
-    mutedPlayerIds.add(playerId);
-    document.querySelectorAll('#chat-messages .chat-msg').forEach((el) => {
-      if (el.dataset.playerId === playerId) el.remove();
-    });
-  }
-
-  // Un-mutes a player -- their future chat messages and seat bubbles show up
-  // again. Whatever of theirs was already deleted from the chat panel while
-  // they were muted stays gone (same as it always has); only new messages
-  // come back.
-  function unmutePlayer(playerId) {
-    mutedPlayerIds.delete(playerId);
-  }
-
-  // ---------------- player action popover (report / mute) ----------------
-  // Replaces the old always-visible 🚩/🔇 icons that used to sit on every
-  // chat bubble. Now: tap a player's seat during the game, or their row in
-  // the lobby player list before the game starts, and a small popover with
-  // "Report" and "Mute/Unmute" appears anchored to that seat/row. Never
-  // shown for yourself or for bots. Only one popover open at a time, tracked
-  // by playerId rather than by DOM node -- seats and the lobby list get torn
-  // down and rebuilt from scratch on every render, so
-  // reopenPlayerActionPopoverIfNeeded() below re-attaches it to the freshly
-  // rebuilt element each time, otherwise it would silently vanish mid-tap
-  // during a live game (game_state arrives constantly).
-  let openPlayerActionForId = null;
-
-  function closePlayerActionPopover() {
-    document.querySelectorAll('.player-action-popover').forEach((el) => el.remove());
-    openPlayerActionForId = null;
-  }
-
-  // playerId -> { gamesPlayed, wins } | null (fetched, no linked account) --
-  // cached per session so re-fetching stats every time this popover gets
-  // torn down and rebuilt (see reopenPlayerActionPopoverIfNeeded) doesn't
-  // spam the server on every game_state update while it happens to be open.
-  const playerStatsCache = new Map();
-
-  function applyStatsToEl(el, stats) {
-    if (!stats) { el.classList.add('hidden'); el.textContent = ''; return; }
-    el.classList.remove('hidden');
-    el.innerHTML = (typeof stats.rating === 'number' ? 'Rating <b class="pa-rating">' + Math.round(stats.rating) + '</b> · ' : '')
-      + `${Number(stats.gamesPlayed) || 0} games · ${Number(stats.wins) || 0} wins`;
-  }
-
-  function loadStatsIntoPopover(playerId, statsEl) {
-    if (playerStatsCache.has(playerId)) {
-      applyStatsToEl(statsEl, playerStatsCache.get(playerId));
-      return;
-    }
-    statsEl.textContent = 'Loading stats...';
-    socket.emit('get_player_stats', { roomCode: myRoomCode, playerId }, (res) => {
-      const stats = (res && res.ok) ? res.stats : null;
-      playerStatsCache.set(playerId, stats);
-      // The popover may have already been closed or swapped to a different
-      // player by the time this ack comes back -- only touch the DOM if
-      // it's still showing for THIS player.
-      if (openPlayerActionForId !== playerId) return;
-      const liveEl = document.querySelector('.player-action-popover .player-action-stats');
-      if (liveEl) applyStatsToEl(liveEl, stats);
-    });
-  }
-
-  function buildPlayerActionPopover(playerId, name, alignClass) {
-    const pop = document.createElement('div');
-    pop.className = 'player-action-popover' + (alignClass ? ' ' + alignClass : '');
-    pop.onclick = (e) => e.stopPropagation(); // don't let the outside-click closer catch this
-
-    // A bot's trait line, above its stats. This is where a player actually
-    // learns the characters -- the names are generic on purpose, so without
-    // this the differences are felt but never nameable, which is most of the
-    // work for a fraction of the payoff.
-    const botInfo = latestRoom && Array.isArray(latestRoom.players)
-      ? latestRoom.players.find((p) => p && p.playerId === playerId && p.trait)
-      : null;
-    if (botInfo) {
-      const traitEl = document.createElement('div');
-      traitEl.className = 'player-action-trait';
-      traitEl.textContent = botInfo.trait;
-      pop.appendChild(traitEl);
-    }
-
-    const statsEl = document.createElement('div');
-    statsEl.className = 'player-action-stats';
-    pop.appendChild(statsEl);
-    loadStatsIntoPopover(playerId, statsEl);
-
-    const flagIcon = '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 2a1 1 0 0 1 1 1v18a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1Z"/><path d="M6 3.5c2-1 4-1 6 0s4 1 6 0v9c-2 1-4 1-6 0s-4-1-6 0v-9Z"/></svg>';
-    const soundOnIcon = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>';
-    const soundOffIcon = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg>';
-
-    const reportBtn = document.createElement('button');
-    reportBtn.type = 'button';
-    reportBtn.className = 'player-action-btn report';
-    reportBtn.innerHTML = `${flagIcon}<span class="pa-label">Report ${escapeHtml(name)}</span>`;
-    reportBtn.onclick = () => {
-      reportBtn.disabled = true;
-      reportBtn.querySelector('.pa-label').textContent = 'Reporting...';
-      socket.emit('report_player', {
-        roomCode: myRoomCode,
-        reportedPlayerId: playerId,
-        reportedName: name,
-        messageType: 'general',
-        messageText: '',
-      }, (res) => {
-        reportBtn.querySelector('.pa-label').textContent = res && res.ok ? 'Reported' : 'Failed, try again';
-        if (res && res.ok) logAnalytics('player_reported');
-        setTimeout(closePlayerActionPopover, 900);
-      });
-    };
-
-    const muteBtn = document.createElement('button');
-    muteBtn.type = 'button';
-    muteBtn.className = 'player-action-btn mute';
-    const muted = isMuted(playerId);
-    muteBtn.innerHTML = `${muted ? soundOnIcon : soundOffIcon}<span class="pa-label">${muted ? 'Unmute' : 'Mute'} ${escapeHtml(name)}</span>`;
-    muteBtn.onclick = () => {
-      if (isMuted(playerId)) unmutePlayer(playerId); else mutePlayer(playerId, name);
-      closePlayerActionPopover();
-    };
-
-    pop.appendChild(reportBtn);
-    pop.appendChild(muteBtn);
-    return pop;
-  }
-
-  // ------------------------------------------------------------------
-  // AT THE TABLE THE POPOVER FLOATS (Nov 2026). It used to be a child of the
-  // chair, placed with CSS -- and so it was painted UNDER every chair that
-  // came after it in the page, the open card and the hand. At six players
-  // one or two people's stats were always hidden behind a neighbour (Mani's
-  // report). Now it sits on the page itself, above the whole table: under
-  // the chair, or above it when there is more room there, and always kept
-  // inside the screen and clear of the ad space at the bottom.
-  // In the lobby it stays a child of the seat (nothing there covers it).
-  // ------------------------------------------------------------------
-  function placeFloatingPopover(pop, anchorEl) {
-    const r = anchorEl.getBoundingClientRect();
-    const M = 8;
-    const GAP = 6;
-    let adSafe = 0;
-    try { adSafe = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ad-safe-bottom')) || 0; } catch (e) { /* none */ }
-    const vw = window.innerWidth;
-    const bottomLimit = window.innerHeight - adSafe;
-    const pw = pop.offsetWidth;
-    const ph = pop.offsetHeight;
-    const left = Math.max(M, Math.min(vw - pw - M, r.left + r.width / 2 - pw / 2));
-    const roomBelow = bottomLimit - r.bottom - GAP - M;
-    const roomAbove = r.top - GAP - M;
-    let top = (roomBelow >= ph || roomBelow >= roomAbove) ? r.bottom + GAP : r.top - GAP - ph;
-    top = Math.max(M, Math.min(bottomLimit - ph - M, top));
-    pop.style.left = Math.round(left) + 'px';
-    pop.style.top = Math.round(top) + 'px';
-  }
-  function floatPopoverAt(pop, anchorEl, playerId) {
-    pop.classList.add('floating');
-    pop.dataset.forPlayer = playerId;
-    document.body.appendChild(pop);
-    placeFloatingPopover(pop, anchorEl);
-  }
-  window.addEventListener('resize', () => {
-    if (document.querySelector('.player-action-popover.floating')) closePlayerActionPopover();
-  });
-
-  // anchorEl must already be a positioning context (both .seat and the lobby
-  // <li> are). At the table the popover floats (above); in the lobby it is
-  // just appended as the seat's child and placed with plain CSS.
-  function showPlayerActionPopover(anchorEl, playerId, name, alignClass) {
-    closePlayerActionPopover();
-    if (!anchorEl) return;
-    openPlayerActionForId = playerId;
-    const pop = buildPlayerActionPopover(playerId, name, alignClass);
-    if (anchorEl.classList.contains('seat')) floatPopoverAt(pop, anchorEl, playerId);
-    else anchorEl.appendChild(pop);
-  }
-
-  function togglePlayerActionPopover(anchorEl, playerId, name, alignClass) {
-    if (openPlayerActionForId === playerId) { closePlayerActionPopover(); return; }
-    showPlayerActionPopover(anchorEl, playerId, name, alignClass);
-  }
-
-  // Called at the end of renderOvalTable()/renderLobby() -- if a popover was
-  // open for a player who's still on screen after the rebuild, put it right
-  // back instead of letting it silently disappear mid-decision.
-  function reopenPlayerActionPopoverIfNeeded(container) {
-    if (!openPlayerActionForId) return;
-    const anchorEl = container.querySelector(`[data-player-id="${CSS.escape(openPlayerActionForId)}"]`);
-    // Its player has gone: a floating popover would otherwise be left behind.
-    if (!anchorEl) { closePlayerActionPopover(); return; }
-    if (anchorEl.classList.contains('seat')) {
-      // Still open from before this redraw: just follow the chair. Rebuilding
-      // it on every game update would flicker and re-ask for the stats.
-      const existing = document.querySelector('.player-action-popover.floating');
-      if (existing && existing.dataset.forPlayer === openPlayerActionForId) {
-        placeFloatingPopover(existing, anchorEl);
-        return;
-      }
-      floatPopoverAt(buildPlayerActionPopover(openPlayerActionForId, playerName(openPlayerActionForId), ''), anchorEl, openPlayerActionForId);
-      return;
-    }
-    const alignClass = anchorEl.dataset.popoverAlign || '';
-    anchorEl.appendChild(buildPlayerActionPopover(openPlayerActionForId, playerName(openPlayerActionForId), alignClass));
-  }
-
-  document.addEventListener('click', () => closePlayerActionPopover());
-
-  function loadChatHistory(history) {
-    const container = document.getElementById('chat-messages');
-    container.innerHTML = '';
-    const visible = (history || []).filter((m) => !isMuted(m.playerId));
-    if (visible.length === 0) {
-      container.innerHTML = '<div class="chat-empty">No messages yet</div>';
-      return;
-    }
-    visible.forEach((m) => appendChatMessage(m, { silent: true }));
-    // Land on the latest message, same as opening any real chat app --
-    // previously this left whatever scroll position the (freshly emptied
-    // and rebuilt) container defaulted to, which is the top, so re-joining
-    // a room with an active conversation dropped you into old messages
-    // instead of where the conversation actually is.
-    container.scrollTop = container.scrollHeight;
-  }
-
-  // Used both by the manual close button and by the auto-minimize-on-your-
-  // turn hook in playSoundsForTransition() -- safe to call even if the
-  // panel is already closed (chat-fab just re-shows itself, a no-op if
-  // it's already visible).
-  function minimizeChatPanel() {
-    const panel = document.getElementById('chat-panel');
-    if (panel.classList.contains('hidden')) return;
-    closeTableChat();
-  }
-
-  // Timestamp of the last time the player actually touched the chat panel
-  // (scrolling history, or typing) -- used below to stop the your-turn
-  // auto-minimize hook from yanking the panel shut mid-scroll/mid-type.
-  // Without this, minimizeChatPanel() fires unconditionally the instant
-  // your turn starts, even if you're mid-gesture reading old messages --
-  // which felt exactly like "the chat won't let me scroll", because it got
-  // ripped away under your finger every time turns cycled back to you.
-  let chatLastInteractionAt = 0;
-  const markChatInteraction = () => { chatLastInteractionAt = Date.now(); };
-  document.querySelector('.chat-messages').addEventListener('scroll', markChatInteraction, { passive: true });
-  document.querySelector('.chat-messages').addEventListener('touchstart', markChatInteraction, { passive: true });
-  document.getElementById('chat-input').addEventListener('input', markChatInteraction);
-  document.getElementById('chat-input').addEventListener('focus', markChatInteraction);
-  // Belt-and-suspenders alongside the visualViewport listeners: reposition
-  // right when the input is actually focused (the moment the keyboard
-  // starts opening from a real tap), and again as it settles -- Android
-  // WebView's resize events during the keyboard animation are late and
-  // sometimes report an intermediate height. Cheap and idempotent, so
-  // running it a few extra times costs nothing. Each pass also re-pins the
-  // list to the newest message, since a shrinking list would otherwise
-  // leave you looking at older messages the instant you tap to type.
-  document.getElementById('chat-input').addEventListener('focus', () => {
-    const settle = () => { positionChatSheet(); scrollChatToLatest(); };
-    settle();
-    setTimeout(settle, 120);
-    setTimeout(settle, 350);
-    setTimeout(settle, 600);
-  });
-  // Keyboard dismissed via the system back gesture rather than by closing
-  // the sheet: resize usually covers it, but blur is the reliable signal.
-  document.getElementById('chat-input').addEventListener('blur', () => {
-    setTimeout(positionChatSheet, 120);
-  });
-
-  // One open/close pair for the table chat, used by the button on the game
-  // screen's hand row (#chat-fab) AND, since Oct 2026, the chat button in
-  // the lobby's top bar. The lobby never had one: the toggle moved into the
-  // game screen's hand row in Sept 2026, which lives inside #screen-game, so
-  // from the lobby there was simply no way in -- even though the server has
-  // always accepted chat in the lobby and the history carries into the game.
-  function openTableChat() {
-    // Point the shared positioner at THIS sheet -- the group chat may have
-    // been the last one open, and a stale id here would leave this panel
-    // unpositioned while silently resizing one that isn't on screen.
-    activeChatPanelId = 'chat-panel';
-    activeChatListId = 'chat-messages';
-    document.getElementById('chat-panel').classList.remove('hidden');
-    document.getElementById('chat-backdrop').classList.remove('hidden');
-    document.getElementById('chat-fab').classList.add('hidden');
-    chatUnread = 0;
-    updateChatBadge();
-    // Re-derive the sheet's top anchor from scratch on every open. This is
-    // the one moment a clean reading is guaranteed: the sheet is being
-    // opened by a tap, so the keyboard is definitionally closed (we
-    // deliberately don't autofocus the input -- see below). chatSheetOpened()
-    // also holds the screen behind the sheet still while it's open.
-    chatSheetOpened();
-    positionChatSheet();
-    // Same fix as loadChatHistory() above -- land on the newest message
-    // every time the sheet opens, not wherever it happened to be scrolled
-    // last time it was closed.
-    scrollChatToLatest();
-    // Deliberately NOT auto-focusing the input here anymore (removed Sept
-    // 2026). Focusing it immediately forces the on-screen keyboard open the
-    // instant the sheet appears, and on the actual Android WebView that
-    // fought with this panel's position:fixed layout badly enough to break
-    // it entirely -- confirmed via screen recording: header, drag handle,
-    // and the dimmed backdrop all disappeared, leaving only the input row
-    // stranded near the top of the screen. Also just better UX on its own:
-    // WhatsApp/Instagram don't force the keyboard open when you open a
-    // chat thread either -- tapping the input to type is a deliberate,
-    // separate action.
-  }
-  function closeTableChat() {
-    // Drop focus FIRST so the on-screen keyboard closes with the sheet.
-    // Without this the keyboard lingers over the table after the sheet is
-    // gone, and the next visualViewport resize arrives with no sheet to
-    // position -- which is how the old code could end up applying a
-    // keyboard offset that outlived the keyboard.
-    document.getElementById('chat-input').blur();
-    document.getElementById('chat-panel').classList.add('hidden');
-    document.getElementById('chat-backdrop').classList.add('hidden');
-    // The hand-row button lives on the game screen, so re-showing it is
-    // harmless (invisible) while the lobby is up.
-    document.getElementById('chat-fab').classList.remove('hidden');
-    chatSheetClosed();
-  }
-  document.getElementById('chat-fab').onclick = openTableChat;
-  const lobbyChatBtn = document.getElementById('btn-lobby-chat');
-  if (lobbyChatBtn) lobbyChatBtn.onclick = openTableChat;
-  document.getElementById('btn-chat-close').onclick = closeTableChat;
-  // Tapping the table behind the sheet closes it too -- standard
-  // bottom-sheet behavior (same as tapping outside an Instagram/WhatsApp
-  // comment or chat sheet). The layer is invisible now (see .chat-backdrop
-  // in style.css) but still catches the tap.
-  document.getElementById('chat-backdrop').onclick = () => {
-    document.getElementById('btn-chat-close').click();
-  };
-  function sendChat() {
-    const input = document.getElementById('chat-input');
-    const text = input.value.trim();
-    if (!text) return;
-    socket.emit('chat_message', {
-      roomCode: myRoomCode, type: 'text', text,
-      mentions: collectMentions(text, tableChatPeople()),
-    }, (res) => {
-      if (!res.ok) setGameError(res.error);
-    });
-    input.value = '';
-  }
-  wireMentionBar('chat-input', 'chat-mention-bar', tableChatPeople);
-  document.getElementById('btn-chat-send').onclick = sendChat;
-  // Tapping Send must not take focus away from the text box (Oct 2026).
-  // A button takes focus on press, the box loses it, and the keyboard drops
-  // after every message -- so a quick back-and-forth meant reopening the
-  // keyboard each time, and the sheet jumping between its typing and normal
-  // sizes with it. Cancelling the press's default keeps focus in the box;
-  // the click itself still fires and sends.
-  ['btn-chat-send', 'btn-group-chat-send'].forEach((id) => {
-    const b = document.getElementById(id);
-    if (b) b.addEventListener('mousedown', (e) => e.preventDefault());
-  });
-  document.getElementById('chat-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') sendChat();
-  });
-
-  // Swipe-down-to-dismiss on the grab handle / header. The handle has been
-  // drawn on this sheet for a while but never actually did anything, which
-  // is worse than not drawing it -- people try it, nothing happens, and the
-  // sheet reads as broken. Scoped deliberately to the handle and header
-  // only: putting it on the whole sheet would fight .chat-messages' own
-  // vertical scrolling, which is the single most-used gesture in here.
-  (function enableChatSheetDrag() {
-    const panel = document.getElementById('chat-panel');
-    const grip = document.querySelector('.chat-drag-handle');
-    const header = document.querySelector('.chat-header');
-    if (!panel || !grip || !header) return;
-    const DISMISS_PX = 80;
-    let startY = null;
-    let dy = 0;
-
-    const onStart = (e) => {
-      if (!e.touches || e.touches.length !== 1) return;
-      startY = e.touches[0].clientY;
-      dy = 0;
-      panel.style.transition = 'none';
-    };
-    const onMove = (e) => {
-      if (startY === null || !e.touches || !e.touches.length) return;
-      // Downward only -- dragging up must not detach the sheet from the
-      // top anchor that positionChatSheet() just clamped on-screen.
-      dy = Math.max(0, e.touches[0].clientY - startY);
-      panel.style.transform = 'translateY(' + dy + 'px)';
-    };
-    const onEnd = () => {
-      if (startY === null) return;
-      const shouldClose = dy > DISMISS_PX;
-      startY = null;
-      if (shouldClose) {
-        panel.style.transition = '';
-        panel.style.transform = '';
-        document.getElementById('btn-chat-close').click();
-        return;
-      }
-      // Snap back.
-      panel.style.transition = 'transform 0.18s ease-out';
-      panel.style.transform = 'translateY(0)';
-      setTimeout(() => { panel.style.transition = ''; panel.style.transform = ''; }, 200);
-    };
-
-    [grip, header].forEach((el) => {
-      el.addEventListener('touchstart', onStart, { passive: true });
-      el.addEventListener('touchmove', onMove, { passive: true });
-      el.addEventListener('touchend', onEnd);
-      el.addEventListener('touchcancel', onEnd);
-    });
-  })();
-  socket.on('chat_message', (msg) => {
-    if (isMuted(msg.playerId)) return; // muted -- skip both the panel message and the seat bubble
-    // Quiet tick for incoming chat. Skipped for your own messages (you just
-    // typed it, you don't need telling) so a busy table doesn't double up.
-    if (msg.playerId !== myPlayerId) Sound.chatMessage();
-    appendChatMessage(msg);
-    // Speech bubble at the sender's seat, in addition to the panel above --
-    // only meaningful once seats actually exist (mid-game), not lobby chat.
-    if (latestGame) triggerChatBubble(msg.playerId, msg);
-  });
-
-  // ---------------- GIF picker: REMOVED (Sept 2026) ----------------
-  // Pulled entirely for now rather than keeping it gated: the self-hosted
-  // meme library backing it (public/memes/*) never actually made it into
-  // the GitHub repo (confirmed 404 live), and separately, all ~150 memes
-  // were Telugu-specific -- not a fair "Remove Ads" perk for the wider
-  // audience this app is now aiming for. May come back later with broader,
-  // properly-licensed/curated content if that turns out feasible. The
-  // server still has the 'gif' chat_message type and /api/gif-search route
-  // (harmless, just unreachable with no UI pointing at them) in case this
-  // gets revisited rather than rebuilt from scratch.
-
-  // ---------------- +2 chain flash notification ----------------
-  // A brief, table-wide toast every time a 2 lands, the chain escalates, or
-  // someone takes the penalty instead -- so this moment is visible and fun
-  // for everyone, not just whoever's turn it currently is.
-  let chainFlashTimeout = null;
-  function showChainFlash(text) {
-    const el = document.getElementById('chain-flash');
-    el.textContent = text;
-    el.classList.remove('hidden');
-    // restart the pop-in animation even if a flash is already showing
-    el.style.animation = 'none';
-    void el.offsetWidth;
-    el.style.animation = '';
-    if (chainFlashTimeout) clearTimeout(chainFlashTimeout);
-    // Timer-only dismissal, no state-driven route -- see holdTransient.
-    const CHAIN_FLASH_MS = 2200;
-    holdTransient('chain-flash', CHAIN_FLASH_MS);
-    chainFlashTimeout = setTimeout(() => {
-      el.classList.add('hidden');
-      releaseTransient('chain-flash');
-    }, CHAIN_FLASH_MS);
-  }
-
-  function checkChainFlash(prev, game) {
-    // Skip across a round boundary -- if a fresh round happens to deal a 2
-    // as the opening card, that's the shuffle's doing, not a real play by
-    // whoever's stale "prev.currentPlayer" happened to be from last round.
-    if (!prev || prev.roundNumber !== game.roundNumber) return;
-    // The player who just acted is whoever's turn it was a moment ago --
-    // the new currentPlayer is whoever must respond next.
-    const actor = playerName(prev.currentPlayer);
-    if (game.chainCount > 0 && prev.chainCount === 0) {
-      showChainFlash(`🔥 ${actor} played a 2! Draw ${game.chainCount * 2} or answer with a 2`);
-    } else if (game.chainCount > prev.chainCount && prev.chainCount > 0) {
-      showChainFlash(`🔥🔥 ${actor} stacked another 2! Now +${game.chainCount * 2}`);
-    } else if (game.chainCount === 0 && prev.chainCount > 0) {
-      showChainFlash(`${actor} took the +${prev.chainCount * 2} penalty. Back to normal!`);
-    }
-  }
-
-  // ---------------- sound event detection (diff previous vs new game state) ----------------
-  // ====================================================================
-  // Card flight + haptics (Sept 2026)
-  //
-  // Playing a card was instant and silent: it vanished from the hand and the
-  // open card changed underneath. The whole game's motion budget had gone on
-  // ceremony -- the intro splash, the dealing sequence, confetti -- which a
-  // player sees a handful of times, while the turn itself, which they see
-  // hundreds of times, had none.
-  //
-  // 180ms, ease-out, no arc or spin. Deliberately restrained: the turn timer
-  // is 15s and a 4-player table plays three opponent moves between your
-  // turns, so a showier animation would add over a second of waiting per
-  // round and make the game feel SLOWER, not richer.
-  // ====================================================================
-  const FLY_MS = 180;
-
-  // When the current card flight lands. Anything that would cover the table
-  // (the penalty-draw overlay) waits for this, so two animations can never
-  // run on top of each other. Declared with var-like scope at the top of the
-  // IIFE so showDrawReveal, defined further down, can read it.
-  let flightBusyUntil = 0;
-
-  function flyRect(el) {
-    const r = el.getBoundingClientRect();
-    return { left: r.left, top: r.top, w: r.width, h: r.height };
-  }
-
-  // Animates a card face from one rect to another. Purely decorative -- it
-  // never blocks, never calls back into game state, and cleans itself up, so
-  // a dropped frame or an interrupted round can't leave anything behind.
-  function flyCard(fromRect, toRect, cardData, opts) {
-    opts = opts || {};
-    const layer = document.getElementById('fly-layer');
-    if (!layer || !fromRect || !toRect) return;
-    // Respect the OS "reduce motion" setting -- some people get motion sick,
-    // and a card game that ignores that is one they stop playing.
-    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-    let el;
-    try {
-      el = cardData ? cardEl(cardData, {}) : document.createElement('div');
-    } catch (e) {
-      el = document.createElement('div');
-    }
-    if (!cardData) el.className = 'card card-back-mini';
-    el.classList.add('flying-card');
-    el.style.left = fromRect.left + 'px';
-    el.style.top = fromRect.top + 'px';
-    el.style.width = fromRect.w + 'px';
-    el.style.height = fromRect.h + 'px';
-    layer.appendChild(el);
-
-    // Force a reflow so the browser treats the start position as a real
-    // frame -- without this the element is created and moved in the same
-    // tick and there is nothing to transition FROM, so it just appears at
-    // the destination.
-    void el.offsetWidth;
-
-    // Claim the table until this lands, so the penalty-draw overlay holds
-    // off instead of covering a card that is still moving.
-    flightBusyUntil = Date.now() + FLY_MS;
-
-    el.style.transition = `left ${FLY_MS}ms cubic-bezier(.22,.7,.3,1), top ${FLY_MS}ms cubic-bezier(.22,.7,.3,1), width ${FLY_MS}ms ease-out, height ${FLY_MS}ms ease-out, opacity ${FLY_MS}ms ease-out`;
-    el.style.left = toRect.left + 'px';
-    el.style.top = toRect.top + 'px';
-    el.style.width = toRect.w + 'px';
-    el.style.height = toRect.h + 'px';
-    if (opts.fade) el.style.opacity = '0';
-
-    setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, FLY_MS + 60);
-  }
-
-  function openCardSlotRect() {
-    const slot = document.querySelector('.table-center .card');
-    return slot ? flyRect(slot) : null;
-  }
-
-  function seatRectFor(playerId) {
-    const seat = document.querySelector(`.seat[data-player-id="${CSS.escape(playerId)}"]`);
-    return seat ? flyRect(seat) : null;
-  }
-
-  // ---- haptics ----
-  // Reserved for the two moments that are WARNINGS: a +2 penalty landing on
-  // you, and your own turn timer about to expire. Vibrating on every tap
-  // would turn it into background noise players tune out or switch off --
-  // and then it isn't there for the two places it earns its keep.
-  // navigator.vibrate works in the Android WebView with no native plugin, so
-  // this ships as a normal web deploy rather than waiting on a native build.
-  let hapticsOn = localStorage.getItem('leastcount_haptics') !== '0';
-  function buzz(pattern) {
-    if (!hapticsOn) return;
-    try {
-      if (navigator.vibrate) navigator.vibrate(pattern);
-    } catch (e) { /* unsupported or blocked -- never worth breaking play over */ }
-  }
-  function refreshHapticsToggle() {
-    const b = document.getElementById('btn-haptics-toggle');
-    if (!b) return;
-    // No text: the control is now a switch, and its knob position IS the
-    // state. Writing textContent here would wipe out the knob element.
-    // role="switch" + aria-checked is what a screen reader reads.
-    b.setAttribute('aria-checked', hapticsOn ? 'true' : 'false');
-    b.classList.toggle('on', hapticsOn);
-  }
-  (function wireHapticsToggle() {
-    const b = document.getElementById('btn-haptics-toggle');
-    if (!b) return;
-    refreshHapticsToggle();
-    b.onclick = () => {
-      hapticsOn = !hapticsOn;
-      localStorage.setItem('leastcount_haptics', hapticsOn ? '1' : '0');
-      refreshHapticsToggle();
-      if (hapticsOn) buzz(20);   // confirm it works, once, on enabling
-    };
-  })();
-
-  // One buzz per turn at the 5s mark -- a single warning, not an escalating
-  // nag. Reset each time the turn changes so it can fire again next turn.
-  let timerBuzzArmed = true;
-  function maybeBuzzTurnTimer(secondsLeft, isMyTurn) {
-    if (!isMyTurn) { timerBuzzArmed = true; return; }
-    if (secondsLeft > 5) { timerBuzzArmed = true; return; }
-    if (secondsLeft <= 5 && secondsLeft > 0 && timerBuzzArmed) {
-      timerBuzzArmed = false;
-      buzz([25, 60, 25]);
-      // Sound as well as vibration. Vibration alone reached only the
-      // players whose phone vibrates: someone on loud-with-vibration-off
-      // got no warning at all, and someone on silent got no sound. Two
-      // channels means the warning lands either way.
-      Sound.timerWarning();
-    }
-  }
-
-  function playSoundsForTransition(prev, game) {
-    if (!prev) return;
-    if (game.currentPlayer === myPlayerId && prev.currentPlayer !== myPlayerId && !game.roundOver) {
-      Sound.yourTurn();
-      // Chat panel is a fixed bottom sheet that can cover the whole table
-      // and timer -- if it's open right as your turn starts, minimize it
-      // back to the floating bubble automatically so you can't miss your
-      // own turn. Chat is still one tap away via the bubble; this doesn't
-      // close it forever, just stops it from silently sitting over the
-      // timer during the moment that matters most.
-      // EXCEPTION: skip this if the player touched the chat panel (scrolled
-      // or typed) within the last 3 seconds -- otherwise this fires mid-
-      // scroll/mid-type and rips the panel away, which is what made chat
-      // feel broken/unscrollable during real games with fast turn cycles.
-      if (Date.now() - chatLastInteractionAt > 3000) {
-        minimizeChatPanel();
-      }
-    }
-    if (game.chainCount > 0 && prev.chainCount === 0) {
-      Sound.chainAlert();
-    }
-
-    // ---- opponent's card flies to the pile ----
-    // Without this the open card silently changes and you have to spot the
-    // difference; with it you SEE the move happen at the seat that made it,
-    // which is most of what makes the table feel played-at rather than
-    // reported-on. Keyed off the open card changing while the round carries
-    // on, attributed to whoever's turn it just WAS (prev.currentPlayer).
-    // Wrapped for the same reason as the discard handler: this runs inside
-    // playSoundsForTransition(), which the game_state handler calls. A throw
-    // here would abort the rest of that handler -- so a decorative flight
-    // could stop the BOARD updating, which is the worst possible failure for
-    // a cosmetic feature. Logged and swallowed instead.
-    try {
-    const openChanged = prev.openCard && game.openCard
-      && (prev.openCard.id !== game.openCard.id);
-    const sameRound = prev.roundNumber === game.roundNumber;
-    if (openChanged && sameRound && !game.roundOver
-        && prev.currentPlayer && prev.currentPlayer !== myPlayerId) {
-      // An opponent's discard now makes a sound as well as a movement.
-      // Until this line, every move made by anyone other than you was
-      // completely silent -- in a six-player game that is five out of every
-      // six events at the table.
-      Sound.opponentDiscard();
-      const from = seatRectFor(prev.currentPlayer);
-      const to = openCardSlotRect();
-      if (from && to) {
-        // Start it at the card's destination size so it reads as a card the
-        // whole way, rather than a seat-shaped block that morphs.
-        flyCard({ left: from.left + (from.w - to.w) / 2, top: from.top, w: to.w, h: to.h },
-          to, game.openCard);
-      }
-    }
-
-    // ------------------------------------------------------------------
-    // ---- somebody ELSE picked cards up ----
-    //
-    // NOTE, and this is a real bug being fixed here: this block used to
-    // read game.lastDraw and vibrate on a +2 penalty. But lastDraw is NOT
-    // part of getPublicState() -- it only ever existed engine-side so the
-    // server could privately emit 'cards_drawn' to the one player affected.
-    // game.lastDraw is therefore permanently undefined on the client, and
-    // this condition has never once been true. The +2 vibration has never
-    // fired for anybody. Your own draw now buzzes from showDrawReveal(),
-    // which is driven by the 'cards_drawn' event that genuinely arrives.
-    //
-    // For OTHER players there is no draw event at all -- but handCounts is
-    // public, and a hand that grew between two states means that player
-    // drew exactly that many cards. That is the signal used here.
-    // ------------------------------------------------------------------
-    const counts = game.handCounts || {};
-    const prevCounts = prev.handCounts || {};
-    if (prev.roundNumber === game.roundNumber && !game.roundOver) {
-      let opponentDrew = 0;
-      Object.keys(counts).forEach((pid) => {
-        if (pid === myPlayerId) return;
-        const grew = (counts[pid] || 0) - (prevCounts[pid] || 0);
-        if (grew > 0) opponentDrew = Math.max(opponentDrew, grew);
-      });
-      // One sound for the table, not one per player -- a reshuffle or a
-      // rejoin can move several counts at once and we don't want a pile-up.
-      if (opponentDrew > 0) Sound.opponentDraw(opponentDrew);
-    }
-
-    // ---- somebody is out ----
-    const outNow = game.eliminated || [];
-    const outBefore = prev.eliminated || [];
-    if (outNow.length > outBefore.length) {
-      const justOut = outNow.filter((id) => outBefore.indexOf(id) === -1);
-      if (justOut.length) Sound.eliminated(justOut.indexOf(myPlayerId) !== -1);
-    }
-    } catch (e) {
-      console.warn('[fx] table flourish failed (state still applied):', e && e.message);
-    }
-    // The declare verdict sound now plays inside announceDeclare (Oct 2026),
-    // on the beat where the verdict appears, rather than here at the same
-    // instant as the call.
-    if (!prev.roundOver && game.roundOver && game.lastRoundResult && !game.lastRoundResult.declaredBy) {
-      if (game.lastRoundResult.correct) Sound.declareCorrect();
-      else Sound.declareWrong();
-    }
-    if (!prev.gameOver && game.gameOver) {
-      Sound.win();
-    }
-    // The stock ran out and got reshuffled from the discard pile -- public
-    // event, so play it for every player at the table, not just whoever drew.
-    if (prev.roundNumber === game.roundNumber && game.reshuffleCount > (prev.reshuffleCount || 0)) {
-      Sound.reshuffle();
-    }
-  }
-
-  // ---------------- drawn-card reveal ----------------
-  // Shows exactly which card(s) a player just drew as a penalty -- so they
-  // get that little moment of joy/disappointment before it just quietly
-  // joins their hand.
-  //
-  // IN THE HAND, not over the table (Oct 2026). This used to be a
-  // full-screen panel that darkened the whole table for 2.5 seconds on
-  // almost every turn (any discard that doesn't match the open card draws
-  // one), see-through, so whatever sat under it -- usually your own chair --
-  // showed through the card. Meanwhile the next players' moves happened
-  // behind it. Now the card flies from the middle of the table into your
-  // hand, lands marked NEW (renderHandTiles), and a one-line note above your
-  // cards says what it was. Nothing is covered and nothing is blocked.
-  //
-  // `var`, not let/const: renderHandTiles reads these, and it lives far
-  // above this block -- the same dead-zone rule as the other ad flags.
-  var recentDrawIds = new Set();
-  var recentDrawAt = 0;
-  var DRAW_NEW_MS = 2400;
-  var DRAW_TOAST_MS = 2000;
-  let drawNewRefresh = null;
-
-  function cardShortLabel(c) {
-    if (!c) return 'a card';
-    if (c.rank === 'JOKER') return 'a Joker';
-    return c.rank + (SUIT_SYMBOL[c.suit] || '');
-  }
-
-  function showDrawReveal(cards) {
-    if (!cards || cards.length === 0) return;
-
-    // ------------------------------------------------------------------
-    // Wait for any card still in flight before this one starts.
-    //
-    // The penalty and the discard flight used to fire simultaneously, so
-    // the penalty landed on top of a card that was still mid-air. Sequencing
-    // them also puts the events in their true causal order: your card
-    // leaves your hand, THEN the penalty arrives. Simultaneous, it read as
-    // one confused moment.
-    // ------------------------------------------------------------------
-    const wait = Math.max(0, flightBusyUntil - Date.now());
-    if (wait > 0) {
-      setTimeout(() => showDrawReveal(cards), wait + 40);
-      return;
-    }
-
-    // The verdict, not just the count. penaltyValence() weighs what you
-    // gave up against what you got back -- see its comment block.
-    Sound.penaltyDraw(cards.length, penaltyValence(cards, latestGame && latestGame.roundJokerRank));
-    // The haptic belongs here, not in the state-diff handler: this event
-    // ('cards_drawn') is the only signal that actually tells a client it
-    // drew cards. See the note in playSoundsForTransition().
-    try { buzz(cards.length > 1 ? [40, 70, 40] : 40); } catch (e) { /* no haptics, no matter */ }
-
-    // Mark them NEW in the hand. The state carrying the new card may already
-    // be here (then re-render now so the mark shows) or arrive a moment
-    // later (then its own render picks the mark up).
-    recentDrawIds = new Set(cards.map((c) => c.id));
-    recentDrawAt = Date.now();
-    const canRender = () => latestGame && !latestGame.roundOver && !revealPhaseActive;
-    if (canRender() && (latestGame.yourHand || []).some((c) => recentDrawIds.has(c.id))) renderGame(latestGame);
-    // ...and once more when the mark is due to come off, so it does.
-    if (drawNewRefresh) clearTimeout(drawNewRefresh);
-    drawNewRefresh = setTimeout(() => { drawNewRefresh = null; if (canRender()) renderGame(latestGame); }, DRAW_NEW_MS + 60);
-
-    // Fly them in, face up, from the middle of the table to where they land
-    // in the hand (the end of the tray if the new tile isn't drawn yet).
-    try {
-      const centre = document.querySelector('#oval-table .table-center');
-      const hand = document.getElementById('hand');
-      if (centre && hand) {
-        const c = centre.getBoundingClientRect();
-        const w = 44, h = 62;
-        const from = { left: c.left + c.width / 2 - w / 2, top: c.top + c.height / 2 - h / 2, w, h };
-        cards.slice(0, 3).forEach((card, i) => {
-          setTimeout(() => {
-            const tile = hand.querySelector('.card.just-drawn');
-            const hr = hand.getBoundingClientRect();
-            const to = tile ? flyRect(tile)
-              : { left: hr.right - w - 10, top: hr.top + 4, w, h };
-            flyCard(from, to, card, {});
-          }, i * 120);
-        });
-      }
-    } catch (e) { /* decoration only -- never let it stop the turn */ }
-
-    // A note on the line above your cards saying what it was -- and when
-    // it was a 2, that it's a +2 trump card.
-    const twos = cards.filter((c) => c.rank === '2').length;
-    // With the count now (Nov 2026): "You got a 2! Now 2 of the 8 are yours."
-    // The state carrying the new cards may not be here yet, so the drawn 2s
-    // are added to the ones already in hand rather than read from it.
-    const drawnIds = new Set(cards.map((c) => c.id));
-    const heldTwos = ((latestGame && latestGame.yourHand) || [])
-      .filter((c) => c.rank === '2' && !drawnIds.has(c.id)).length + twos;
-    const twoNote = twos ? (cbTwosNote(latestGame, heldTwos, twos) || (twos > 1 ? TRUMP_MANY_TEXT : TRUMP_ONE_TEXT)) : '';
-    if (cards.length === 1 && twos === 1) {
-      showHandToast(twoNote, { trump: true, ms: TRUMP_TOAST_MS });
-    } else {
-      showHandToast(cards.length > 1
-        ? `You drew ${cards.length} cards`
-        : 'You drew ' + cardShortLabel(cards[0]), { ms: DRAW_TOAST_MS });
-      if (twos > 0) showHandToast(twoNote, { trump: true, ms: TRUMP_TOAST_MS });
-    }
-  }
-
-  // ------------------------------------------------------------------
-  // The note on the hand line (Oct 2026): "You drew 5(h)", and the +2 trump
-  // card message. One at a time -- a second note waits for the first instead
-  // of replacing it, so "You drew 4 cards" and the trump note after it are
-  // both read. Shown over your card count and score (CSS hides those while a
-  // note is up), never over the value box.
-  //
-  // `var` for the queue: runStartSequence clears it and sits far above.
-  // ------------------------------------------------------------------
-  var handToastQueue = [];
-  var handToastBusyUntil = 0;
-  var handToastTimer = null;
-  var TRUMP_TOAST_MS = 3000;
-  var TRUMP_ONE_TEXT = '\uD83D\uDD25 +2 trump card \u2014 use it wisely!';
-  var TRUMP_MANY_TEXT = '\uD83D\uDD25 +2 trump cards \u2014 use them wisely!';
-  function showHandToast(text, opts) {
-    opts = opts || {};
-    const toast = document.getElementById('draw-toast');
-    if (!toast) return;
-    if (Date.now() < handToastBusyUntil && !toast.classList.contains('hidden')) {
-      if (handToastQueue.length < 3) handToastQueue.push([text, opts]);
-      return;
-    }
-    const ms = opts.ms || DRAW_TOAST_MS;
-    toast.textContent = text;
-    toast.classList.toggle('trump', !!opts.trump);
-    // Your turn briefing (Nov 2026) -- see YOUR TURN BRIEFING below.
-    toast.classList.toggle('coach', !!opts.coach);
-    toast.style.fontSize = '';
-    // The fade-out runs off this (see .draw-toast), so a longer note fades
-    // at its own end rather than at 1.7s.
-    toast.style.setProperty('--toast-ms', ms + 'ms');
-    toast.classList.add('hidden');
-    void toast.offsetWidth;   // restart the pop-in if one is already up
-    toast.classList.remove('hidden');
-    // A briefing is a sentence, not a two-word note: a little smaller type
-    // before any of it is cut off.
-    if (opts.coach || opts.trump) {
-      let size = 12.5;
-      while (toast.scrollWidth > toast.clientWidth + 1 && size > 10.5) {
-        size -= 0.5;
-        toast.style.fontSize = size + 'px';
-      }
-    }
-    handToastBusyUntil = Date.now() + ms;
-    if (handToastTimer) clearTimeout(handToastTimer);
-    // Same wall-clock guard as every other timer-dismissed element here, so
-    // a backgrounded phone can't leave it stuck on screen.
-    holdTransient('draw-toast', ms);
-    handToastTimer = setTimeout(() => {
-      handToastTimer = null;
-      toast.classList.add('hidden');
-      releaseTransient('draw-toast');
-      handToastBusyUntil = 0;
-      const next = handToastQueue.shift();
-      if (next) showHandToast(next[0], next[1]);
-    }, ms);
-  }
-
-  // Your turn is over: a turn briefing still up (or waiting) is about a turn
-  // that has gone. Other notes ("You drew 5♥") are left alone.
-  function dropCoachToast() {
-    handToastQueue = handToastQueue.filter((q) => !(q[1] && q[1].coach));
-    const toast = document.getElementById('draw-toast');
-    if (!toast || toast.classList.contains('hidden') || !toast.classList.contains('coach')) return;
-    if (handToastTimer) { clearTimeout(handToastTimer); handToastTimer = null; }
-    toast.classList.add('hidden');
-    releaseTransient('draw-toast');
-    handToastBusyUntil = 0;
-    const next = handToastQueue.shift();
-    if (next) showHandToast(next[0], next[1]);
-  }
-
-  // Dealt a 2 this round? Tell them once, after the reveal (see
-  // showStartReveal). Never in the tutorial, which stages its own hands.
-  var trumpNoteRound = null;
-  function maybeShowDealtTrump(game) {
-    try {
-      if (!game || game.roundOver) return;
-      if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
-      if (trumpNoteRound === game.roundNumber) return;
-      const g = (latestGame && latestGame.roundNumber === game.roundNumber) ? latestGame : game;
-      const twos = (g.yourHand || []).filter((c) => c.rank === '2').length;
-      if (!twos) return;
-      trumpNoteRound = game.roundNumber;
-      showHandToast(cbTwosNote(g, twos, 0) || (twos > 1 ? TRUMP_MANY_TEXT : TRUMP_ONE_TEXT), { trump: true, ms: TRUMP_TOAST_MS });
-    } catch (e) { /* a note, never a reason to stop */ }
-  }
-
-  socket.on('cards_drawn', ({ cards }) => showDrawReveal(cards));
-
-  // Someone else has asked to leave when this round ends (Oct 2026): five
-  // seconds of "Leaving after this round" on their chair, so the table knows
-  // before their seat empties at the next deal.
-  const LEAVING_NOTICE_MS = 5000;
-  socket.on('player_leaving', (data) => {
-    const { playerId, leaving } = data || {};
-    if (!playerId || playerId === myPlayerId || !latestGame) return;
-    if (leaving) {
-      triggerChatBubble(playerId, {
-        type: 'text', text: '\uD83D\uDC4B Leaving after this round',
-        variant: 'leaving', durationMs: LEAVING_NOTICE_MS,
-      });
-    } else if (chatBubbles[playerId] && chatBubbles[playerId].variant === 'leaving') {
-      delete chatBubbles[playerId];   // they changed their mind
-      renderOvalTable(latestGame);
-    }
-  });
-
-
-  // ====================================================================
-  // LIVE COMMENTARY (Oct 2026)
-  //
-  // One short line at a time in the middle of the table, under the open
-  // card and the joker -- a commentator calling the game. Worked out on this
-  // phone from the same game updates every player receives, so it costs the
-  // server nothing and says the same things at every seat (in "you" form for
-  // your own moves).
-  //
-  // THE RULE: it only ever says what the whole table can already see --
-  // cards thrown, cards picked up, how many cards someone holds, the +2
-  // chain, the scores. Never anything about a hidden hand, and never how
-  // close someone might be to calling.
-  //
-  // It is loudest where the game is tense -- a +2 chain, a player down to
-  // their last cards, someone near the score limit, a comeback, the final
-  // two -- and says nothing at all on a quiet turn. Lines are short, friendly
-  // and never make fun of anyone.
-  //
-  // On by default. The mic button beside the sound button turns it off, and
-  // the choice is remembered on this phone. `var` throughout: renderOvalTable
-  // and runStartSequence, far above, call into this block.
-  // ====================================================================
-  var COMMENTARY_KEY = 'leastcount_commentary';
-  var COMMENTARY_LINE_MS = 3200;
-  var commentaryOn = (function () {
-    try { return localStorage.getItem(COMMENTARY_KEY) !== 'off'; } catch (e) { return true; }
-  })();
-  var cmQueue = [];            // waiting lines, most important first
-  var cmShowing = null;        // { pri, until } for the line on screen
-  // True while the line is docked over the turn strip (a crowded table has
-  // no clean lane under the centre cards -- see layoutCommentaryLane).
-  var cmDocked = false;
-  var cmTimer = null;
-  var cmLastPick = {};         // event -> template last used, so lines don't repeat back to back
-  var cmRound = { number: null, streak: {}, low: {}, said: {}, turns: 0 };
-  var cmStandings = null;      // the order at the start of the previous round
-
-  var CM_LINES = {
-    opener: ['Game on! Keep that hand low', 'Cards are dealt. Good luck, everyone!', 'Here we go! Lowest hand wins'],
-    chainStart: ['{A} throws a 2! {T} must answer', 'A 2 from {A}! Pressure on {T}', '+2 on the table for {T}!'],
-    chainStartByMe: ['You throw a 2 at {T}!', 'Your 2 puts {T} on the spot!'],
-    chainStartAtMe: ['{A} hits you with a 2!', 'A 2 from {A}! Can you answer it?'],
-    chainStack: ['{A} answers with a 2! +{N} for {T}', 'The chain grows! +{N} for {T}', 'Stacked! {T} now faces +{N}'],
-    chainStackByMe: ['You stack a 2! +{N} for {T}', 'Right back at them! +{N} for {T}'],
-    chainStackAtMe: ['{A} stacks it! You face +{N}', 'The chain grows! +{N} coming your way'],
-    chainTake: ['{A} picks up {N}. Ouch!', '{A} takes the +{N}. Chain over', 'The chain ends with {A}: +{N}'],
-    chainTakeBig: ['{A} picks up {N}! What a swing!', 'Huge! {A} takes all {N} cards'],
-    chainTakeMe: ['You pick up {N}. Ouch!', 'You take the +{N}. Chain over'],
-    match: ['{A} matches the {R}. No pick-up!', 'Clean turn from {A}!', 'Perfect match by {A}'],
-    matchMe: ['You match the {R}. Clean turn!', 'Nice match! No pick-up for you'],
-    matchMany: ['{A} matches with {K} {Rs}!', '{Kc} {Rs} down, no pick-up for {A}!'],
-    matchManyMe: ['You match with {K} {Rs}!', '{Kc} {Rs} gone, no pick-up!'],
-    bigThrow: ['{A} drops {K} {Rs} at once!', 'Big throw! {Kc} cards from {A}'],
-    bigThrowMe: ['You drop {K} {Rs} at once!'],
-    streak: ['{A} picks up again, 3 in a row', 'Tough run for {A}: 3 pick-ups'],
-    streakMe: ['Third pick-up in a row for you'],
-    twoLeft: ['{A} is down to 2 cards!', 'Only 2 cards left for {A}...'],
-    twoLeftMe: ['You are down to 2 cards!'],
-    oneLeft: ['{A} has just ONE card left!', 'One card left for {A}. Watch out!'],
-    oneLeftMe: ['Just one card left for you!'],
-    timeout: ['{A} ran out of time!', 'The clock beats {A} this time'],
-    timeoutMe: ['You ran out of time!'],
-    danger: ['{A} is on {S}. Close to {M}!', 'One bad round and {A} is out!'],
-    dangerMe: ['Careful! You are on {S} of {M}'],
-    leader: ['New leader: {A} on {S}!', '{A} takes the lead!'],
-    leaderMe: ['You take the lead on {S}!'],
-    comeback: ['Comeback! {A} climbs to {P}', '{A} is fighting back, now {P}'],
-    comebackMe: ['Comeback! You climb to {P}'],
-    finalTwo: ['Final two! {A} vs {B}', 'It all comes down to {A} and {B}!'],
-    // Insights (Oct 2026): questions that build suspense and nudge the table.
-    // Asked, never claimed -- three cards might be three Kings.
-    lowStop: ['{A} has only {N} cards! Will anyone stop them with a +2?', 'Just {N} cards for {A}! Time for a +2?'],
-    lowStopMe: ['Only {N} cards left for you! Will anyone stop you?'],
-    callTurn: ['{A}\u2019s turn with just {N} cards... will they call LEAST COUNT?', '{N} cards, and it\u2019s {A}\u2019s turn. A call coming?'],
-    callTurnOne: ['One card left and it\u2019s {A}\u2019s turn... will they call it?'],
-    riskCall: ['{A} has {N} cards but is on {S}. A wrong call could end their game. Risk it?'],
-    nextUp: ['{L} is next with {N} cards. A +2 now would hit them!', '{L} is next with only {N} cards. Anyone holding a 2?'],
-    nextUpMe: ['{L} is next with {N} cards. A +2 from you would hit them!'],
-    tipTwo: ['You hold a 2, and {L} is next with {N} cards!'],
-    leaderLow: ['Leader {A} is down to {N} cards. Can anyone catch them?'],
-    leaderLowMe: ['You lead, and you are down to {N} cards!'],
-    chainHitsLow: ['That hurts! {A} goes from {X} cards to {Y}', 'Big setback for {A}: {X} cards to {Y}'],
-    chainHitsLowMe: ['That hurts! You go from {X} cards to {Y}'],
-    // Turns EACH (Nov 2026): everyone still in the round has played 10 times.
-    // It used to count single turns, so at a 4-player table "ten turns" came
-    // after two and a half trips round the table -- in almost every round.
-    long10: ['10 turns each and still no call. Who blinks first?'],
-    long20: ['20 turns each! This round is a real battle'],
-    myLow: ['You\u2019re on {V}. Call it now, or risk one more turn?', '{V} points in hand! Call LEAST COUNT or play on?'],
-    // Runs across rounds (Oct 2026). A round is "won" with a round score of 0;
-    // a "rough round" is the round's single biggest score. The rough side is
-    // always said kindly -- it cheers them on, it never mocks.
-    winRun: ['{A} has won {N} rounds in a row! Can anyone stop them?', '{Nc} in a row for {A}! Who will break the run?'],
-    winRunMe: ['You have won {N} rounds in a row! Keep it going!'],
-    roughRun: ['Tough run for {A}: {N} rough rounds. Time to bounce back?', '{A} is due a good round. Will it be this one?'],
-    roughRunMe: ['{Nc} rough rounds for you. Time to bounce back!'],
-    runEnds: ['{A}\u2019s winning run ends at {N}!', 'The run is over! {A} stops at {N} wins'],
-    runEndsMe: ['Your winning run ends at {N}. Start a new one!'],
-  };
-  var CM_MIC = '<svg class="cm-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>';
-
-  // Who hears what (Nov 2026). Players still in the round hear only the
-  // moments the whole table shares -- the +2 chain, someone down to their
-  // last card, the final two. Everything else is now said privately, on your
-  // own turn (YOUR TURN BRIEFING, below). Players who are out and watching
-  // still hear all of it, as before.
-  var CM_PUBLIC = {
-    chainStart: 1, chainStartByMe: 1, chainStartAtMe: 1, chainStack: 1, chainStackByMe: 1, chainStackAtMe: 1,
-    chainTake: 1, chainTakeBig: 1, chainTakeMe: 1, chainHitsLow: 1, chainHitsLowMe: 1,
-    oneLeft: 1, oneLeftMe: 1, finalTwo: 1,
-  };
-  // Diwali (7-9 Nov 2026): a +2 is a pataka. Used in place of the usual
-  // lines for these moments while the festival theme is on (see isDiwali).
-  var CM_LINES_DIWALI = {
-    chainStart: ['{A} bursts a pataka! {T} must answer', 'Pataka! +2 for {T}!'],
-    chainStartByMe: ['Your pataka goes off at {T}!'],
-    chainStartAtMe: ['{A} bursts a pataka at you!'],
-    chainStack: ['Double pataka! +{N} for {T}', 'Bigger bang! {T} now faces +{N}'],
-    chainTake: ['{A} picks up {N}. That pataka hurt!', 'Boom! {A} takes the +{N}'],
-    finalTwo: ['Final two! {A} vs {B}: a Diwali showdown'],
-  };
-  function cmLine(key, vals) {
-    if (!CM_PUBLIC[key] && !cbWatching()) return '';
-    const festive = typeof isDiwali === 'function' && isDiwali() && CM_LINES_DIWALI[key];
-    const list = festive || CM_LINES[key] || [];
-    if (!list.length) return '';
-    let i = Math.floor(Math.random() * list.length);
-    if (list.length > 1 && i === cmLastPick[key]) i = (i + 1) % list.length;
-    cmLastPick[key] = i;
-    return list[i].replace(/\{(\w+)\}/g, (m, k) => (vals && vals[k] !== undefined ? vals[k] : m));
-  }
-  function cmName(id) { return '<b>' + escapeHtml(playerName(id)) + '</b>'; }
-  function cmRankWord(r, plural) {
-    const w = ({ A: 'Ace', K: 'King', Q: 'Queen', J: 'Jack', JOKER: 'Joker' })[r] || String(r);
-    return plural ? w + 's' : w;
-  }
-  function cmCount(k, capital) {
-    const w = (['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'])[k] || String(k);
-    return capital ? w.charAt(0).toUpperCase() + w.slice(1) : w;
-  }
-  function cmPlace(pos) {
-    return pos === 0 ? 'the top' : (pos === 1 ? '2nd' : pos === 2 ? '3rd' : (pos + 1) + 'th');
-  }
-
-  // Can a line be on the table right now? Not mid-deal, not during the
-  // LEAST COUNT call or the reveal (those announce themselves), never in the
-  // tutorial, never over another screen.
-  function cmCanShow() {
-    if (!commentaryOn || !latestGame || latestGame.roundOver) return false;
-    if (startSeqActive || revealPhaseActive) return false;
-    if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return false;
-    const call = document.getElementById('declare-callout');
-    if (call && !call.classList.contains('hidden')) return false;
-    // Docked over the turn strip, a line waits out your own turn: the strip
-    // is saying "Your turn" and counting down, and that matters more.
-    if (cmDocked) {
-      const strip = document.getElementById('turn-strip');
-      if (strip && strip.classList.contains('mine')) return false;
-    }
-    const scr = document.getElementById('screen-game');
-    return !!(scr && scr.classList.contains('active'));
-  }
-
-  // Queue a line. A hotter line than the one on screen cuts in; anything
-  // else waits its turn, and a busy table drops its smallest news.
-  function cmSay(html, pri, opts) {
-    if (!commentaryOn || !html) return;
-    opts = opts || {};
-    const item = { html, pri, hot: !!opts.hot, ask: !!opts.ask, stake: !!opts.stake, ttl: opts.ttl || 0,
-      at: Date.now(), notBefore: opts.notBefore || 0 };
-    if (cmShowing && pri > cmShowing.pri && cmCanShow() && Date.now() >= item.notBefore) { cmShowLine(item); return; }
-    cmQueue.push(item);
-    cmQueue.sort((a, b) => b.pri - a.pri || a.at - b.at);
-    if (cmQueue.length > 3) cmQueue.length = 3;
-    cmPump();
-  }
-
-  function cmPump() {
-    if (cmTimer) { clearTimeout(cmTimer); cmTimer = null; }
-    const now = Date.now();
-    if (cmShowing && now < cmShowing.until) { cmTimer = setTimeout(cmPump, cmShowing.until - now + 20); return; }
-    // Old news is dropped: a line about a move from several seconds ago is
-    // just noise. The round's stakes may wait out the deal.
-    cmQueue = cmQueue.filter((it) => now - it.at < (it.ttl || (it.stake ? 25000 : 5000)));
-    if (!cmQueue.length) { cmEndLine(); return; }
-    if (!cmCanShow()) { cmEndLine(); cmTimer = setTimeout(cmPump, 500); return; }
-    const ready = cmQueue.findIndex((it) => now >= it.notBefore);
-    if (ready < 0) { cmEndLine(); cmTimer = setTimeout(cmPump, 300); return; }
-    cmShowLine(cmQueue.splice(ready, 1)[0]);
-  }
-
-  function cmShowLine(item, ms) {
-    const lane = document.getElementById('commentary');
-    if (!lane) return;
-    layoutCommentaryLane();
-    lane.innerHTML = '<span class="cm-line' + (item.hot ? ' hot' : (item.ask ? ' ask' : '')) + '">' + CM_MIC
-      + '<span class="cm-text">' + item.html + '</span></span>';
-    lane.classList.remove('hidden');
-    // One line that still doesn't fit: a little smaller type before any of
-    // it is cut off.
-    if (lane.classList.contains('one-line')) {
-      const line = lane.querySelector('.cm-line');
-      let size = lane.classList.contains('docked') ? 13 : 11.5;
-      while (line && line.scrollWidth > lane.clientWidth + 1 && size > 10) {
-        size -= 0.5;
-        line.style.fontSize = size + 'px';
-      }
-    }
-    const showFor = ms || COMMENTARY_LINE_MS;
-    cmShowing = { pri: item.pri, until: Date.now() + showFor };
-    // Same wall-clock guard as every other timer-dismissed element here, so
-    // a backgrounded phone can't leave a line stuck on the table.
-    holdTransient('commentary', showFor);
-    if (cmTimer) clearTimeout(cmTimer);
-    cmTimer = setTimeout(cmPump, showFor);
-  }
-
-  function cmEndLine() {
-    const lane = document.getElementById('commentary');
-    cmShowing = null;
-    releaseTransient('commentary');
-    if (!lane || lane.classList.contains('hidden')) return;
-    const line = lane.querySelector('.cm-line');
-    if (!line) { lane.classList.add('hidden'); return; }
-    line.classList.add('out');
-    setTimeout(() => {
-      if (line.parentNode === lane && !cmShowing) { lane.classList.add('hidden'); lane.innerHTML = ''; }
-    }, 260);
-  }
-
-  // Off the table at once -- the deal, the call, leaving the game.
-  function commentaryHush() {
-    if (cmTimer) { clearTimeout(cmTimer); cmTimer = null; }
-    cmQueue = cmQueue.filter((it) => it.stake);
-    cmShowing = null;
-    releaseTransient('commentary');
-    const lane = document.getElementById('commentary');
-    if (lane) { lane.classList.add('hidden'); lane.innerHTML = ''; }
-  }
-  function commentaryReset() {
-    commentaryHush();
-    cmQueue = [];
-    cmRound = { number: null, streak: {}, low: {}, said: {}, turns: 0 };
-    cmStandings = null;
-  }
-
-  // Every game update: what just happened, if it's worth a line.
-  function commentaryObserve(prev, next) {
-    try {
-      if (!next || !Array.isArray(next.turnOrder)) return;
-      if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
-      if (cmRound.number !== next.roundNumber) {
-        cmRound = { number: next.roundNumber, streak: {}, low: {}, said: {}, turns: 0 };
-        cbNewRound(next);
-        if (!next.roundOver) cmRoundStakes(next);
-        // Your turn first in the new round: brief you once the joker and the
-        // open card have turned over.
-        if (!next.roundOver && next.currentPlayer === myPlayerId) cbBriefLater(next.roundNumber, CB_FIRST_TURN_DELAY_MS);
-        return;
-      }
-      if (!prev || prev.roundNumber !== next.roundNumber || prev.roundOver || next.roundOver) return;
-      cmTurn(prev, next);
-      if (next.currentPlayer !== prev.currentPlayer) {
-        cmNewTurn(next);
-        if (prev.currentPlayer === myPlayerId) cbTurnOver();
-        if (next.currentPlayer === myPlayerId) cbBrief(next);
-      }
-    } catch (e) { /* commentary never gets in the way of the game */ }
-  }
-
-  // The start of a round: what's at stake. Waits out the deal and the
-  // joker/open-card turn-over.
-  function cmRoundStakes(g) {
-    const out = (g.eliminated || []).concat(g.quit || []);
-    const alive = g.turnOrder.filter((id) => out.indexOf(id) === -1);
-    const totals = g.scores || {};
-    const max = g.eliminationScore;
-    const order = alive.slice().sort((a, b) => (totals[a] || 0) - (totals[b] || 0));
-    const lines = [];
-    const said = (key, id, vals, pri, style) => {
-      const mine = id === myPlayerId && CM_LINES[key + 'Me'];
-      lines.push([cmLine(mine ? key + 'Me' : key, Object.assign({ A: cmName(id) }, vals || {})), pri, style || {}]);
-    };
-    if (g.roundNumber === 1 || !cmStandings) {
-      if (g.roundNumber === 1) lines.push([cmLine('opener'), 1, {}]);
-    } else {
-      const before = cmStandings;
-      if (alive.length === 2 && before.alive.length > 2) {
-        lines.push([cmLine('finalTwo', { A: cmName(order[0]), B: cmName(order[1]) }), 3, { hot: true }]);
-      }
-      if (max) {
-        const close = alive.filter((id) => (totals[id] || 0) >= max * 0.85 && (totals[id] || 0) < max)
-          .sort((a, b) => (totals[b] || 0) - (totals[a] || 0))[0];
-        if (close) said('danger', close, { S: totals[close] || 0, M: max }, 3, { hot: true });
-      }
-      let best = null;
-      alive.forEach((id) => {
-        const was = before.order.indexOf(id), now = order.indexOf(id);
-        if (was >= 0 && was - now >= 2 && (!best || was - now > best.gain)) best = { id, gain: was - now, pos: now };
-      });
-      if (best) {
-        said('comeback', best.id, { P: cmPlace(best.pos) }, 2);
-      } else if (order.length > 1 && order[0] !== before.order[0]
-          && (totals[order[0]] || 0) < (totals[order[1]] || 0)) {
-        said('leader', order[0], { S: totals[order[0]] || 0 }, 2);
-      }
-    }
-    cmRuns(g, alive, said);
-    cmStandings = { order, alive };
-    // The two that matter most, after the deal and the turn-over.
-    const after = Date.now() + 2400;
-    lines.sort((a, b) => b[1] - a[1]).slice(0, 2).forEach(([html, pri, style]) =>
-      cmSay(html, pri, { hot: !!style.hot, ask: !!style.ask, stake: true, notBefore: after }));
-  }
-
-  // Runs across rounds, read from the round history every player is sent:
-  //   won   -- a round score of 0 (a right call, or the lowest hand)
-  //   rough -- the single biggest score of the round
-  // Two in a row is a run. When a winning run of two or more is broken, that
-  // gets a line too.
-  function cmRuns(g, alive, said) {
-    const hist = Array.isArray(g.roundHistory) ? g.roundHistory : [];
-    if (hist.length < 2) return;
-    const wonIn = (r, id) => r.roundScores && r.roundScores[id] === 0;
-    const roughIn = (r, id) => {
-      const sc = r.roundScores || {};
-      const top = Math.max(...Object.values(sc));
-      return top > 0 && sc[id] === top && Object.values(sc).filter((v) => v === top).length === 1;
-    };
-    const run = (id, test, upTo) => {
-      let n = 0;
-      for (let i = upTo; i >= 0 && test(hist[i], id); i--) n++;
-      return n;
-    };
-    const last = hist.length - 1;
-    let win = null, rough = null, ended = null;
-    alive.forEach((id) => {
-      const w = run(id, wonIn, last);
-      if (w >= 2 && (!win || w > win.n)) win = { id, n: w };
-      const r = run(id, roughIn, last);
-      if (r >= 2 && (!rough || r > rough.n)) rough = { id, n: r };
-      if (w === 0) {
-        const was = run(id, wonIn, last - 1);
-        if (was >= 2 && (!ended || was > ended.n)) ended = { id, n: was };
-      }
-    });
-    if (win) said('winRun', win.id, { N: win.n, Nc: cmCount(win.n, true) }, 3, { ask: true });
-    if (ended) said('runEnds', ended.id, { N: ended.n }, 2);
-    if (rough) said('roughRun', rough.id, { N: rough.n, Nc: cmCount(rough.n, true) }, 2, { ask: true });
-  }
-
-  // One turn, read from the difference between two updates.
-  function cmTurn(prev, next) {
-    const actor = prev.currentPlayer, target = next.currentPlayer;
-    if (!actor || actor === target) return;
-    // Every turn counts here, +2 chain turns included -- for "turns each"
-    // at the end of this function.
-    const turnsBy = cmRound.turnsBy || (cmRound.turnsBy = {});
-    turnsBy[actor] = (turnsBy[actor] || 0) + 1;
-    const before = (prev.handCounts || {})[actor], after = (next.handCounts || {})[actor];
-    if (typeof before !== 'number' || typeof after !== 'number') return;
-    // For your turn briefing: what each of the others did since your last
-    // turn (their card counts only -- never their cards), and whether a +2
-    // chain has just finished.
-    if (actor !== myPlayerId) {
-      const s = cbState.since[actor] || (cbState.since[actor] = { from: before });
-      s.to = after;
-    }
-    if (prev.chainCount > 0 && next.chainCount === 0) cbState.chainEnded = true;
-    const delta = after - before;
-    const me = actor === myPlayerId, atMe = target === myPlayerId;
-    const names = { A: cmName(actor), T: cmName(target) };
-    const pick = (key) => (me && CM_LINES[key + 'ByMe']) ? key + 'ByMe'
-      : (atMe && CM_LINES[key + 'AtMe']) ? key + 'AtMe'
-      : (me && CM_LINES[key + 'Me']) ? key + 'Me' : key;
-
-    if (prev.chainCount > 0) {
-      if (next.chainCount > prev.chainCount) {
-        cmSay(cmLine(pick('chainStack'), Object.assign({ N: next.chainCount * 2 }, names)), 3, { hot: true });
-      } else if (next.chainCount === 0 && delta > 0) {
-        if (before <= 3) {
-          // The +2 landed on someone who was nearly out of cards.
-          cmSay(cmLine(me ? 'chainHitsLowMe' : 'chainHitsLow', Object.assign({ X: before, Y: after }, names)), 3, { hot: true });
-          cmRound.low[actor] = {};   // they're back up: their low-card moments can come round again
-        } else {
-          const key = me ? 'chainTakeMe' : (delta >= 6 ? 'chainTakeBig' : 'chainTake');
-          cmSay(cmLine(key, Object.assign({ N: delta }, names)), 3, { hot: true });
-        }
-      }
-      cmLowCards(actor, after, next);
-      return;
-    }
-
-    const pOpen = prev.openCard, nOpen = next.openCard;
-    if (!nOpen || (pOpen && nOpen.id === pOpen.id)) return;
-    const wild = prev.roundJokerRank;
-    const freePass = !!pOpen && (pOpen.rank === 'JOKER' || (!!wild && pOpen.rank === wild));
-    const matched = !!pOpen && nOpen.rank === pOpen.rank;
-    const drew = (matched || freePass) ? 0 : 1;
-    const thrown = Math.max(1, drew - delta);
-    const rankVals = { R: cmRankWord(nOpen.rank), Rs: cmRankWord(nOpen.rank, true), K: cmCount(thrown), Kc: cmCount(thrown, true) };
-
-    if (next.chainCount > 0) {
-      cmSay(cmLine(pick('chainStart'), names), 3, { hot: true });
-    } else if (matched) {
-      const key = thrown >= 2 ? (me ? 'matchManyMe' : 'matchMany') : (me ? 'matchMe' : 'match');
-      cmSay(cmLine(key, Object.assign({}, names, rankVals)), thrown >= 2 ? 2 : 1);
-    } else if (thrown >= 3) {
-      cmSay(cmLine(me ? 'bigThrowMe' : 'bigThrow', Object.assign({}, names, rankVals)), 2);
-    }
-
-    const streak = cmRound.streak;
-    streak[actor] = drew ? (streak[actor] || 0) + 1 : 0;
-    if (streak[actor] === 3) cmSay(cmLine(me ? 'streakMe' : 'streak', names), 1);
-    cmLowCards(actor, after, next);
-
-    // A long round with nobody calling, in turns EACH: the fewest turns any
-    // player still in this round has had. At 4 players, 1 each = 4 turns.
-    const gone = (next.eliminated || []).concat(next.quit || []);
-    const inRound = (next.turnOrder || []).filter((id) => gone.indexOf(id) === -1);
-    const each = inRound.length ? Math.min(...inRound.map((id) => turnsBy[id] || 0)) : 0;
-    const said = cmRound.said;
-    if (each >= 20 && !said.long20) {
-      said.long20 = said.long10 = true;
-      cmSay(cmLine('long20'), 2, { ask: true });
-    } else if (each >= 10 && !said.long10) {
-      said.long10 = true;
-      cmSay(cmLine('long10'), 2, { ask: true });
-    }
-  }
-
-  // Down to the last cards (once each, per round):
-  //   first at 3 or fewer -- "Only 3 cards! Will anyone stop them with a +2?"
-  //   at 2 -- "down to 2" (or, for the leader, "can anyone catch them?")
-  //   at 1 -- "just ONE card left!"
-  function cmLowCards(id, count, g) {
-    const low = cmRound.low[id] || (cmRound.low[id] = {});
-    const me = id === myPlayerId;
-    const A = cmName(id);
-    if (count === 1 && !low[1]) {
-      low[1] = low[2] = low.first = true;
-      cmSay(cmLine(me ? 'oneLeftMe' : 'oneLeft', { A }), 3, { hot: true });
-      return;
-    }
-    if (count < 2 || count > 3) return;
-    const leader = g && cmLeader(g) === id;
-    if (count === 2 && leader && !low.leader) {
-      low.leader = low[2] = low.first = true;
-      cmSay(cmLine(me ? 'leaderLowMe' : 'leaderLow', { A, N: count }), 3, { ask: true });
-      return;
-    }
-    if (!low.first) {
-      low.first = true;
-      if (count === 2) low[2] = true;
-      cmSay(cmLine(me ? 'lowStopMe' : 'lowStop', { A, N: count }), 3, { ask: !me, hot: me });
-      return;
-    }
-    if (count === 2 && !low[2]) {
-      low[2] = true;
-      cmSay(cmLine(me ? 'twoLeftMe' : 'twoLeft', { A }), 2, { hot: true });
-    }
-  }
-
-  // The unique lowest total among players still in -- from round 2, when
-  // there is a real leader to speak of.
-  function cmLeader(g) {
-    if (!g || !(g.roundNumber > 1)) return null;
-    const out = (g.eliminated || []).concat(g.quit || []);
-    const totals = g.scores || {};
-    const alive = (g.turnOrder || []).filter((x) => out.indexOf(x) === -1)
-      .sort((a, b) => (totals[a] || 0) - (totals[b] || 0));
-    if (alive.length < 2 || (totals[alive[0]] || 0) === (totals[alive[1]] || 0)) return null;
-    return alive[0];
-  }
-
-  // Who plays after this player (the round's turn order, skipping anyone
-  // who has quit).
-  function cmNextPlayer(g, id) {
-    const order = (g.turnOrder || []).filter((x) => (g.quit || []).indexOf(x) === -1);
-    const i = order.indexOf(id);
-    return i < 0 || order.length < 2 ? null : order[(i + 1) % order.length];
-  }
-
-  // A turn begins: the questions worth asking right now. Each once per
-  // player per round, and short-lived -- they're about THIS turn.
-  function cmNewTurn(g) {
-    if (!g || g.roundOver || !g.currentPlayer || g.chainCount > 0) return;
-    const said = cmRound.said;
-    const counts = g.handCounts || {};
-    const cur = g.currentPlayer;
-    const curN = counts[cur];
-    const totals = g.scores || {};
-    const max = g.eliminationScore;
-
-    if (cur === myPlayerId) {
-      // Your own hand at 5 or less -- only on your phone, and only once.
-      const v = g.yourHandValue;
-      if (typeof v === 'number' && v <= 5 && (g.yourHand || []).length && !said.myLow) {
-        said.myLow = true;
-        cmSay(cmLine('myLow', { V: v }), 3, { ask: true, ttl: 8000 });
-      }
-    } else if (typeof curN === 'number' && curN >= 1 && curN <= 3) {
-      const A = cmName(cur);
-      if (max && (totals[cur] || 0) >= max * 0.85 && (totals[cur] || 0) < max && !said['risk:' + cur]) {
-        said['risk:' + cur] = said['call:' + cur] = true;
-        cmSay(cmLine('riskCall', { A, N: curN, S: totals[cur] || 0 }), 3, { hot: true, ttl: 3500 });
-      } else if (!said['call:' + cur]) {
-        said['call:' + cur] = true;
-        cmSay(cmLine(curN === 1 ? 'callTurnOne' : 'callTurn', { A, N: curN }), 3, { ask: true, ttl: 3500 });
-      }
-    }
-
-    // The player after this one is nearly out of cards: a +2 now would hit
-    // them. Said to everyone; once per player per round (and again at one
-    // card).
-    const nxt = cmNextPlayer(g, cur);
-    const nN = nxt ? counts[nxt] : undefined;
-    if (!nxt || nxt === cur || nxt === myPlayerId || typeof nN !== 'number' || nN < 1 || nN > 3) return;
-    const key = (nN === 1 ? 'next1:' : 'next:') + nxt;
-    if (said[key]) return;
-    said[key] = true;
-    const L = cmName(nxt);
-    // Using YOUR cards ("you hold a 2") is coaching, so only against bots.
-    const holdTwo = cur === myPlayerId && (g.yourHand || []).some((c) => c.rank === '2');
-    if (holdTwo && amSoloVsBots()) {
-      cmSay(cmLine('tipTwo', { L, N: nN }), 3, { ask: true, ttl: 8000 });
-    } else {
-      cmSay(cmLine(cur === myPlayerId ? 'nextUpMe' : 'nextUp', { L, N: nN }), 2, { ask: true, ttl: 3500 });
-    }
-  }
-
-  function commentaryOnTimeout(playerId) {
-    try {
-      if (!playerId) return;
-      cmSay(cmLine(playerId === myPlayerId ? 'timeoutMe' : 'timeout', { A: cmName(playerId) }), 2);
-    } catch (e) { /* never in the way */ }
-  }
-
-  // ====================================================================
-  // YOUR TURN BRIEFING (Nov 2026)
-  //
-  // Private commentary. As YOUR turn begins, one line on your phone only,
-  // just above your cards, about your own game: call now or wait, your 2s,
-  // what the others did since your last turn, where you stand. Every player
-  // gets their own; nobody else sees yours.
-  //
-  // THE RULE STILL HOLDS: nobody's cards are ever revealed to anyone else.
-  // About the other players it reads only what the whole table can see --
-  // how many cards each holds, the scores, the cards thrown, and the count of
-  // 2s face-up on the pile (which the server adds). Your own hand is read
-  // only on your own phone.
-  //
-  // Two voices:
-  //   coach -- against bots, and in a player's first 3 games: plain advice
-  //            ("Good time to call!").
-  //   table -- every other game: the facts and a question ("Call or wait?"),
-  //            so the decision stays the player's own.
-  //
-  // One line a turn at most, and nothing when there is nothing worth saying.
-  // Each kind of line is said once a round (once per player, where it names
-  // one). Off with the rest of the commentary (the mic button), never in the
-  // tutorial, never to a player who is out and watching.
-  // ====================================================================
-  var CB_WRONG_CALL = 75;              // WRONG_DECLARE_PENALTY, game/gameLogic.js
-  var CB_CALL_AT = 5;                  // DECLARE_MAX_VALUE, game/gameLogic.js
-  var CB_SHOW_MS = 4200;
-  var CB_FIRST_TURN_DELAY_MS = 2800;   // the joker and the open card turning over
-  var CB_GAMES_KEY = 'leastcount_games_dealt';
-  var CB_COACH_GAMES = 3;
-  // Players who were playing before this existed are not new: only someone
-  // who has never played gets the coach voice for their first games.
+<!DOCTYPE html>
+<!-- class="gs2" switches on the premium game screen (Oct 2026): the card
+     faces, the chairs, the top bar, the turn strip and the rest of the
+     "GAME SCREEN v2" section of style.css. Take the class off and the game
+     screen goes back to how it was before it. -->
+<html lang="en" class="gs2">
+<head>
+<meta charset="UTF-8" />
+<!-- interactive-widget=overlays-content is the actual fix for the on-screen
+     keyboard crushing the game table when chat is open: without it, Chrome
+     on Android treats the keyboard like a collapsing toolbar and shrinks the
+     WHOLE layout viewport to make room for it -- which is what 100vh/dvh/svh
+     are all computed against, so switching between those units alone (tried
+     previously) never touched the real cause. This tells the browser the
+     keyboard should overlay on top of the page instead, so the layout
+     (and everything sized off it, like the oval table) never resizes at
+     all. The chat panel then lifts itself above the keyboard manually via
+     env(keyboard-inset-height) in style.css, instead of relying on the
+     browser to shrink the page to reveal it. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=overlays-content" />
+<title>Least Count</title>
+<!-- Diwali (7-9 Nov 2026): the theme class goes on before the first paint,
+     so the opening screen is festive from its very first frame. app.js sets
+     the same class (isDiwali) -- this is only the early copy. Same dates,
+     India time; ?theme=diwali previews it on any day. -->
+<script>
   (function () {
     try {
-      if (localStorage.getItem(CB_GAMES_KEY) === null) {
-        localStorage.setItem(CB_GAMES_KEY,
-          localStorage.getItem('leastcount_has_played') === '1' ? String(CB_COACH_GAMES + 1) : '0');
-      }
-    } catch (e) { /* no storage: the table voice */ }
+      var q = new URLSearchParams(location.search).get('theme');
+      var preview = q === 'diwali' || (q !== 'off' && sessionStorage.getItem('lc_theme_preview') === 'diwali');
+      var ist = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+      if (preview || (ist >= '2026-11-07' && ist <= '2026-11-09')) document.documentElement.classList.add('diwali');
+    } catch (e) { /* app.js decides, a moment later */ }
   })();
-  var cbState = { said: {}, since: {}, chainEnded: false, firstTurnDone: false };
-  var cbCountedRound1 = false;
-  var cbTimer = null;
+</script>
 
-  // T = table voice (a question), C = coach voice (advice). {Nc} = "2 cards".
-  // One line on the strip above your cards, so every line is kept to about
-  // 45 characters with a typical name: at the smallest size that is what a
-  // 360px phone fits without cutting the end off.
-  var CB_LINES = {
-    callOutT: '{V} points. A wrong call puts you out. Call?',
-    callOutC: 'A wrong call puts you out. Call only if sure.',
-    callThreatT: '{V} points, but {A} has {Nc}. Call or wait?',
-    callThreatC: '{V} points, but {A} has {Nc}. Safer to wait.',
-    callThreatLeadT: 'You lead. {A} has {Nc}. Risk +75 or wait?',
-    callThreatLeadC: 'You lead. {A} has {Nc}. Wait, skip the risk.',
-    callKoT: '{A} is on {S}. Call right to knock them out?',
-    callKoC: '{A} is on {S}. Call now to knock them out!',
-    callClearT: '{V} points, others have {K}+ cards. Call now?',
-    callClearC: '{V} points, others have {K}+ cards. Call now!',
-    chainOver: 'Chain over. 2s: {P} played, {Mi} yours, {U} unseen.',
-    threat: '{A} has {Nc}. If they call, you pay {V}.',
-    hitT: '{L} is next, on {Nc}. Throw your 2?',
-    hitC: '{L} is next, on {Nc}. Hit them with a 2!',
-    hitSure: 'No 2s unseen: {L} can’t answer your +2!',
-    bounce: 'If {L} answers your 2, +4 comes to you.',
-    defendT: '{U} twos unseen. Keep your 2 to answer a +2?',
-    defendC: '{U} twos unseen. Keep your 2 to answer a +2.',
-    noTwo: 'No 2 yet. {U} unseen: any pick-up may be one.',
-    allTwos: 'All {T} twos are played. No +2s left for now.',
-    since: 'Since your turn, {A}: {X} cards to {Y}.',
-    nearOut: '{S}/{M}: a wrong call puts you out. Careful!',
-    leadT: 'You lead by {D}. A wrong call (+75) loses it.',
-    leadC: 'You lead by {D}. Play safe: no risky calls.',
-    behind: '{D} behind {A}. A right call closes the gap.',
-    joker: '{R} are jokers this round. They count 0.',
-    manyCards: 'You have {N} cards. Others have {K} or fewer.',
-    matchC: 'Match the open {R}: no pick-up!',
-  };
-
-  function cbFill(key, vals) {
-    return CB_LINES[key].replace(/\{(\w+)\}/g, (m, k) => (vals && vals[k] !== undefined ? vals[k] : m));
-  }
-  function cbCards(n) { return n === 1 ? '1 card' : n + ' cards'; }
-  // First name only, so a long one cannot push the end of the line off the
-  // screen ("Venkata Subramanyam" -> "Venkata").
-  function cbShort(n) {
-    const first = String(n || '').trim().split(/\s+/)[0] || '?';
-    return first.length > 10 ? first.slice(0, 9) + '…' : first;
-  }
-
-  // Out of this game (eliminated, or quit) and watching: the full public
-  // commentary, and no briefing -- there is no turn to brief.
-  function cbWatching(g) {
-    g = g || latestGame;
-    if (!g || !myPlayerId) return false;
-    if ((g.eliminated || []).indexOf(myPlayerId) !== -1 || (g.quit || []).indexOf(myPlayerId) !== -1) return true;
-    return Array.isArray(g.turnOrder) && g.turnOrder.length > 0 && g.turnOrder.indexOf(myPlayerId) === -1;
-  }
-
-  function cbCoach() {
-    try { if (amSoloVsBots()) return true; } catch (e) { /* not at a table */ }
+<!-- THE NAVIGATION BAR, READ FROM ANDROID (Nov 2026) -- for the ad's space.
+     In the Android app 1.1 on Android 15+, the ad plugin lifts the bottom
+     banner by exactly the phone's navigation-bar height: 0 when the gesture
+     bar is hidden, about 24 with the gesture line, 48 with the 3 buttons
+     (read in the plugin's own source, AdMob 8.1.0 BannerExecutor). The page
+     can't see that bar, so it kept 56px for everyone: the empty strip above
+     the ad on gesture phones. Capacitor (the app's shell, 8.5.0 SystemBars)
+     does report the bar, as --safe-area-inset-bottom, but only while the
+     page asks for the full screen (viewport-fit=cover) on WebView 140+.
+     So, once: ask, read the bar, put the page back as it was. The reading is
+     kept on the phone and reused while the screen stays the same; then
+     admob-init.js keeps exactly that much room. Nothing here runs on the
+     website, in a newer app, or on Android 14 and older. -->
+<script>
+  (function () {
+    var w = window, d = document;
     try {
-      const n = Number(localStorage.getItem(CB_GAMES_KEY));
-      return Number.isFinite(n) && n <= CB_COACH_GAMES;
-    } catch (e) { return false; }
-  }
-
-  // A game counts the moment you are dealt into its first round.
-  function cbCountGame(g) {
-    if (g.roundNumber !== 1) { cbCountedRound1 = false; return; }
-    if (cbCountedRound1 || g.roundOver || (g.turnOrder || []).indexOf(myPlayerId) === -1) return;
-    cbCountedRound1 = true;
-    try { localStorage.setItem(CB_GAMES_KEY, String((Number(localStorage.getItem(CB_GAMES_KEY)) || 0) + 1)); } catch (e) { /* this game only */ }
-  }
-
-  function cbNewRound(g) {
-    cbState = { said: {}, since: {}, chainEnded: false, firstTurnDone: false };
-    if (cbTimer) { clearTimeout(cbTimer); cbTimer = null; }
-    cbCountGame(g);
-  }
-
-  function cbBriefLater(round, ms) {
-    if (cbTimer) clearTimeout(cbTimer);
-    cbTimer = setTimeout(() => {
-      cbTimer = null;
-      const g = latestGame;
-      if (g && g.roundNumber === round && !g.roundOver && g.currentPlayer === myPlayerId) cbBrief(g);
-    }, ms);
-  }
-
-  // Your turn is over: a briefing still up is about a turn that has gone.
-  function cbTurnOver() {
-    if (cbTimer) { clearTimeout(cbTimer); cbTimer = null; }
-    try { if (typeof dropCoachToast === 'function') dropCoachToast(); } catch (e) { /* a note */ }
-  }
-
-  // The 2s: how many this round's decks hold (T), how many are face-up on the
-  // pile (P), how many are yours (M), and the rest, unseen (U) -- in other
-  // hands, in the stock, or burned at the deal. Nobody's hand but yours.
-  function cbTwos(g) {
-    const T = g && g.totalTwos, P = g && g.twosPlayed;
-    if (typeof T !== 'number' || typeof P !== 'number' || !T) return null;
-    const M = ((g && g.yourHand) || []).filter((c) => c.rank === '2').length;
-    return { T, P, M, U: Math.max(0, T - P - M) };
-  }
-
-  // The +2 note when you are dealt 2s or pick one up, with the count (Nov
-  // 2026). null on a server that doesn't send the count; the old note stands.
-  function cbTwosNote(g, mine, got) {
-    const T = g && g.totalTwos;
-    if (typeof T !== 'number' || !T || !mine) return null;
-    if (got) {
-      return '🔥 ' + (got > 1 ? 'You got ' + got + ' twos!' : 'You got a 2!')
-        + ' Now ' + mine + ' of the ' + T + ' are yours.';
-    }
-    if (mine >= 3) return '🔥 You hold ' + mine + ' of the ' + T + ' twos. You control the +2s!';
-    if (mine === 2) return '🔥 You hold 2 of the ' + T + ' twos. Use them well!';
-    return '🔥 You have a 2 (1 of ' + T + ' this round). Use it well!';
-  }
-
-  // The one line for this turn, or null. Most important first.
-  function cbPick(g) {
-    const me = myPlayerId;
-    const said = cbState.said;
-    const once = (key) => (said[key] ? false : (said[key] = true));
-    const voice = cbCoach() ? 'C' : 'T';
-    const name = (id) => cbShort(playerName(id));
-    const counts = g.handCounts || {};
-    const totals = g.scores || {};
-    const max = g.eliminationScore || 0;
-    const out = (g.eliminated || []).concat(g.quit || []);
-    const alive = (g.turnOrder || []).filter((id) => out.indexOf(id) === -1);
-    const others = alive.filter((id) => id !== me);
-    if (!others.length) return null;
-    const myS = totals[me] || 0;
-    const myV = g.yourHandValue;
-    const myN = (g.yourHand || []).length;
-    const low = others.filter((id) => typeof counts[id] === 'number' && counts[id] >= 1 && counts[id] <= 2)
-      .sort((a, b) => counts[a] - counts[b]);
-    const byScore = alive.slice().sort((a, b) => (totals[a] || 0) - (totals[b] || 0));
-    const leading = byScore[0] === me && (totals[byScore[1]] || 0) > myS;
-    const lead = leading ? (totals[byScore[1]] || 0) - myS : 0;
-    const twos = cbTwos(g);
-    const nxt = cmNextPlayer(g, me);
-    const nN = nxt ? counts[nxt] : undefined;
-
-    // 1. Call or wait. The biggest decision there is, so it comes first.
-    if (typeof myV === 'number' && myV <= CB_CALL_AT && myN > 0) {
-      if (max && myS + CB_WRONG_CALL >= max && once('call:out')) return cbFill('callOut' + voice, { V: myV });
-      if (low.length) {
-        const a = low[0];
-        if (once('call:threat:' + a + ':' + counts[a])) {
-          return cbFill((leading ? 'callThreatLead' : 'callThreat') + voice, { V: myV, A: name(a), Nc: cbCards(counts[a]) });
-        }
-      } else {
-        // Someone near the max score, still holding a few cards: a right call
-        // makes them pay their hand, which is likely enough to put them out.
-        const ko = others.filter((id) => max && (totals[id] || 0) >= max - 10 && (totals[id] || 0) < max
-          && (counts[id] || 0) >= 3).sort((a, b) => (totals[b] || 0) - (totals[a] || 0))[0];
-        if (ko && once('call:ko:' + ko)) return cbFill('callKo' + voice, { A: name(ko), S: totals[ko] || 0, M: max });
-        const k = Math.min(...others.map((id) => counts[id] || 0));
-        if (k >= 3 && once('call:clear')) return cbFill('callClear' + voice, { V: myV, K: k });
-      }
-    }
-
-    // 2. A +2 chain has just finished: where the 2s are now.
-    if (cbState.chainEnded && twos) return cbFill('chainOver', { P: twos.P, Mi: twos.M, U: twos.U });
-
-    // 3. You hold a 2 and the next player is nearly out of cards. Ahead of
-    // "they may call" below: this is what you can do about it.
-    const holdTwo = !!(twos && twos.M > 0 && !(g.chainCount > 0));
-    if (holdTwo && nxt && nxt !== me && typeof nN === 'number' && nN >= 1 && nN <= 3 && once('hit:' + nxt + ':' + nN)) {
-      if (twos.U === 0) return cbFill('hitSure', { L: name(nxt) });
-      return cbFill('hit' + voice, { L: name(nxt), Nc: cbCards(nN) });
-    }
-
-    // 4. Someone else is close to calling -- and what that would cost you.
-    if (typeof myV === 'number' && myV > CB_CALL_AT && low.length) {
-      const a = low[0];
-      if (once('threat:' + a + ':' + counts[a])) return cbFill('threat', { A: name(a), Nc: cbCards(counts[a]), V: myV });
-    }
-
-    // 4b. Your 2s, the rest of it.
-    if (holdTwo) {
-      if (alive.length === 2 && twos.U > 0 && nxt && once('bounce')) return cbFill('bounce', { L: name(nxt) });
-      if (twos.M === 1 && twos.U >= 3 && once('defend')) return cbFill('defend' + voice, { U: twos.U });
-    }
-
-    // 5. Since your last turn: the biggest drop in anyone's cards.
-    let best = null;
-    Object.keys(cbState.since).forEach((id) => {
-      const s = cbState.since[id];
-      if (id === me || alive.indexOf(id) === -1 || typeof s.from !== 'number' || typeof s.to !== 'number') return;
-      const drop = s.from - s.to;
-      if (drop >= 2 && (!best || drop > best.drop)) best = { id, drop, from: s.from, to: s.to };
-    });
-    if (best && once('since:' + best.id + ':' + best.to)) return cbFill('since', { A: name(best.id), X: best.from, Y: best.to });
-
-    // 6. Where you stand, on your first turn of the round. New players hear
-    // about the jokers instead.
-    if (!cbState.firstTurnDone) {
-      cbState.firstTurnDone = true;
-      if (voice === 'C' && g.roundJokerRank) return cbFill('joker', { R: cmRankWord(g.roundJokerRank, true) });
-      if (g.roundNumber > 1) {
-        if (max && myS >= max * 0.85 && myS < max) return cbFill('nearOut', { S: myS, M: max });
-        if (leading && lead >= 10 && lead < CB_WRONG_CALL) return cbFill('lead' + voice, { D: lead });
-        const top = byScore[0];
-        if (top !== me && myS - (totals[top] || 0) >= 20) return cbFill('behind', { D: myS - (totals[top] || 0), A: name(top) });
-      }
-    }
-
-    // 7. The 2s, when nothing is more pressing.
-    if (twos) {
-      if (twos.P >= twos.T && once('allTwos')) return cbFill('allTwos', { T: twos.T });
-      if (twos.M === 0 && twos.U > 0 && once('noTwo')) return cbFill('noTwo', { U: twos.U });
-    }
-
-    // 8. You hold far more cards than anyone else.
-    const maxOther = Math.max(...others.map((id) => counts[id] || 0));
-    if (myN >= maxOther + 3 && once('manyCards')) return cbFill('manyCards', { N: myN, K: maxOther });
-
-    // 9. Coach only: a match is there for the taking (twice a round at most).
-    if (voice === 'C' && g.openCard && !(g.chainCount > 0)) {
-      const r = g.openCard.rank;
-      const wild = r === 'JOKER' || r === g.roundJokerRank;
-      if (!wild && r !== '2' && (g.yourHand || []).some((c) => c.rank === r) && (said.matchTips || 0) < 2) {
-        said.matchTips = (said.matchTips || 0) + 1;
-        return cbFill('matchC', { R: cmRankWord(r) });
-      }
-    }
-    return null;
-  }
-
-  // Your turn has begun: brief you, if there is anything worth saying.
-  function cbBrief(g) {
-    try {
-      const quiet = !commentaryOn || !g || g.roundOver || g.currentPlayer !== myPlayerId
-        || (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive())
-        || cbWatching(g) || g.chainCount > 0 || startSeqActive || revealPhaseActive;
-      const text = quiet ? null : cbPick(g);
-      // A new "since your last turn" starts now, said or not.
-      cbState.since = {};
-      cbState.chainEnded = false;
-      if (text && typeof showHandToast === 'function') {
-        showHandToast('💡 ' + text, { coach: true, ms: CB_SHOW_MS });
-      }
-    } catch (e) { /* never in the way of the turn */ }
-  }
-
-  // The lane sits under the open card and joker and stops above the first
-  // chair below it. With room for two lines it may wrap; on a crowded table,
-  // where the lower chairs come close, it becomes ONE line instead -- which
-  // then fits above those chairs at full width, rather than squeezing
-  // between them four words to a line.
-  function layoutCommentaryLane() {
-    const oval = document.getElementById('oval-table');
-    const lane = document.getElementById('commentary');
-    const centre = oval && oval.querySelector('.table-center');
-    if (!oval || !lane || !centre) return;
-    const o = oval.getBoundingClientRect();
-    const c = centre.getBoundingClientRect();
-    if (!o.width || !c.height) return;
-    const mid = o.width / 2;
-    const top = c.bottom - o.top + 8;
-    const seats = Array.prototype.map.call(oval.querySelectorAll('.seat'), (s) => {
-      const r = s.getBoundingClientRect();
-      return { top: r.top - o.top, bottom: r.bottom - o.top, inner: Math.abs((r.left + r.right) / 2 - o.left - mid) - r.width / 2 };
-    });
-    // How far down: the first chair below the lane that reaches into the
-    // middle 220px (yours, and the lower side chairs on a busy table).
-    let floor = o.height;
-    seats.forEach((r) => { if (r.top > top && r.inner < 110) floor = Math.min(floor, r.top - 4); });
-    const room = floor - top;
-    const twoLines = room >= 44;
-    // How wide: whatever the chairs level with the lane leave free -- up to
-    // the screen's own edges, not the table's, so a small table on a short
-    // phone still gets a line long enough to read.
-    const bandBottom = top + (twoLines ? 44 : 24);
-    const scr = oval.closest('.screen');
-    const sr = scr ? scr.getBoundingClientRect() : o;
-    const screenHalf = Math.min(o.left + mid - sr.left, sr.right - (o.left + mid)) - 12;
-    let half = Math.min(165, Math.max(o.width * 0.44, screenHalf));
-    seats.forEach((r) => {
-      if (r.bottom < top || r.top > bandBottom) return;
-      half = Math.min(half, r.inner - 8);
-    });
-    // A crowded table -- six to eight chairs on a phone -- leaves no clean
-    // lane under the centre cards: the lower chairs crowd in from both sides
-    // and the line sat on top of them (Oct 2026, reported on 8 players). Then
-    // the line docks over the turn strip just above the table instead: full
-    // width, clear of every chair and card. It covers "Chaitanya's turn" for
-    // a few seconds -- the gold chair still says whose turn it is -- and
-    // never "Your turn" (see cmCanShow and renderTurnStrip).
-    const strip = document.getElementById('turn-strip');
-    const sr2 = strip && !strip.classList.contains('hidden') ? strip.getBoundingClientRect() : null;
-    cmDocked = !!(sr2 && sr2.height > 0 && (2 * half < CM_MIN_LANE_W || room < 20));
-    lane.classList.toggle('docked', cmDocked);
-    if (cmDocked) {
-      lane.style.top = Math.round(sr2.top - o.top) + 'px';
-      lane.style.left = Math.round(sr2.left - o.left) + 'px';
-      lane.style.width = Math.round(sr2.width) + 'px';
-      lane.style.height = Math.round(sr2.height) + 'px';
-      lane.style.maxWidth = 'none';
-      lane.style.maxHeight = 'none';
-      lane.classList.add('one-line');
-      return;
-    }
-    lane.style.left = '';
-    lane.style.width = '';
-    lane.style.height = '';
-    lane.style.top = Math.round(top) + 'px';
-    lane.style.maxWidth = Math.round(Math.max(110, 2 * half)) + 'px';
-    lane.style.maxHeight = Math.round(Math.max(20, room)) + 'px';
-    lane.classList.toggle('one-line', !twoLines);
-  }
-  // The narrowest lane under the centre cards worth using: about a short
-  // sentence ("Bot 3 drops three 6s at once!") at the commentary's size.
-  var CM_MIN_LANE_W = 200;
-
-  // The mic button beside the sound button. On by default.
-  (function wireCommentaryButton() {
-    const btn = document.getElementById('btn-commentary');
-    if (!btn) return;
-    const iconOn = btn.querySelector('.icon-cm-on');
-    const iconOff = btn.querySelector('.icon-cm-off');
-    function refresh() {
-      if (iconOn) iconOn.classList.toggle('hidden', !commentaryOn);
-      if (iconOff) iconOff.classList.toggle('hidden', commentaryOn);
-      btn.setAttribute('aria-label', commentaryOn ? 'Turn off live commentary' : 'Turn on live commentary');
-      btn.setAttribute('aria-pressed', commentaryOn ? 'true' : 'false');
-      btn.title = commentaryOn ? 'Live commentary: on' : 'Live commentary: off';
-    }
-    refresh();
-    btn.onclick = () => {
-      commentaryOn = !commentaryOn;
-      try { localStorage.setItem(COMMENTARY_KEY, commentaryOn ? 'on' : 'off'); } catch (e) { /* this game only */ }
-      refresh();
-      commentaryHush();
-      cmQueue = [];
-      // A word in the lane itself, so the switch says what it did.
-      if (latestGame && !latestGame.roundOver && !revealPhaseActive && !startSeqActive) {
-        cmShowLine({ html: commentaryOn ? 'Commentary on' : 'Commentary off', pri: 9 }, 1500);
-      }
-    };
-  })();
-
-  // ---------------- socket listeners ----------------
-  function syncWithServer() {
-    if (!myRoomCode || !myPlayerId) return;
-    socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId, sessionToken: mySessionToken }, (res) => {
-      if (!res.ok) {
-        localStorage.removeItem('leastcount_session');
-        mySessionToken = null;  // the seat is gone; do not keep a credential for it
-        // ALSO clear the in-memory copies. Removing only the stored session
-        // left myRoomCode holding a dead room code for the rest of the page's
-        // life, and several checks read it as "am I in a room?" -- which it
-        // never meant. That is what stopped a group member being pulled into
-        // a game: the auto-join saw a stale room code and skipped them, while
-        // the manual Join button (no such check) worked, so leaving the table
-        // and rejoining appeared to "fix" it.
-        myRoomCode = null;
-        myPlayerId = null;
-        // Same cleanup leaveRoom() already does -- without it, a failed
-        // rejoin sent you back to the landing screen but left the red chat
-        // FAB (and, if it was open, the whole chat panel) floating on top,
-        // covering the footer nav underneath.
-        hideChatUI();
-        showScreen('screen-landing');
-      } else {
-        loadChatHistory(res.chatHistory);
-        showChatFab();
-      }
-    });
-  }
-
-  socket.on('connect', syncWithServer);
-
-  // Mobile browsers aggressively suspend background tabs, which can silently
-  // drop or stall the socket connection without the UI ever noticing. When
-  // the tab becomes visible again, force a fresh state sync so nobody has to
-  // manually reload the page mid-game.
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      // Before anything else: this page may have just spent a while with its
-      // timers frozen, so any start-sequence chrome still up is probably
-      // stale. Sweeping here rather than waiting for syncWithServer's
-      // round-trip means the player sees a clean table the moment they come
-      // back, instead of a "3" sitting over a live game until the next state
-      // arrives -- which, if it is not their turn, can be many seconds.
-      sweepStaleOverlays('foreground');
-      syncQueuePrompt('foreground');
-      if (socket.connected) {
-        syncWithServer();
-      } else {
-        socket.connect();
-        // 'connect' handler above will run syncWithServer() once reconnected.
-      }
-    }
-  });
-
-  // Some mobile browsers fire 'pageshow' (e.g. returning via back-forward
-  // cache) without a matching visibilitychange - cover that path too.
-  window.addEventListener('pageshow', () => {
-    if (document.visibilityState === 'visible') {
-      sweepStaleOverlays('pageshow');
-      syncQueuePrompt('pageshow');
-      syncWithServer();
-    }
-  });
-
-  // ---------------- connection watchdog ----------------
-  // Mobile connections can go "zombie": the browser still thinks the socket
-  // is connected, but it has actually stopped delivering anything (common
-  // when the OS briefly throttles the network in the background). No
-  // 'disconnect' event fires in that case, so nothing above ever kicks in,
-  // and the screen just quietly goes stale until the page is manually
-  // reloaded. This checks every few seconds that the connection is truly
-  // alive (a real server round-trip, not just the client's belief about it)
-  // and forces a hard reconnect if it isn't -- self-healing, no refresh needed.
-  let watchdogAwaitingAck = false;
-  setInterval(() => {
-    if (!myRoomCode || !myPlayerId || watchdogAwaitingAck) return;
-    watchdogAwaitingAck = true;
-    const bail = setTimeout(() => {
-      if (!watchdogAwaitingAck) return;
-      watchdogAwaitingAck = false;
-      socket.disconnect();
-      socket.connect();
-    }, 4000);
-    socket.emit('rejoin', { roomCode: myRoomCode, playerId: myPlayerId, sessionToken: mySessionToken }, () => {
-      // A fresh room_update/game_state has already been emitted by the
-      // server as a side effect of this rejoin -- just confirms we're alive.
-      watchdogAwaitingAck = false;
-      clearTimeout(bail);
-    });
-  }, 7000);
-
-  // ---- "I'm back" (Nov 2026) --------------------------------------------
-  // Miss three turns in a row and a bot plays your seat (a table with other
-  // people) or the game pauses (solo against bots); the server says so with
-  // `away` on your player / `idlePaused` on the room. This card is how you
-  // take it back -- a bot moving every 1.6s leaves no time to make a move
-  // yourself. Not back by the end of the round (tables with people): out.
-  function ensureAwayBannerStyle() {
-    if (document.getElementById('away-banner-style')) return;
-    const st = document.createElement('style');
-    st.id = 'away-banner-style';
-    st.textContent = '#away-banner{position:fixed;left:50%;top:44%;transform:translate(-50%,-50%);'
-      + 'width:min(320px,86vw);z-index:80;box-sizing:border-box;padding:16px 16px 14px;border-radius:16px;'
-      + 'background:rgba(10,24,19,.96);border:1px solid rgba(242,193,78,.55);'
-      + 'box-shadow:0 12px 36px rgba(0,0,0,.55);color:#fff;text-align:center;font-family:inherit}'
-      + '#away-banner .away-text b{display:block;font-size:17px;margin-bottom:4px}'
-      + '#away-banner .away-text span{display:block;font-size:13px;line-height:1.4;opacity:.85}'
-      + '#away-banner .away-btn{margin-top:12px;width:100%;padding:12px 0;border:0;border-radius:12px;'
-      + 'font:inherit;font-size:16px;font-weight:800;cursor:pointer;'
-      + 'background:var(--brand,#f2c14e);color:var(--brand-on,#241a05)}'
-      + '#away-banner .away-btn:disabled{opacity:.6}';
-    document.head.appendChild(st);
-  }
-  function renderAwayBanner() {
-    const room = latestRoom;
-    const screen = document.getElementById('screen-game');
-    const me = room && room.players ? room.players.find((p) => p.playerId === myPlayerId) : null;
-    const solo = !!(room && room.idlePaused);
-    const show = !!(screen && screen.classList.contains('active') && me && !me.isBot
-      && (me.away || solo) && latestGame && !latestGame.gameOver);
-    let bar = document.getElementById('away-banner');
-    if (!show) { if (bar && bar.parentNode) bar.parentNode.removeChild(bar); return; }
-    if (!bar) {
-      ensureAwayBannerStyle();
-      bar = document.createElement('div');
-      bar.id = 'away-banner';
-      bar.setAttribute('role', 'alert');
-      bar.innerHTML = '<div class="away-text"><b></b><span></span></div><button type="button" class="away-btn"></button>';
-      const btn = bar.querySelector('.away-btn');
-      btn.onclick = () => {
-        btn.disabled = true;
-        socket.emit('im_back', {}, (res) => {
-          btn.disabled = false;
-          if (!res || !res.ok) setGameError((res && res.error) || 'Could not reach the table. Try again.');
-        });
-      };
-      screen.appendChild(bar);
-    }
-    bar.querySelector('b').textContent = solo ? 'Game paused' : 'A bot is playing for you';
-    bar.querySelector('span').textContent = solo
-      ? 'You missed 3 turns in a row, so the game is waiting for you.'
-      : 'You missed 3 turns in a row. Come back before this round ends, or you will be out.';
-    bar.querySelector('.away-btn').textContent = solo ? 'Continue' : 'I’m back';
-  }
-
-  socket.on('room_update', (room) => {
-    latestRoom = room;
-    // After the rest of this handler has put the right screen up.
-    setTimeout(renderAwayBanner, 0);
-    // Top up the name cache with everyone currently in the room -- see
-    // knownPlayerNames/playerName() above. Cheap no-op for names already known.
-    room.players.forEach((p) => { knownPlayerNames[p.playerId] = p.name; });
-    if (room.phase === 'lobby') {
-      // Back from a finished game (Play Again): the next one starts at the
-      // max score this one was played to, not the lobby's default of 200 --
-      // so a 100-point bot game is followed by another 100-point game. Only on
-      // the way in (latestGame is cleared just below), so a pick made in the
-      // lobby is never overwritten by the next room_update.
-      if (latestGame && latestGame.gameOver && MAX_SCORE_OPTIONS.indexOf(latestGame.eliminationScore) !== -1) {
-        const maxSel = document.getElementById('input-maxscore');
-        if (maxSel) { maxSel.value = String(latestGame.eliminationScore); syncDropdown(maxSel); }
-      }
-      latestGame = null;
-      window.__lastRoundResultShownFor = null;
-      document.getElementById('overlay-round-result').classList.add('hidden');
-      document.getElementById('overlay-gameover').classList.add('hidden');
-      renderLobby(room);
-      // Play Again against bots: start the next game now, at the max score
-      // just carried over above, and stay on the game screen -- the countdown
-      // and deal follow as usual. Only if that fails does the lobby show,
-      // with the reason.
-      if (soloRestartPending) {
-        soloRestartPending = false;
-        // Staying on the game screen, so nothing from the last game's ending
-        // may still be on a timer -- the same reset leaveRoom() does.
-        revealPhaseActive = false;
-        if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
-        revealPendingGame = null;
-        document.getElementById('screen-game').classList.remove('reveal-phase');
-        clearDeclareCallout();
-        const eliminationScore = Number(document.getElementById('input-maxscore').value) || undefined;
-        socket.emit('start_game', { roomCode: myRoomCode, eliminationScore }, (res) => {
-          if (res && res.ok) return;
-          showScreen('screen-lobby');
-          document.getElementById('lobby-error').textContent = (res && res.error) || 'Could not start the game.';
-        });
+      var sb = w.CapacitorSystemBarsAndroidInterface;
+      if (!sb || typeof sb.onDOMReady !== 'function') return;
+      if (w.Capacitor && typeof w.Capacitor.isPluginAvailable === 'function'
+          && w.Capacitor.isPluginAvailable('App')) return;
+      var ua = (w.navigator && w.navigator.userAgent) || '';
+      var cv = ua.match(/Chrome\/(\d+)/);
+      if (!cv || Number(cv[1]) < 140) return;
+      var av = ua.match(/Android (\d+)[^;]*;\s*([^;)]*)/);
+      if (av && !(av[1] === '10' && av[2].replace(/\s+/g, '') === 'K') && Number(av[1]) < 15) return;
+      var KEY = 'lc_navbar_v1';
+      var sc = w.screen || {};
+      var sw = sc.width || 0, sh = sc.height || 0;
+      var h0 = w.innerHeight || 0;
+      var saved = null;
+      try { saved = JSON.parse(w.localStorage.getItem(KEY) || 'null'); } catch (e) { saved = null; }
+      if (saved && typeof saved.n === 'number' && saved.sw === sw && saved.sh === sh
+          && h0 > 0 && Math.abs((saved.h || 0) - h0) <= 2) {
+        saved.from = 'saved';
+        w.__lcNavBar = saved;
         return;
       }
-      showScreen('screen-lobby');
-    } else if (room.phase === 'starting') {
-      // The countdown/dealing sequence (driven entirely by the separate
-      // 'game_starting' event, via runStartSequence) owns the screen during
-      // this phase. room_update for 'starting' arrives an instant BEFORE
-      // 'game_starting' every time a new round begins -- calling
-      // renderGame(latestGame) here would briefly redraw the board using
-      // last round's already-finished data (its real joker/open card still
-      // sitting in latestGame), flashing it on screen before the new deal
-      // even starts. Just make sure we're on the game screen and let
-      // runStartSequence take it from here.
-      showScreen('screen-game');
-    } else if (latestGame) {
-      showScreen('screen-game');
-      renderGame(latestGame);
-      // Keep the round-result popup's host controls (Next Round button,
-      // max-score dropdown) in sync even when the popup itself isn't being
-      // freshly shown -- e.g. a host who was eliminated leaves mid-popup and
-      // hands host to someone else; this re-evaluates who can now act.
-      updateRoundResultHostControls();
-    }
-  });
+      var metas = d.querySelectorAll('meta[name=viewport]');
+      var meta = metas[metas.length - 1];
+      if (!meta) return;
+      var original = meta.getAttribute('content') || '';
+      if (original.indexOf('viewport-fit=cover') !== -1) return;
+      var root = d.documentElement;
+      var px = function (name) { return parseFloat(root.style.getPropertyValue(name)) || 0; };
+      var ask = function (cover) {
+        meta.setAttribute('content', cover ? original + ', viewport-fit=cover' : original);
+        try { sb.onDOMReady(); } catch (e) { /* stays as it is */ }
+      };
+      var emit = function (r) {
+        w.__lcNavBar = r;
+        try { w.dispatchEvent(new Event('lc-navbar')); } catch (e) { /* read on the next resize */ }
+      };
+      w.__lcNavBar = { pending: true };
+      var t0 = Date.now(), got = null, back = false, lastH = -1, still = 0;
+      ask(true);
+      var timer = setInterval(function () {
+        var t = Date.now() - t0;
+        if (!back) {
+          // Capacitor answers with the real bars (top = status bar, always
+          // more than 0); until then it reports zeros.
+          var top = px('--safe-area-inset-top');
+          if (top > 0) got = { n: Math.round(px('--safe-area-inset-bottom')), s: Math.round(top) };
+          if (got || t > 1500) { back = true; ask(false); }
+          return;
+        }
+        // Put back: Capacitor reports zeros again (its usual mode) and the
+        // page is its old height again, held for a moment.
+        var h = w.innerHeight || 0;
+        if (h !== lastH) { lastH = h; still = Date.now(); }
+        var normal = px('--safe-area-inset-top') === 0;
+        var home = Math.abs(h - h0) <= 2;
+        if (!(normal && home && Date.now() - still >= 150) && t < 4000) return;
+        clearInterval(timer);
+        if (!normal) ask(false);
+        if (got && normal && got.n >= 0 && got.n <= 100) {
+          got.h = h; got.sw = sw; got.sh = sh; got.from = 'read';
+          if (home) {
+            try { w.localStorage.setItem(KEY, JSON.stringify(got)); } catch (e) { /* read again next time */ }
+          }
+          emit(got);
+        } else {
+          emit({ failed: got ? 'not back' : 'no reading' });
+        }
+      }, 30);
+    } catch (e) { /* the page keeps its usual space */ }
+  })();
+</script>
 
-  let lastStartRevealMs = 5000;
-  socket.on('game_starting', (data) => {
-    lastStartRevealMs = data.revealMs || 5000;
-    // The countdown that led here is finished the moment the round starts.
-    setAutoNextRoundDeadline(null);
-    showScreen('screen-game');
-    runStartSequence(data);
-    // Third ad format: an interstitial every 4th round (after rounds 4, 8,
-    // 12...), decided server-side so every player at the table gets it at the
-    // same moment -- data.adRound. It deliberately plays OVER the countdown ->
-    // deal -> joker-reveal sequence that runStartSequence() just kicked off,
-    // which is ~8-10 seconds of screen nobody can interact with anyway, so
-    // the ad occupies dead time instead of interrupting play. The server
-    // separately holds the first turn timer back on these rounds (see
-    // AD_ROUND_TIMER_GRACE_MS) so the opening player can't be auto-played
-    // while an ad we chose to show them is still on screen.
-    //
-    // Everything else is deliberately left to LCAds: it no-ops when the
-    // player has bought Remove Ads, when nothing is loaded yet, and when the
-    // shared 3-minute interstitial cap hasn't elapsed -- which is what stops
-    // this colliding with the leave-game interstitial.
-    if (data.adRound && window.LCAds && !adsRemoved) {
-      window.LCAds.showInterstitial();
-    }
-  });
+<!-- ------------------------------------------------------------------
+     Link preview (Open Graph) -- added Sept 2026.
 
-  socket.on('game_state', (game) => {
-    const prev = latestGame;
-    // Skip the normal sound/flash reactions for the very first state of a
-    // fresh round (no meaningful "previous" state to diff against yet), and
-    // don't let a stale error/selection check misfire during the reveal.
-    if (!pendingStartReveal) {
-      playSoundsForTransition(prev, game);
-      checkChainFlash(prev, game);
-      diwaliOnState(prev, game);   // Diwali: the +2 rocket and the last-card phuljhadi
-    }
-    updateMyTurnPulseTimer(prev, game);
-    latestGame = game;
-    // Re-sync the auto-advance countdown from every state push (null clears
-    // it), so it can't drift or survive past the round it belongs to.
-    setAutoNextRoundDeadline(game.autoNextRoundInMs);
-    // Once the turn (or round) has actually moved on, any error message or
-    // card selection left over from a previous failed attempt is stale --
-    // clear both so they don't linger on screen through later turns.
-    if (!prev || prev.currentPlayer !== game.currentPlayer || prev.roundNumber !== game.roundNumber) {
-      selectedIds = new Set();
-      setGameError('');
-    }
-    showScreen('screen-game');
-    markHasPlayed();   // they are in a game; never offer the tutorial again
-    renderGame(game);
-    // No tutorial hook here: the tutorial is entirely client-side and never
-    // receives server state, so a game_state arriving mid-lesson can only
-    // mean a real game is running -- in which case the tutorial is over.
+     This app's entire acquisition loop is one person pasting a room link
+     into a family WhatsApp group. Before these tags existed, that link
+     rendered as a bare blue URL with no title, image or description -- in
+     a group already full of forwards, that reads as spam and doesn't get
+     tapped. These tags are what turn it into a card with the wordmark and
+     an invitation, on the single flow that has to carry every new user.
 
-    if (pendingStartReveal) {
-      pendingStartReveal = false;
-      showStartReveal(game, lastStartRevealMs);
-    }
-    // Live commentary reads the same update, after the table is drawn.
-    commentaryObserve(prev, game);
-  });
+     Notes for anyone editing this:
+       - og:image MUST be an absolute URL. WhatsApp/Facebook crawlers do
+         not resolve relative paths, and a broken image silently degrades
+         to the same bare link this exists to fix.
+       - The image must be a raster format (PNG/JPEG). SVG is not rendered
+         by any of these crawlers.
+       - Previews are cached hard by WhatsApp. After changing anything
+         here, test with a URL that has a fresh query string (e.g.
+         ?v=2) or the old preview will keep showing.
+     ------------------------------------------------------------------ -->
+<meta name="description" content="Create a room, share the link, and play Least Count together." />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Least Count" />
+<meta property="og:title" content="Least Count" />
+<meta property="og:description" content="Create a room, share the link, and play together." />
+<meta property="og:url" content="https://least-count-game.onrender.com/" />
+<meta property="og:image" content="https://least-count-game.onrender.com/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="Least Count card game" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Least Count" />
+<meta name="twitter:description" content="Create a room, share the link, and play together." />
+<meta name="twitter:image" content="https://least-count-game.onrender.com/og-image.png" />
+<meta name="theme-color" content="#123d30" />
 
-  socket.on('error_message', (data) => setGameError(data.message));
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<!-- Regal display face for the "LEAST COUNT" wordmark only -- everything else
+     in the app keeps the existing Georgia serif stack untouched.
 
-  // initial screen
-  if (!(myRoomCode && myPlayerId)) {
-    showScreen('screen-landing');
-  }
-})();
+     Trimmed Sept 2026, once the group-screen title stopped borrowing this
+     face: the request now asks for weight 800 alone (700 was never used) and
+     only the glyphs in the wordmark itself via &text=. This loads on the
+     landing screen's first paint, so a full Latin charset for an
+     eleven-character string was real cost for nothing.
+
+     CAUTION: because of &text=, this font can ONLY render the letters in
+     "LEAST COUNT" (A C E L N O S T U + space). Any other text given
+     .landing-wordmark will silently fall back to Georgia. If the wordmark
+     text ever changes, update the &text= value -- or restore the full
+     request, which was:
+     https://fonts.googleapis.com/css2?family=Cinzel:wght@700;800&display=swap -->
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@800&text=LEAST%20COUNT&display=swap" rel="stylesheet" />
+<!-- Poppins (Oct 2026, Home v2): the one clean, bold app font -- titles,
+     buttons and lines on the Home screen and its sheets (see "HOME v2" in
+     style.css). Made by the Indian Type Foundry; free (Open Font License).
+     Three weights only -- 400 for small print, 500 for the grey lines, 700
+     for titles and buttons -- because each weight is a separate download.
+     display=swap: the text shows at once in the phone's own font and
+     switches to Poppins when it arrives, so nothing waits on it. -->
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;700&display=swap" rel="stylesheet" />
+<!-- ?v= changes whenever index.html's structure changes, so a phone that
+     still has yesterday's style.css or app.js cached (10-minute cache, see
+     server.js) can never pair the new markup with the old styles or code.
+     The same ?v= is on app.js at the bottom of this file. -->
+
+<link rel="stylesheet" href="style.css?v=appfirst-2026-11-17" />
+<!-- The 3D icons are inside style.css now (Oct 2026), at the end, broken into
+     short lines: as a stylesheet of their own (home-art.css) their very long
+     lines did not survive copy-and-paste into GitHub. home-art.css is no
+     longer used. -->
+</head>
+<body>
+
+<!-- The card faces' drawings (Oct 2026): the four suits, the court emblems
+     (crown for K, coronet for Q, shield for J), the joker's hat and a gold
+     sparkle, drawn once here and used by every card with <use href="#lc-S">.
+     Vector, so crisp at every size, and the same on every phone -- the
+     suits used to be font characters, which each phone draws its own way.
+     Sized to nothing rather than display:none: gradients inside a hidden SVG
+     stop working in some browsers. -->
+<svg class="lc-sprite" aria-hidden="true" focusable="false" width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden">
+  <defs>
+    <linearGradient id="lcRed" gradientUnits="userSpaceOnUse" x1="0" y1="1" x2="0" y2="23"><stop offset="0" stop-color="#ec4357"/><stop offset="1" stop-color="#a50c25"/></linearGradient>
+    <linearGradient id="lcInk" gradientUnits="userSpaceOnUse" x1="0" y1="1" x2="0" y2="23"><stop offset="0" stop-color="#454a55"/><stop offset="1" stop-color="#0d0e11"/></linearGradient>
+    <linearGradient id="lcGold" gradientUnits="userSpaceOnUse" x1="0" y1="2" x2="0" y2="22"><stop offset="0" stop-color="#fbe08a"/><stop offset="0.5" stop-color="#dcaa2a"/><stop offset="1" stop-color="#9a6b0a"/></linearGradient>
+    <symbol id="lc-H" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></symbol>
+    <symbol id="lc-D" viewBox="0 0 24 24"><path d="M12 1.5C13.9 5.2 16.6 8.6 19.6 12 16.6 15.4 13.9 18.8 12 22.5 10.1 18.8 7.4 15.4 4.4 12 7.4 8.6 10.1 5.2 12 1.5z"/></symbol>
+    <symbol id="lc-S" viewBox="0 0 24 24"><path d="M12 1.6C9.6 5.6 3 9.4 3 13.9 3 16.6 5.1 18.6 7.6 18.6c1.5 0 2.8-.7 3.6-1.8-.2 2.2-1 4.1-2.8 5.6h7.2c-1.8-1.5-2.6-3.4-2.8-5.6.8 1.1 2.1 1.8 3.6 1.8 2.5 0 4.6-2 4.6-4.7 0-4.5-6.6-8.3-9-12.3z"/></symbol>
+    <symbol id="lc-C" viewBox="0 0 24 24"><circle cx="12" cy="6.9" r="4.4"/><circle cx="7" cy="13.5" r="4.4"/><circle cx="17" cy="13.5" r="4.4"/><circle cx="12" cy="12.4" r="2.8"/><path d="M12 10.5c.2 4.6 1 9.2 3.8 11.9H8.2c2.8-2.7 3.6-7.3 3.8-11.9z"/></symbol>
+    <symbol id="lc-K" viewBox="0 0 24 24"><path d="M3.2 8.6 7.6 12.4 12 5.2l4.4 7.2 4.4-3.8-1.6 9.4H4.8z"/><rect x="4.8" y="18.9" width="14.4" height="2.6" rx=".9"/><circle cx="3.1" cy="7.7" r="1.5"/><circle cx="12" cy="4.2" r="1.6"/><circle cx="20.9" cy="7.7" r="1.5"/></symbol>
+    <symbol id="lc-Q" viewBox="0 0 24 24"><path d="M4.4 18.2 3.6 10c2 1.9 3.6 2.3 5 1.3L12 7l3.4 4.3c1.4 1 3 .6 5-1.3l-.8 8.2z"/><rect x="4.4" y="19" width="15.2" height="2.5" rx=".9"/><circle cx="3.4" cy="9.2" r="1.3"/><circle cx="12" cy="5.4" r="1.6"/><circle cx="20.6" cy="9.2" r="1.3"/></symbol>
+    <symbol id="lc-J" viewBox="0 0 24 24"><path d="M12 2.4l7.6 2.8V11c0 4.7-3.2 8.7-7.6 10.6C7.6 19.7 4.4 15.7 4.4 11V5.2z"/><path fill="#fff7e0" fill-opacity=".55" d="M12 5.3l4.9 1.8V11c0 3.2-2 6-4.9 7.5z"/></symbol>
+    <symbol id="lc-jester" viewBox="0 0 24 24"><path fill="url(#lcInk)" d="M10 12.6c.1-3.5.8-6.9 2-9.4 1.2 2.5 1.9 5.9 2 9.4z"/><path d="M14 12.6c1-2.2 3.4-4.3 6.4-3.6 2.8.7 3.5 4.1 2.3 6-.1-1-.5-1.9-1.5-2.1-1.6-.3-2.4 1.7-2.1 4.5H4.5C4.8 14.6 4 12.6 2.4 12.9 1.4 13.1 1 14 1.3 15 .1 13.1.8 9.7 3.6 9c3-.7 5.4 1.4 6.4 3.6z"/><path fill="url(#lcGold)" d="M4 17.2h16v3.4H4z"/><circle fill="url(#lcGold)" cx="1.4" cy="15.3" r="1.6"/><circle fill="url(#lcGold)" cx="12" cy="3" r="1.8"/><circle fill="url(#lcGold)" cx="22.6" cy="15.3" r="1.6"/></symbol>
+    <symbol id="lc-spark" viewBox="0 0 24 24"><path d="M12 0c.9 7.2 4.8 11.1 12 12-7.2.9-11.1 4.8-12 12-.9-7.2-4.8-11.1-12-12C7.2 11.1 11.1 7.2 12 0z"/></symbol>
+  </defs>
+</svg>
+
+<!-- Scattered-card backdrop. Populated once by app.js from the SAME cardEl()
+     the game uses, so these are literally the app's own cards rather than a
+     drawing of them -- they can never drift from the real ones, and there is
+     no image to license, download or 404.
+     Hidden on the game screen (see body.game-active in style.css): the table
+     has its own felt and does not want cards behind the cards. -->
+<div id="bg-cards" class="bg-cards" aria-hidden="true"></div>
+<div id="bg-scrim" class="bg-scrim" aria-hidden="true"></div>
+
+
+<!-- Profile / sign-in / name panel -- a centered modal using the exact
+     same .overlay pattern as Rules/Scores/My Stats below (proven reliable
+     elsewhere in this file), instead of a dropdown anchored under the
+     avatar. That anchored approach went through several rounds of
+     position/z-index/overflow bugs and kept re-breaking; a full-screen
+     centered overlay has no anchoring math to get wrong, so it can't drift
+     out of its box or let page content behind it show through. Placed here
+     at the top of body (a direct child, not nested inside any screen) so
+     it's never at risk of being clipped by a screen's own overflow:hidden. -->
+<!-- Tutorial invitation. A modal rather than a panel on the page: inline, it
+     read as a Quick Play setting and sat there permanently for people who
+     had already played. This appears once, over everything, for someone who
+     has genuinely never played -- see maybeOfferTutorial() in app.js. -->
+<div id="tutorial-offer" class="overlay hidden">
+  <div class="card-panel tutorial-modal">
+    <h2>New to Least Count?</h2>
+    <p class="tutorial-modal-sub">Seven quick hands and you'll know how to play. About a minute.</p>
+    <button id="btn-tutorial-yes" class="primary" type="button">Teach me</button>
+    <button id="btn-tutorial-no" class="secondary" type="button">I know how to play</button>
+  </div>
+</div>
+
+<!-- Rewarded-ad status sheet.
+     NOT a "do you want to watch?" prompt -- that consent is given earlier, in
+     the rejoin offer, which states plainly that the host must approve and a
+     short ad then plays. By the time this appears the host has already said
+     yes, the seat is the player's, and the ad is starting. Asking again here
+     would be asking twice for the same consent at the one moment the player is
+     impatient to get back into the game.
+     So this only reports progress, and offers Try again if the video was
+     closed before it finished. The default copy below is the status case; the
+     retry case is written in by offerAdRetry() in app.js. -->
+<!-- In-game invite sheet. Deliberately the same code + Copy + Share trio the
+     lobby screen shows, so the two never teach different habits. -->
+<div id="game-invite-panel" class="overlay hidden">
+  <div class="card-panel game-invite-modal">
+    <h2>Invite to this table</h2>
+    <p class="game-invite-sub">They can join the game already in progress &mdash; the host approves, and they come in next round.</p>
+    <div class="room-code-display" id="game-invite-code">----</div>
+    <div class="game-invite-actions">
+      <button id="btn-game-invite-copy" class="secondary" type="button">Copy code</button>
+      <button id="btn-game-invite-share" class="primary" type="button">Share link</button>
+    </div>
+    <p id="game-invite-feedback" class="hint roomcode-feedback"></p>
+    <button id="btn-game-invite-close" class="secondary" type="button">Close</button>
+  </div>
+</div>
+
+<div id="ad-reward-offer" class="overlay hidden">
+  <div class="card-panel ad-reward-modal busy">
+    <h2 id="ad-reward-title">Taking your seat</h2>
+    <p class="ad-reward-sub" id="ad-reward-sub">Starting your ad&hellip;</p>
+    <!-- Hidden by default: only shown as "Try again" after an unfinished ad. -->
+    <button id="btn-ad-reward-watch" class="primary hidden" type="button">Try again</button>
+    <button id="btn-ad-reward-skip" class="secondary" type="button">Close</button>
+    <p class="ad-reward-note" id="ad-reward-note"></p>
+  </div>
+</div>
+
+<div id="profile-menu-panel" class="overlay hidden">
+  <div class="card-panel profile-modal-panel">
+    <h2>Profile</h2>
+    <!-- Rating (Nov 2026): filled by loadProfileRating() in app.js each time
+         the panel opens. Hidden until there is a number to show. -->
+    <div id="profile-rating" class="pr-card hidden"></div>
+    <div class="signin-row">
+      <span id="signin-status" class="signin-status">Playing as Guest</span>
+      <button id="btn-google-signin" class="secondary tiny" type="button">Sign in with Google</button>
+    </div>
+    <!-- Filled in when the app asks for a name (after the first game, or
+         before joining a table other people can see). Empty and hidden when
+         the profile is opened normally. -->
+    <p id="name-ask-hint" class="name-ask-hint hidden"></p>
+    <label>Your name</label>
+    <input id="input-name" type="text" maxlength="20" placeholder="e.g. Manikanta" enterkeyhint="done" />
+
+    <p id="landing-error" class="error"></p>
+
+    <!-- Vibration is deliberately reserved for the two moments that are
+         warnings -- a +2 penalty landing on you, and your own turn timer
+         about to run out. Buzzing on every card tap would make it noise
+         that players tune out (or switch off), which would cost us the two
+         places it actually helps. -->
+    <div class="settings-row">
+      <div>
+        <span class="settings-label">Vibration</span>
+        <span class="settings-hint">Penalties and turn warnings</span>
+      </div>
+      <!-- A real switch, not a button reading "On". The knob is a child
+           element rather than a pseudo-element so its position is trivially
+           animatable and inspectable. Label text lives in aria-label; the
+           visible state is the knob position and the track colour. -->
+      <button id="btn-haptics-toggle" class="switch" type="button" role="switch"
+              aria-checked="true" aria-label="Vibration"><span class="switch-knob"></span></button>
+    </div>
+
+    <!-- Stats lives here now (Oct 2026) -- it's about you, like the rest
+         of this panel. Same id as the old bottom tab, so its handler in
+         app.js is unchanged. -->
+    <button id="btn-my-stats" class="secondary profile-stats-btn" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="3" y="12" width="5" height="9" rx="1"/><rect x="9.5" y="7" width="5" height="14" rx="1"/><rect x="16" y="3" width="5" height="18" rx="1"/></svg>My stats</button>
+    <button id="btn-close-profile-menu" class="secondary">Close</button>
+  </div>
+</div>
+
+<!-- 3-second intro splash. Shows the card fan full-screen for ~2.4s, then
+     the introFadeOut animation takes it away.
+     CORRECTION (Sept 2026 audit): this used to claim that having no JS timer
+     meant it "can never get stuck open". It is the other way round -- with
+     no JS path, an animation that never runs or never completes leaves this
+     element covering the whole app at z-index 999 with pointer-events on,
+     and nothing can dismiss it. It was found stuck at opacity 1 after the
+     tab was backgrounded during load, which on a phone is just "the screen
+     locked while the game was opening". app.js now removes this node at
+     3.2s regardless, and style.css skips the animation under
+     prefers-reduced-motion. The landing screen underneath is fully
+     interactive the whole time either way. -->
+<div id="screen-intro">
+  <div class="intro-glow"></div>
+  <div class="intro-cards">
+    <div class="landing-card landing-card-1">K<span>♣</span></div>
+    <div class="landing-card landing-card-2">Q<span>♠</span></div>
+    <div class="landing-card landing-card-3">2<span>♥</span></div>
+  </div>
+  <!-- Diwali (7-9 Nov 2026): shown only under html.diwali (style.css) --
+       a thoranam across the top, fireworks opening in the dark, "Happy
+       Diwali" and three diyas under the cards. -->
+  <div class="intro-diwali" aria-hidden="true">
+    <div class="intro-toran"></div>
+    <div class="intro-bursts"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="intro-dw-title">Happy Diwali</div>
+    <div class="intro-dw-diyas">
+      <span class="hd-diya"><span class="hd-flame"></span></span>
+      <span class="hd-diya hd-mid"><span class="hd-flame"></span></span>
+      <span class="hd-diya"><span class="hd-flame"></span></span>
+    </div>
+  </div>
+</div>
+
+<div id="screen-landing" class="screen active">
+  <div class="landing-topbar">
+    <div class="landing-topbar-left">
+      <!-- Sign-in + name live in the #profile-menu-panel modal near the top
+           of this file, not nested here anymore -- see the comment there
+           for why. Same element IDs as before, so app.js didn't need to
+           change, only where they physically live in the page. -->
+      <button id="btn-profile-menu" class="landing-avatar" type="button" aria-label="Profile"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="7" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1Z"/></svg></button>
+    </div>
+    <h1 class="landing-wordmark">LEAST COUNT</h1>
+    <div class="landing-topbar-right">
+      <!-- Rules, top right (Oct 2026): the profile button's counterpart on
+           the left, so the bar is balanced. It used to be a bottom tab. -->
+      <button id="btn-rules" class="landing-avatar landing-rules-btn" type="button" aria-label="Rules" title="Rules"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6c-1.8-1.3-4.2-1.8-7-1.5v13c2.8-.3 5.2.2 7 1.5"/><path d="M12 6c1.8-1.3 4.2-1.8 7-1.5v13c-2.8-.3-5.2.2-7 1.5"/><path d="m6.5 9.5 1.2 1.2L10 8.5"/><path d="M14 9.5h4M14 12.5h4"/></svg></button>
+      <button id="btn-remove-ads" class="icon-btn hidden" type="button" title="Remove Ads"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 3 9l9 13 9-13-9-7Z"/></svg></button>
+    </div>
+  </div>
+
+  <div class="landing-body">
+    <!-- Tagline removed (Sept 2026) -- the landing screen goes straight from
+         the wordmark to the three ways to play, with nothing to read first.
+         .landing-tagline is left in style.css in case copy comes back here. -->
+    <!-- Inline, always-in-view error banner -- shows the SAME message as
+         landing-error inside the profile dropdown, but here it can't be
+         missed just because the dropdown happens to be closed. Tapping it
+         opens the dropdown and jumps straight to the name field. -->
+    <p id="landing-toast-error" class="landing-toast-error hidden" role="alert"></p>
+
+    <!-- ----------------------------------------------------------------
+         Invite mode (Sept 2026). Shown INSTEAD of .mode-blocks below when
+         the URL carries ?room=CODE -- i.e. someone tapped a shared invite.
+
+         Why this exists: an invited person doesn't want a menu, they were
+         sent to one specific room. Worse, the name field lives only inside
+         the profile modal behind a small avatar icon, so a first-time
+         visitor used to go: tap Join -> "Enter your name" error -> hunt for
+         the hidden field -> type -> close modal -> tap Join again. Five
+         steps and an error message as their first experience of the game,
+         on the exact path every new user arrives through.
+
+         Everything needed is on this one card instead: who invited them,
+         which room, a focused name box, one button.
+         ---------------------------------------------------------------- -->
+    <div id="invite-card" class="invite-card hidden">
+      <p id="invite-headline" class="invite-headline">You've been invited to play</p>
+      <div class="invite-room-line">Room <span id="invite-roomcode">----</span></div>
+      <!-- The app first, on Android browsers (Nov 2026). Nearly every new
+           player arrives through an invite link, and the link opens the
+           WEBSITE -- where no ads run. The Play Store page installs the app,
+           or opens it if it's already there; the code is copied on the way
+           so it's one paste in the app. Joining here in the browser is still
+           right below. Shown by enterInviteMode() in app.js. -->
+      <div id="invite-app" class="invite-app hidden">
+        <a id="btn-invite-app" class="invite-app-btn" href="#" target="_blank" rel="noopener">Play in the app</a>
+        <p id="invite-app-hint" class="invite-app-hint">Free on Play Store. Then tap <b>Play with Friends</b> and enter code <b id="invite-app-code">----</b></p>
+        <div class="invite-or"><span>or play here in the browser</span></div>
+      </div>
+      <label for="input-invite-name">Your name</label>
+      <input id="input-invite-name" type="text" maxlength="20" placeholder="e.g. Manikanta"
+             autocomplete="name" enterkeyhint="go" />
+      <button id="btn-invite-join" class="primary" type="button">Join Game</button>
+      <button id="btn-invite-dismiss" class="secondary" type="button">Other ways to play</button>
+    </div>
+
+    <!-- ================================================================
+         Landing sections, in deliberate priority order (Sept 2026):
+           1. Your Groups   -- permanent tables; what a regular player wants
+           2. Quick Room    -- one-off room, create or join by code
+           3. Quick Play    -- online matchmaking and bots, merged because
+                               they ask the same question ("how many?") and
+                               two near-identical blocks wasted the screen
+         All three fit one phone screen without scrolling, which is why the
+         groups list caps its visible height (see .group-list) rather than
+         growing with every group you join.
+         ================================================================ -->
+    <!-- Two panes instead of four stacked blocks (Sept 2026). The landing
+         screen had grown to 830px of content in an 812px viewport, and a
+         regular player only ever wants one of these two worlds: their
+         permanent tables, or a one-off game. "Join with a code" sits with
+         Groups because a shared code is nearly always a group code -- and
+         its own hint still covers the 4-letter room case. -->
+    <!-- Home and Groups (Oct 2026): the bottom bar switches between the two
+         panes below; the Quick Play / Groups tabs that used to sit here are
+         gone. See wireFooterNav() in app.js. -->
+    <div class="mode-blocks">
+      <!-- ============ Home (Oct 2026, v2 -- inspired by chess.com) ============
+           Three big cards, one per way to play, in the order that matters
+           most: Friends, then Online, then Bots. Nothing to set on the page
+           itself -- a card opens a sheet from the bottom with that mode's few
+           choices and one gold button (see openHomeSheet() in app.js). Each
+           card is a <button>: the whole card is the tap. -->
+      <div id="pane-quick" class="landing-pane">
+        <div id="tutorial-finished" class="tutorial-offer hidden">
+          <div class="tutorial-offer-text">
+            <strong>That's the whole game.</strong>
+            <span>Try it for real against bots &mdash; no pressure, nothing counts.</span>
+          </div>
+          <div class="tutorial-offer-actions">
+            <button id="btn-tutorial-play" type="button" class="primary">Play bots</button>
+            <button id="btn-tutorial-later" type="button" class="tutorial-offer-no">Later</button>
+          </div>
+        </div>
+
+        <!-- A greeting instead of a picture (Oct 2026, Home v2): hello and
+             one question, then the three ways to play. The first line is
+             written by updateHomeGreeting() in app.js -- the time of day, and
+             your name once you have given one. -->
+        <div class="home-greet">
+          <span class="home-greet-wave art art-wave" aria-hidden="true"></span>
+          <div class="home-greet-text">
+            <p id="home-greet-hello" class="home-greet-hello">Hello</p>
+            <h2 class="home-greet-title">Ready to play?</h2>
+          </div>
+        </div>
+
+        <div class="home-modes">
+          <button id="mode-friends" class="home-mode home-mode-main" type="button" data-sheet="sheet-friends" aria-haspopup="dialog">
+            <span class="home-mode-icon art art-friends" aria-hidden="true"></span>
+            <span class="home-mode-text">
+              <span class="home-mode-title">Play with Friends</span>
+              <span class="home-mode-sub">Make a room, share the code</span>
+            </span>
+            <svg class="home-mode-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+          </button>
+          <button id="mode-online" class="home-mode" type="button" data-sheet="sheet-online" aria-haspopup="dialog">
+            <span class="home-mode-icon art art-online" aria-hidden="true"></span>
+            <span class="home-mode-text">
+              <span class="home-mode-title">Play Online</span>
+              <span class="home-mode-sub">Match with real players</span>
+            </span>
+            <svg class="home-mode-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+          </button>
+          <button id="mode-bots" class="home-mode" type="button" data-sheet="sheet-bots" aria-haspopup="dialog">
+            <span class="home-mode-icon art art-bots" aria-hidden="true"></span>
+            <span class="home-mode-text">
+              <span class="home-mode-title">Play vs Bots</span>
+              <span class="home-mode-sub">Practice at your own pace</span>
+            </span>
+            <svg class="home-mode-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+          </button>
+        </div>
+        <!-- Website on an Android phone only (Nov 2026): the app is where
+             the game is meant to be played (and where ads pay for it). ×
+             hides it for a day. See updateAppPromos() in app.js. -->
+        <div id="home-app-bar" class="app-promo hidden" role="note">
+          <span class="app-promo-text"><b>Get the Least Count app</b><span>Smoother than the browser</span></span>
+          <a id="btn-home-app" class="app-promo-btn" href="#" target="_blank" rel="noopener">Install</a>
+          <button id="btn-home-app-close" class="app-promo-x" type="button" aria-label="Not now">&times;</button>
+        </div>
+      </div><!-- /pane-quick -->
+
+      <!-- ============ Groups pane ============ -->
+      <div id="pane-groups" class="landing-pane hidden">
+      <div class="mode-block" id="groups-block">
+        <h3>Your Groups</h3>
+        <!-- Scrolls internally after ~2 rows so a player with eight groups
+             can't push everything else off the screen. -->
+        <ul id="groups-list" class="group-list"></ul>
+        <p id="groups-empty" class="hint">A permanent table your family can come back to — same link every time.</p>
+        <div class="mode-block-join-row">
+          <input id="input-group-name" type="text" maxlength="30" placeholder="Name your group" aria-label="Group name" />
+          <button id="btn-create-group" class="secondary">Create</button>
+        </div>
+      </div>
+
+      <div class="mode-block">
+        <h3>Join with a code</h3>
+        <!-- Its OWN section, not a row tucked under "Quick Room" (Sept 2026).
+             It accepted a group code before, but sat under a heading that
+             said "one-off game, expires with the session" -- so nobody would
+             ever have thought to type a permanent group code into it. This
+             is the entry point for anyone who's been given anything, so it
+             has to say so plainly. -->
+        <p class="mode-block-sub fit-optional">Someone sent you a code? Enter it here</p>
+        <div class="mode-block-join-row">
+          <input id="input-roomcode" class="code-input" type="text" maxlength="5" placeholder="Enter code" aria-label="Room or group code" autocapitalize="characters" />
+          <button id="btn-join" class="secondary">Join</button>
+        </div>
+      </div>
+
+      </div><!-- /pane-groups -->
+    </div>
+  </div>
+
+  <!-- Home and Groups (Oct 2026). Stats moved into the profile, Rules to
+       the top bar. -->
+  <div class="landing-footer-nav">
+    <button id="btn-nav-home" class="footer-nav-item active" type="button" data-pane="quick"><span class="nav-icon"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.7 2 11h2v9a1 1 0 0 0 1 1h4v-6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6h4a1 1 0 0 0 1-1v-9h2L12 2.7Z"/></svg></span>Home</button>
+    <button id="btn-nav-groups" class="footer-nav-item" type="button" data-pane="groups"><span class="nav-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>Groups</button>
+  </div>
+
+  <!-- ============ Home sheets (Oct 2026, v2) ============
+       One per way to play, sliding up from the bottom. Each holds the SAME
+       controls, with the same ids, that the Home cards used to carry -- so
+       every handler in app.js (Create Room, Join, Find Match, Start, the
+       one-tap choices) works unchanged; only where they sit has moved.
+       Opened by the cards above; closed by the X, the dim backdrop, Escape
+       or the phone's Back (see openHomeSheet / closeHomeSheet in app.js).
+       Inside #screen-landing on purpose: they go when the screen goes, and
+       the profile / name popup (a page-level .overlay) still opens on top. -->
+  <div id="home-sheet-backdrop" class="home-sheet-backdrop hidden"></div>
+
+  <section id="sheet-friends" class="home-sheet hidden" role="dialog" aria-modal="true" aria-labelledby="sheet-friends-title">
+    <div class="sheet-grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <span class="sheet-icon art art-friends" aria-hidden="true"></span>
+      <div class="sheet-head-text">
+        <h2 id="sheet-friends-title">Play with Friends</h2>
+        <p>Make a room, share the code</p>
+      </div>
+      <button type="button" class="sheet-close" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <button id="btn-create" class="primary sheet-go" type="button">Create Room</button>
+    <div class="sheet-or"><span>or join with a code</span></div>
+    <!-- Both kinds of code still work -- a room's 4 letters or a group's
+         5 (see submitJoinCode in app.js); players don't need to know. -->
+    <div class="sheet-join-row">
+      <input id="input-roomcode-quick" class="code-input" type="text" maxlength="5" placeholder="Enter code" aria-label="Room or group code" autocapitalize="characters" autocomplete="off" enterkeyhint="go" />
+      <button id="btn-join-quick" class="secondary sheet-join" type="button">Join</button>
+    </div>
+    <p class="sheet-error" role="alert"></p>
+  </section>
+
+  <section id="sheet-online" class="home-sheet hidden" role="dialog" aria-modal="true" aria-labelledby="sheet-online-title">
+    <div class="sheet-grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <span class="sheet-icon art art-online" aria-hidden="true"></span>
+      <div class="sheet-head-text">
+        <h2 id="sheet-online-title">Play Online</h2>
+        <p>Match with real players</p>
+      </div>
+      <button type="button" class="sheet-close" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="sheet-field">
+      <span class="sheet-label" id="label-online-playercount">Players at the table</span>
+      <div class="chips" data-for="input-online-playercount" role="group" aria-labelledby="label-online-playercount"></div>
+    </div>
+    <select id="input-online-playercount" class="chip-source" hidden aria-hidden="true" tabindex="-1">
+      <option value="3">3</option>
+      <option value="4">4</option>
+      <option value="5">5</option>
+      <option value="6">6</option>
+    </select>
+    <button id="btn-play-online" class="primary sheet-go" type="button">Find Match</button>
+    <p class="sheet-error" role="alert"></p>
+  </section>
+
+  <section id="sheet-bots" class="home-sheet hidden" role="dialog" aria-modal="true" aria-labelledby="sheet-bots-title">
+    <div class="sheet-grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <span class="sheet-icon art art-bots" aria-hidden="true"></span>
+      <div class="sheet-head-text">
+        <h2 id="sheet-bots-title">Play vs Bots</h2>
+        <p>Practice at your own pace</p>
+      </div>
+      <button type="button" class="sheet-close" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="sheet-field">
+      <span class="sheet-label" id="label-bot-count">Bots</span>
+      <div class="chips" data-for="input-bot-count" role="group" aria-labelledby="label-bot-count"></div>
+    </div>
+    <div class="sheet-field">
+      <span class="sheet-label" id="label-bot-difficulty">Level</span>
+      <div class="chips" data-for="input-bot-difficulty" role="group" aria-labelledby="label-bot-difficulty"></div>
+    </div>
+    <select id="input-bot-count" class="chip-source" hidden aria-hidden="true" tabindex="-1"></select>
+    <select id="input-bot-difficulty" class="chip-source" hidden aria-hidden="true" tabindex="-1">
+      <option value="easy">Easy</option>
+      <option value="medium" selected>Medium</option>
+      <option value="hard">Hard</option>
+    </select>
+    <button id="btn-solo-start" class="primary sheet-go" type="button">Start Game</button>
+    <p class="sheet-error" role="alert"></p>
+  </section>
+</div>
+
+<!-- "Play Online" matchmaking wait screen. Client-side timer (not the
+     server) decides when to reveal the wait/fill-bots/cancel choice -- the
+     server has no opinion on that, it just keeps the queue and matches
+     instantly whenever enough strangers are waiting, whether that's before
+     or after this prompt appears. -->
+<div id="screen-queue-waiting" class="screen">
+  <div class="landing-form waiting-host-panel">
+    <!-- The 3D globe with a soft pulse (Oct 2026), then your seat and the
+         empty ones still to fill (renderQueueSeats in app.js). -->
+    <div class="wait-art" aria-hidden="true"><span class="wait-ring"></span><span class="wait-ring two"></span><span class="wait-pic art art-online"></span></div>
+    <h2>Finding players&hellip;</h2>
+    <p class="hint" id="queue-waiting-hint">Looking for <span id="queue-waiting-count">3</span> players online.</p>
+    <div id="queue-seats" class="wait-seats" aria-hidden="true"></div>
+    <!-- Always visible from the moment this screen appears -- no reason to
+         make someone wait out the 40s prompt below just to back out. -->
+    <button id="btn-queue-cancel" class="secondary leave-btn" type="button">Cancel</button>
+    <div id="queue-waiting-choice" class="queue-waiting-choice hidden">
+      <p class="hint">Still looking &mdash; what would you like to do?</p>
+      <button id="btn-queue-keep-waiting" class="secondary" type="button">Keep Waiting</button>
+      <button id="btn-queue-fill-bots" class="secondary" type="button">Fill with Bots</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================================================================
+     Group screen (Sept 2026 rebuild -- see group-spec.md)
+
+     Tapping a group opens THIS, not a game lobby. That single change is
+     why the first version felt dead: tap a group, land alone in an empty
+     lobby, leave. This screen has substance whether or not anyone is
+     playing, so the group becomes somewhere you visit rather than a
+     shortcut you regret pressing.
+     ================================================================== -->
+<div id="screen-group" class="screen">
+  <div class="landing-topbar">
+    <div class="landing-topbar-left">
+      <button id="btn-group-back" class="icon-btn" type="button" aria-label="Back">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18 9 12l6-6"/></svg>
+      </button>
+    </div>
+    <!-- .topbar-title, not .landing-wordmark: app.js sets this to the
+           group's name, so it is user text and must not be dressed as
+           the product logo. See .topbar-title in style.css. -->
+      <h1 id="group-title" class="topbar-title">Group</h1>
+    <div class="landing-topbar-right">
+      <button id="btn-group-settings" class="icon-btn" type="button" aria-label="More options" title="More options"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
+    </div>
+  </div>
+
+  <div class="landing-body">
+    <!-- Live strip: the state of play right now. This is the section that
+         fixes "the group is dead when I open it" -- it always says
+         something, even when nobody is around. -->
+    <div class="mode-block group-live">
+      <!-- Group screen v2 (Oct 2026): the people at the table as faces --
+           the same colour circles as the lobby's seats -- with the status
+           beside them ("2 at the table" / "Bhavana and Ravi · waiting for
+           you"). app.js fills #group-live-faces; with nobody there it shows
+           one empty dashed seat. -->
+      <div class="group-live-head">
+        <div id="group-live-faces" class="group-live-faces" aria-hidden="true"></div>
+        <div class="group-live-words">
+          <div id="group-live-text" class="group-live-text">No one at the table</div>
+          <div id="group-live-names" class="group-live-names"></div>
+        </div>
+      </div>
+      <button id="btn-group-bell" class="primary invite-btn" type="button">
+        <span class="art art-bell group-bell-art" aria-hidden="true"></span>
+        <span id="btn-group-bell-label">I want to play</span>
+      </button>
+      <button id="btn-group-play" class="primary hidden" type="button">Start Game</button>
+      <button id="btn-group-standdown" class="secondary hidden" type="button">Leave the table</button>
+      <p id="group-bell-hint" class="hint"></p>
+      <!-- Errors raised while this screen is up. setLandingError() writes
+           into #landing-toast-error, which lives inside the LANDING screen --
+           so a failure here (a join that didn't take, a start that was
+           refused) was completely invisible and read as "nothing happened". -->
+      <p id="group-error" class="error"></p>
+    </div>
+
+    <!-- Members and Marathon: two tabs of ONE card (Oct 2026).
+         As two stacked cards plus the chat preview, this screen measured
+         ~1050px of content on a phone with ~590-710px to show it in -- it
+         scrolled on every phone, by 240-400px. Both are lists that grow
+         with the group, so no amount of spacing could fix it. One visible
+         at a time, the card takes whatever height is left and its list
+         scrolls inside it when a group is big; the live strip above and the
+         chat preview below stay on screen.
+         Same ids throughout (group-member-count, btn-group-invite,
+         group-members, group-code-text, group-board...), so app.js renders
+         exactly as before. The tab switching lives in layout.js. -->
+    <div class="mode-block group-tabs-block">
+      <div class="segmented group-tabs" id="group-tabs" role="tablist">
+        <button type="button" class="seg active" data-gtab="members" role="tab" aria-selected="true">Members <span id="group-member-count" class="group-count"></span></button>
+        <button type="button" class="seg" data-gtab="marathon" role="tab" aria-selected="false">Marathon</button>
+      </div>
+      <div class="group-tab-panel" data-gpanel="members" role="tabpanel">
+        <!-- Code and Invite share one line now: Invite is a secondary action
+             (you invite once, then never again), and the code only matters
+             at the moment somebody joins -- neither earns a row of its own. -->
+        <div class="group-code-row">
+          <span class="group-code-label">Group code</span>
+          <b id="group-code-text" class="group-code-value">-----</b>
+          <button id="btn-group-invite" class="secondary tiny" type="button">Invite</button>
+        </div>
+        <ul id="group-members" class="group-member-list" data-fit-list="76"></ul>
+      </div>
+    <div class="group-tab-panel hidden" data-gpanel="marathon" role="tabpanel">
+      <h3 id="group-board-title" class="sr-only">Marathon</h3>
+      <!-- A marathon no longer runs by itself on calendar months -- the admin
+           starts one and picks how long it lasts. "Ends in 6 days" is a fact
+           you can read; "resets on the 1st" was a rule you had to be told. -->
+      <div class="group-marathon-strip">
+        <span class="art art-trophy group-marathon-art" aria-hidden="true"></span>
+        <div class="group-marathon-words">
+          <div id="group-marathon-state" class="group-marathon-state">No marathon running</div>
+          <div id="group-marathon-sub" class="group-marathon-sub"></div>
+        </div>
+        <button id="btn-start-marathon" class="secondary hidden" type="button">Start a marathon</button>
+      </div>
+      <!-- The four-tab board (Marathon / Today / Recent / Champs) was removed
+           in Sept 2026. It asked people to choose between four views of the
+           same thing before they'd been given a reason to care about any of
+           them, and three of the four were empty in a new group. One section
+           now: start a marathon, then the standings for that marathon. The
+           server still records daily scores, recent games and past champions
+           -- nothing was deleted, it's just not surfaced here. -->
+      <ul id="group-board" class="standings-list" data-fit-list="80"></ul>
+      <p id="group-board-empty" class="hint hidden">Nothing here yet.</p>
+      <p class="hint group-scoring-note fit-optional">One point for every player you finish ahead of, plus one for turning up.</p>
+    </div><!-- /marathon panel -->
+    </div><!-- /group-tabs-block -->
+
+    <!-- Chat PREVIEW -- read-only, last few messages (Sept 2026).
+         The full chat is the FAB + sheet further down; this is a window
+         onto it. A badge on the FAB tells you THAT something was said; on
+         a screen whose whole job is "should I go and play right now?",
+         seeing WHAT was said without tapping is the difference between the
+         group feeling alive and feeling like a menu.
+
+         Deliberately has no input box: two inputs for one chat on one
+         screen is confusing, and the input is what drags the whole
+         keyboard-positioning problem into a page that doesn't need it.
+         Tapping anywhere here opens the real sheet.
+
+         It fits because the chat block's old 128px came back when chat
+         moved to the FAB, and because the live strip above now collapses
+         its blank lines (see :empty rules in style.css). -->
+    <div class="mode-block group-chat-preview-block" id="group-chat-preview-block">
+      <div class="block-heading-row">
+        <h3>Chat</h3>
+        <span class="group-count">tap to open</span>
+      </div>
+      <ul id="group-chat-preview" class="group-chat-list group-chat-preview"></ul>
+      <p id="group-chat-preview-empty" class="hint">No messages yet — say when you're free.</p>
+    </div>
+  </div>
+</div>
+
+<div id="screen-lobby" class="screen">
+  <!-- Three columns so the wordmark stays truly centred: the chat button on
+       the left balances the rules button on the right (both 44px).
+       Chat in the lobby (Oct 2026): this left slot used to be an empty
+       spacer, and the only chat button lived in the game screen's hand row,
+       so there was no way to chat while waiting for people -- the time a room
+       most needs it ("2 mins, finishing dinner"). It opens the same table
+       chat as in the game; the history carries over when the game starts. -->
+  <div class="landing-topbar">
+    <div class="landing-topbar-left">
+      <button id="btn-lobby-chat" class="icon-btn lobby-chat-btn" type="button" aria-label="Open chat" title="Chat">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg>
+        <span id="lobby-chat-badge" class="badge hidden">0</span>
+      </button>
+    </div>
+    <h1 class="landing-wordmark">LEAST COUNT</h1>
+    <div class="landing-topbar-right">
+      <!-- Moved here from a full-width button in the panel below (Oct 2026).
+           Down there it cost ~50px of vertical space between the room code and
+           the player list, on a screen where Start Game and Leave Table were
+           already falling below the fold and the ad banner takes the bottom.
+           The rules are read once, if ever -- they do not deserve more room
+           than the thing you came to the screen to do. Same id, so app.js
+           needs no change; same pattern as Scores/Mute on the game screen. -->
+      <button id="btn-game-rules" class="icon-btn" type="button" aria-label="Game rules" title="Game rules"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4v.3"/><path d="M12 17h.01"/></svg></button>
+    </div>
+  </div>
+  <div class="landing-body">
+    <!-- Lobby v2 (Oct 2026): a header like Home's -- the friends icon, the
+         table's name (a group's own name, or "Your table") and one line
+         saying who is here. #lobby-hint is that line; renderLobby() writes
+         it. The leaderboard trophy for a group's table sits on the right. -->
+    <div class="lobby-head">
+      <span class="lobby-head-icon art art-friends" aria-hidden="true"></span>
+      <div class="lobby-head-text">
+        <h2 id="lobby-title" class="lobby-title">Your table</h2>
+        <p id="lobby-hint" class="lobby-sub"></p>
+      </div>
+      <button id="btn-group-leaderboard" class="icon-btn lobby-head-btn hidden" type="button" aria-label="Leaderboard" title="Leaderboard">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 3h10v2h3a1 1 0 0 1 1 1c0 3-2 5-4.5 5.3A5.5 5.5 0 0 1 13 15.9V18h3v2H8v-2h3v-2.1A5.5 5.5 0 0 1 7.5 11.3C5 11 3 9 3 6a1 1 0 0 1 1-1h3V3Zm0 4H5c.2 1.5 1.2 2.6 2 3V7Zm10 0v3c.8-.4 1.8-1.5 2-3h-2Z"/></svg>
+      </button>
+    </div>
+
+    <!-- The room code as a ticket: the code big and gold, copy and share
+         beside it, the WhatsApp invite under it. -->
+    <div class="mode-block lobby-ticket">
+      <div class="room-code-label" id="lobby-roomcode-label">Room Code</div>
+      <!-- Copy just the 4-letter code (for saying it out loud / typing it
+           elsewhere) and Share the full join-link (for pasting straight into
+           WhatsApp etc. -- opening it pre-fills the room code automatically,
+           see the ?room= handling in app.js) -- as small icon buttons sitting
+           right beside the code itself, not full-width buttons below it.
+           Both write a short "Copied!"/"Shared!" confirmation into
+           #roomcode-action-feedback so there's always visible feedback, even
+           on desktop where no native share sheet appears and it silently
+           falls back to clipboard-copy. -->
+      <div class="room-code-row" id="lobby-roomcode-row">
+        <div class="room-code-display" id="lobby-roomcode">----</div>
+        <button id="btn-copy-roomcode" class="icon-btn" type="button" aria-label="Copy room code" title="Copy code">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="13" height="14" rx="2"/><path d="M8 7V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-3"/></svg>
+        </button>
+        <button id="btn-share-room" class="icon-btn" type="button" aria-label="Share invite link" title="Share invite">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg>
+        </button>
+      </div>
+
+      <p id="roomcode-action-feedback" class="hint roomcode-feedback"></p>
+      <!-- The single most important button in the app (Sept 2026). An empty
+           lobby is useless, so inviting someone is the only action that
+           matters here -- previously it was a 24px icon above, while a
+           DISABLED "Start Game" was the loudest thing on screen.
+           WhatsApp specifically, rather than a generic share sheet, because
+           navigator.share() does not exist in Android WebView (it's a Chrome
+           API), so inside the wrapped app the generic button silently fell
+           back to "copied to clipboard" -- leaving people to open WhatsApp
+           and find the contact themselves. A wa.me link is just a URL, so it
+           works in the WebView today with no native plugin and no rebuild.
+           See btn-share-whatsapp in app.js for the @capacitor/share upgrade
+           planned for the next native build. -->
+      <button id="btn-share-whatsapp" class="primary invite-btn" type="button">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2Zm0 18.15h-.01a8.2 8.2 0 0 1-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.2 8.2 0 0 1-1.26-4.38c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.83 2.42a8.19 8.19 0 0 1 2.41 5.83c0 4.54-3.7 8.23-8.24 8.23Zm4.52-6.17c-.25-.12-1.47-.72-1.69-.81-.23-.08-.39-.12-.56.13-.16.24-.64.8-.78.97-.15.16-.29.18-.53.06-.25-.13-1.05-.39-1.99-1.23-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.01-.38.11-.5.11-.11.25-.29.37-.44.13-.15.17-.25.25-.42.08-.16.04-.31-.02-.43-.06-.12-.56-1.34-.76-1.84-.2-.48-.4-.42-.56-.43h-.48c-.16 0-.43.06-.65.31-.22.25-.85.84-.85 2.03 0 1.2.87 2.35.99 2.51.12.16 1.71 2.62 4.15 3.67.58.25 1.03.4 1.39.51.58.19 1.11.16 1.53.1.47-.07 1.47-.6 1.67-1.18.21-.58.21-1.07.15-1.18-.06-.11-.22-.17-.47-.29Z"/></svg>
+        Invite on WhatsApp
+      </button>
+    </div>
+
+    <!-- Waiting for friends is idle time: the moment to install the app for
+         next time (website on Android only, Nov 2026). See updateAppPromos(). -->
+    <div id="lobby-app-bar" class="app-promo hidden" role="note">
+      <span class="app-promo-text"><b>Waiting? Get the app</b><span>For your next game</span></span>
+      <a id="btn-lobby-app" class="app-promo-btn" href="#" target="_blank" rel="noopener">Install</a>
+      <button id="btn-lobby-app-close" class="app-promo-x" type="button" aria-label="Not now">&times;</button>
+    </div>
+
+    <!-- data-fit-list: when a big table doesn't fit, layout.js lets THIS list
+         scroll inside its own box (never below ~2 rows) so the invite above
+         and Start Game below always stay on screen. -->
+    <!-- Players as seats (Oct 2026): see renderLobby() in app.js. -->
+    <div class="mode-block lobby-players-block">
+      <h3 class="lobby-label">Players</h3>
+      <ul id="lobby-players" class="lobby-seats" data-fit-list="84"></ul>
+      <!-- Host-only, lobby-only bot controls (Oct 2026). A two-player game is
+           thin, so the host can pad the table out. Shown to the host alone --
+           everyone else just sees the bots appear in the list above.
+           Sits INSIDE the Players panel rather than as a fourth block: this
+           screen had already run out of vertical room, and a new panel would
+           have given back the space the Game Rules move just recovered. -->
+      <div id="lobby-bots-row" class="lobby-bots-row hidden">
+        <span class="lobby-bots-label">Bots</span>
+        <!-- Difficulty sits on the SAME row as the stepper, not a new one. This
+             screen only just got Start Game above the fold; a second row hands
+             that space straight back. -->
+        <select id="lobby-bot-difficulty" class="lobby-bots-difficulty" aria-label="Bot difficulty">
+          <option value="easy">Easy</option>
+          <option value="medium" selected>Medium</option>
+          <option value="hard">Hard</option>
+        </select>
+        <div class="lobby-bots-stepper">
+          <button id="btn-bot-remove" class="icon-btn" type="button" aria-label="Remove a bot">&minus;</button>
+          <span id="lobby-bot-count" class="lobby-bots-count">0</span>
+          <button id="btn-bot-add" class="icon-btn" type="button" aria-label="Add a bot">+</button>
+        </div>
+      </div>
+    </div>
+
+
+  </div>
+  <!-- Pinned action bar (Oct 2026). This used to be the third card INSIDE
+       the scrolling body, so on most phones Start Game and Leave Table sat
+       below the fold (measured: 34px under on a 393x780 phone with the ad
+       banner, 94px on 360x720) -- the exact "I have to scroll to start"
+       complaint. As a sibling of .landing-body it can never scroll away:
+       the body above shrinks instead.
+       Max Score is one inline row now (label left, picker right) and the
+       two buttons share a row, which together save ~120px. Same ids, so
+       app.js needs no change; its dropdown opens UPWARD here (style.css),
+       because there is no room below the bottom of the screen. -->
+  <div class="screen-actions" id="lobby-actions">
+    <div id="lobby-maxscore-row" class="lobby-maxscore-row hidden">
+      <label for="input-maxscore">Max Score</label>
+      <select id="input-maxscore"></select>
+    </div>
+    <div class="action-pair">
+      <!-- "Leave Table" not "Leave Room": leaving the TABLE ends your session
+           here, while leaving the GROUP (removing it from your list) is a
+           separate action in the group menu on the landing screen. Naming
+           them the same thing made it unclear which one you were about to
+           do. -->
+      <button id="btn-leave-lobby" class="secondary leave-btn">Leave Table</button>
+      <button id="btn-start" class="primary" disabled>Start Game</button>
+    </div>
+    <p id="lobby-error" class="error"></p>
+  </div>
+</div>
+
+
+<!-- Shown to someone who tried to join a room that's already mid-game --
+     the request sits with the host (see join-requests-banner below) instead
+     of dropping them straight in. Auto-resolves itself within 2 minutes
+     either way (admitted or denied), driven entirely by server events
+     (join_admitted / join_denied) -- no client-side timer to get out of sync. -->
+<div id="screen-waiting-host" class="screen">
+  <div class="landing-form waiting-host-panel">
+    <div class="wait-art" aria-hidden="true"><span class="wait-ring"></span><span class="wait-ring two"></span><span class="wait-pic art art-wait"></span></div>
+    <h2>Waiting for host</h2>
+    <p class="hint">The game's already in progress &mdash; <span id="waiting-host-name">the host</span> needs to let you in. You'll join from the next round.</p>
+    <!-- Filled in by app.js from the server's `needsAd` on the pending ack, and
+         shown ONLY when an ad actually applies. First-time players are exempt,
+         and must not be warned about an advert they will never see -- a new
+         player told to expect one might cancel instead of waiting, which is the
+         opposite of what that exemption exists for. -->
+    <p class="hint waiting-host-ad-note hidden" id="waiting-host-ad-note">A short ad plays when they let you in.</p>
+    <button id="btn-cancel-waiting" class="secondary leave-btn" type="button">Cancel</button>
+  </div>
+</div>
+
+<!-- Host-only, floating over whatever screen they're on (lobby or mid-game)
+     -- a Teams-style waiting-room strip listing everyone currently asking to
+     join, each with Admit/Ignore. Hidden entirely whenever nobody's waiting. -->
+<!-- Both host-facing request banners live in one fixed wrapper so they stack
+     instead of colliding. Each was position:fixed at top:8px on its own,
+     which put them in exactly the same place -- and they genuinely can be
+     pending together: someone new knocking while someone eliminated asks to
+     come back. They stay separate elements because they're different
+     decisions (admit a stranger vs let back in a player you just knocked
+     out, on a score you need to see before answering). -->
+<!-- Cards in flight (Sept 2026). A viewport-level layer, because a discard
+     travels from the hand tray to the centre of the oval and those live in
+     different stacking contexts -- the existing #deal-flyer is positioned
+     inside .oval-table, which the hand is not part of.
+     pointer-events:none throughout: a card mid-flight must never eat a tap
+     meant for the table underneath. -->
+<div id="fly-layer" class="fly-layer" aria-hidden="true"></div>
+
+<div class="top-banners">
+  <div id="join-requests-banner" class="join-requests-banner hidden"></div>
+  <div id="rejoin-requests-banner" class="join-requests-banner rejoin-requests-banner hidden"></div>
+</div>
+
+<div id="screen-game" class="screen">
+  <!-- Three columns: Scores | Round | mute + leave (Sept 2026).
+       This bar used to be [round].................[mute][Scores][leave],
+       which left a measured 115px hole in the middle of a 344px bar and put
+       a 14px-tall text label next to a 54px-tall button cluster. Splitting
+       the buttons either side lets the round number sit in the true centre
+       and balances the weight across the bar. -->
+  <div class="game-top">
+    <!-- Two and two (Oct 2026): Scores and Invite on the left, Sound and
+         Leave on the right. It was one button on the left and three on the
+         right, which pulled the whole bar off-balance and crowded the right
+         thumb. Leave stays in the far-right corner, where players already
+         reach for it. -->
+    <div class="top-actions top-actions-left">
+      <button id="btn-scores" class="tiny">Scores</button>
+      <!-- Invite (Sept 2026). The room code used to exist ONLY on the lobby
+           screen, so the moment a game started the host lost sight of it and
+           had no way to bring anyone else in -- the answer to "can I join?"
+           became "next game". That also stranded the mid-game join flow the
+           rewarded ad was built around: the feature was there, but the code
+           needed to reach it was not.
+           An icon rather than the code in text: the bar is already three
+           columns on a 344px phone, and this is wanted once or twice a game,
+           not continuously. -->
+      <button id="btn-game-invite" class="tiny" type="button" aria-label="Invite players" title="Invite players"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg></button>
+    </div>
+    <!-- Timer and round number share the centre column, stacked.
+         The timer was position:fixed at top:8px, left:50% -- the exact spot
+         the round number moved into when this bar became three columns, so
+         they overlapped (measured: 46px across, 6px down). Stacking them in
+         flow fixes it without costing height: 26px timer + 14px round is
+         40px, and the bar is already 58px tall because of the buttons.
+         justify-content:flex-end keeps the round number still, so it doesn't
+         hop up and down as the timer shows and hides between turns. -->
+    <div class="game-top-centre">
+      <div id="turn-timer" class="turn-timer hidden">⏱ <span id="timer-seconds">30</span>s</div>
+      <div id="game-round" class="game-round"></div>
+    </div>
+    <div class="top-actions top-actions-right">
+      <!-- Sound and live commentary share one box (Oct 2026), so the bar
+           stays two and two. -->
+      <div class="btn-pair">
+        <button id="btn-mute" class="tiny mute-btn" type="button" aria-label="Mute sound"><svg class="icon icon-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="icon icon-sound-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4Z"/><path d="m17 9 4 4M21 9l-4 4"/></svg></button>
+        <button id="btn-commentary" class="tiny mute-btn" type="button" aria-label="Turn off live commentary" aria-pressed="true"><svg class="icon icon-cm-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg><svg class="icon icon-cm-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 2 20 20"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><path d="M12 19v3"/></svg></button>
+      </div>
+      <!-- The only mid-round exit. Without it the table had no way out at
+           all, and a refresh auto-rejoins the room, so there was no way back
+           to the menu either. -->
+      <button id="btn-leave-game" class="tiny leave-btn" type="button" aria-label="Leave game" title="Leave game"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg></button>
+    </div>
+  </div>
+
+  <!-- The turn timer moved up into .game-top-centre, stacked above the round
+       number -- as a fixed, viewport-centred pill down here it landed on top
+       of the round number once that moved to the middle of the bar. -->
+  <!-- Whose turn it is, in words (Oct 2026). The only signal used to be a
+       gold glow on a chair and a bare "15s" in the top bar that never said
+       whose fifteen seconds they were. The seconds live here now too. -->
+  <div id="turn-strip" class="turn-strip hidden" aria-live="polite">
+    <span id="turn-strip-text" class="turn-strip-text"></span>
+    <span id="turn-strip-time" class="turn-strip-time"></span>
+  </div>
+  <!-- A leave queued mid-round (Oct 2026). It used to be a small red dot on
+       the Leave button that nobody read as "you're leaving"; now it says so,
+       and Stay calls it off. The rest of the table is told too (see
+       announce_leave in server.js). -->
+  <div id="leave-line" class="leave-line hidden" role="status">
+    <span class="leave-line-text">You’ll leave when this round ends</span>
+    <button id="btn-leave-stay" class="leave-line-stay" type="button">Stay</button>
+  </div>
+
+  <div class="oval-table" id="oval-table">
+    <div class="table-felt"></div>
+    <div class="stock-badge">Stock: <span id="stock-count">0</span></div>
+    <div class="table-center">
+      <div class="pile-group">
+        <div class="pile-label">Open Card</div>
+        <div id="open-card-slot"></div>
+      </div>
+      <div class="pile-group">
+        <div class="pile-label">Joker</div>
+        <div id="joker-indicator">-</div>
+        <!-- "Every Q = 0" (Oct 2026). The card alone showed a bare Q, and
+             nothing said what that meant for your hand. -->
+        <div id="joker-caption" class="pile-caption"></div>
+      </div>
+    </div>
+    <!-- Live commentary (Oct 2026): one short line at a time under the open
+         card and the joker, sized by app.js to the space the chairs leave.
+         See LIVE COMMENTARY in app.js; the mic button in the top bar turns
+         it off. -->
+    <div id="commentary" class="commentary hidden" aria-live="polite"></div>
+    <!-- Round outcome, shown in the middle of the table during the card
+         reveal. The reveal used to show everyone's hands with no statement
+         of what actually happened -- you could see the cards but not who
+         won, or that anyone had been penalised. This occupies the space the
+         open card / joker vacate (see #screen-game.reveal-phase in
+         style.css), so it costs no extra room. -->
+    <div id="reveal-banner" class="reveal-banner hidden"></div>
+    <!-- Countdown + "Dealing cards..." (moved here Oct 2026).
+         This used to be a position:fixed element on the body at top:12% of the
+         VIEWPORT, which on a phone lands squarely on top of the seat at the top
+         of the oval -- so the deal announcement covered whoever was sitting
+         there. Now it is a child of the table and centred in it, exactly like
+         #reveal-banner above, which is how the round outcome has always been
+         announced. Same place, same way, whatever the screen size. -->
+    <div id="deal-phase-badge" class="deal-phase-badge hidden">
+      <!-- "Round N" (Oct 2026) replaces the 3-2-1 countdown: the same
+           moment, but it tells you something -- which round this is, what
+           the table is playing to, and who goes first. -->
+      <div id="round-intro" class="round-intro hidden">
+        <div class="round-intro-label">Round</div>
+        <div id="round-intro-num" class="round-intro-num"></div>
+        <div id="round-intro-sub" class="round-intro-sub"></div>
+      </div>
+      <div id="start-seq-countdown" class="start-seq-countdown hidden">3</div>
+      <div id="deal-phase-label" class="deal-phase-label hidden">Dealing cards...</div>
+    </div>
+    <!-- The "LEAST COUNT" call (Oct 2026). When anyone declares, every player
+         sees who called it, then whether it was right, before the cards go
+         face-up -- the biggest moment in the game used to arrive as one
+         plain line of text. -->
+    <div id="declare-callout" class="declare-callout hidden" aria-live="assertive">
+      <div id="declare-callout-who" class="declare-callout-who"></div>
+      <div class="declare-callout-call"><span>LEAST</span> <span>COUNT</span></div>
+      <div id="declare-callout-verdict" class="declare-callout-verdict hidden"></div>
+    </div>
+    <!-- .seat elements injected by app.js -->
+    <div id="deal-flyer" class="deal-flyer hidden"></div>
+    <!-- Pre-deal intro: shows the actual number of decks in play, then a
+         riffle-merge shuffle, before the existing per-card deal animation
+         below starts. Populated dynamically by runDeckIntro() in app.js. -->
+    <div id="deck-intro" class="deck-intro hidden"></div>
+  </div>
+
+  <div id="chain-banner" class="chain-banner hidden">
+    <span id="chain-banner-text">🔥 +2 Chain!</span>
+    <button id="btn-take-penalty" class="danger hidden">Take Penalty (<span id="penalty-count">0</span>)</button>
+  </div>
+  <div id="chain-flash" class="chain-flash hidden"></div>
+
+  <!-- Bots-only assist: reuses the same decision logic the bots themselves
+       play with, but shows it as a suggestion for the human to act on
+       instead of auto-playing. Only ever shown in a solo-vs-bots game (no
+       other real player at the table), so it never gives anyone an edge
+       over a real opponent. One button, tap any turn -- no separate on/off
+       toggle needed. -->
+  <div id="hint-banner" class="hint-banner hidden">
+    <span id="hint-text"></span>
+  </div>
+
+  <!-- The chat toggle lives on this row (Sept 2026), not floating in the
+       bottom-right corner any more. As a position:fixed button it was
+       anchored to the VIEWPORT while the game content overflowed past the
+       bottom on short phones, so on a 360x640 screen it sat squarely on top
+       of the player's cards (measured: a full 52x52 overlap with #hand).
+       This row already had ~282px of empty space to the right of the label,
+       so putting it here costs no vertical height, can never overlap
+       anything at any screen size, and lands right above Least Count!
+       where the thumb already is. -->
+  <!-- Tutorial coach. Sits directly above the hand, which is where the eye
+       already is when it's the player's turn, and where every action it
+       talks about happens. Hidden entirely outside a practice game. -->
+  <div id="coach" class="coach hidden">
+    <div class="coach-body">
+      <span id="coach-step" class="coach-step"></span>
+      <p id="coach-text" class="coach-text"></p>
+    </div>
+    <div class="coach-actions">
+      <button id="coach-next" class="coach-btn hidden" type="button">Got it</button>
+      <button id="coach-skip" class="coach-skip" type="button">Skip</button>
+    </div>
+  </div>
+
+  <div class="hand-header">
+    <!-- The line above your cards (Oct 2026, step 2): your hand value as a
+         box that turns gold at 5 or less -- the moment you're allowed to
+         call -- then your card count and score, which used to sit on your
+         chair. "You drew 5♥" and the +2 trump-card note show over the count
+         and score for a moment (#draw-toast): above this line is your own
+         chair, so a note there landed on top of it. -->
+    <!-- Two numbers, two names, two looks (Oct 2026). "Value 4 · Score 0",
+         with the value in gold, had players asking which was which. Now:
+         SCORE first, outlined in gold -- your total in this game against the
+         max score ("12/200"); then your cards and what they are worth this
+         round, together in one plain box ("12 cards = 69 pts") that turns
+         green at 5 or less, when you may call. #hand-stats is kept, empty,
+         for the "You drew…" note. -->
+    <span class="hand-title"><span id="hand-score-pill" class="hand-score-pill"><span class="hsp-label">Score</span><b id="hand-score">0</b><span id="hand-score-max" class="hsp-max"></span></span><span id="hand-value-pill" class="hand-value-pill"><span id="hand-count" class="hvp-count"></span><span class="hvp-eq">=</span><b id="hand-value">0</b><span class="hvp-unit">pts</span></span><span class="hand-stats-wrap"><span id="draw-toast" class="draw-toast hidden" aria-live="polite"></span><span id="hand-stats" class="hand-stats"></span></span></span>
+    <div class="hand-header-actions">
+      <button id="btn-show-hint" class="hint-btn hidden" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 21h6v-1.5H9V21ZM12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2v.3h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg> <span class="hint-btn-label">Hint</span></button>
+      <button id="chat-fab" class="chat-fab hidden" type="button" aria-label="Open chat">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg><span id="chat-badge" class="badge hidden">0</span>
+      </button>
+    </div>
+  </div>
+  <!-- Joker/wild and normal cards used to be two separate stacked sections,
+       each with its own label line -- that cost real vertical height on top
+       of the game screen's already-tight one-viewport budget, every single
+       turn. Merged into one fixed-size tray: #hand-jokers and #hand-normal
+       are `display: contents` (see style.css), so their card tiles just
+       flow directly into #hand's own single wrapping row, with a thin
+       vertical divider between the two groups whenever jokers are present.
+       Cards worth 0 this round still get their own gold border (see
+       .card.wild-zero) so they're easy to spot without a separate label. -->
+  <div id="hand" class="hand">
+    <div id="hand-jokers" class="hand-jokers-cards"></div>
+    <div id="hand-divider" class="hand-divider hidden"></div>
+    <div id="hand-normal" class="hand-normal-cards"></div>
+  </div>
+
+  <div class="action-bar">
+    <!-- .action, not .primary: this is the routine move of the game and the
+         gold Least Count! beside it has to win the eye when it lights up. -->
+    <!-- "Discard 2" says how many cards you've picked (Oct 2026). The
+         second line on Least Count! says when it can be used, while it
+         can't. -->
+    <button id="btn-discard" class="action" disabled>Discard</button>
+    <button id="btn-declare" class="declare" disabled><span class="btn-main">Least Count!</span><span id="declare-sub" class="btn-sub">at 5 or less</span></button>
+  </div>
+  <p id="game-error" class="error"></p>
+</div>
+
+<canvas id="confetti-canvas" class="confetti-canvas hidden"></canvas>
+
+<div id="overlay-start-sequence" class="start-sequence hidden">
+  <div class="start-seq-box">
+    <div id="start-seq-reveal" class="start-seq-reveal hidden">
+      <div class="start-seq-reveal-row">
+        <div class="start-seq-reveal-label">Joker</div>
+        <div id="start-seq-joker-card"></div>
+      </div>
+      <div class="start-seq-reveal-row">
+        <div class="start-seq-reveal-label">Open Card</div>
+        <div id="start-seq-open-card"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="overlay-round-result" class="overlay hidden">
+  <div class="card-panel podium-panel">
+    <div id="round-result-emoji" class="round-result-emoji"></div>
+    <!-- v2 (Oct 2026): "Round 3 · Playing to 200 pts" as one small line over
+         the title, which is now short: "Mani called too early +75". -->
+    <div class="rr-kicker"><span id="round-result-round" class="round-result-round"></span><span id="round-result-maxscore" class="round-result-maxscore"></span></div>
+    <h2 id="round-result-title">Round Result</h2>
+
+    <div id="podium" class="podium"></div>
+    <div id="round-result-note" class="round-result-note"></div>
+    <!-- Rating (Nov 2026): knocked out of a game only bots are still playing,
+         your rating is settled at once and shows here (renderRoundRating). -->
+    <div id="round-rating" class="go-rating-card hidden"></div>
+
+    <!-- Rejoin offer (Sept 2026). Shown only to a player the engine says is
+         eligible (game.canRejoin, computed per-viewer in getPublicState).
+         Placed directly under the result, above the ad and the scores: this
+         is a 30-second decision and it must not be something you scroll to
+         find. The score is spelled out because coming back at 180 against a
+         200 limit is a completely different proposition from coming back at
+         45, and a bare yes/no would hide that. -->
+    <div id="rejoin-offer" class="rejoin-offer hidden">
+      <p class="rejoin-offer-text" id="rejoin-offer-text"></p>
+      <div class="rejoin-offer-actions">
+        <button id="btn-rejoin-ask" class="primary" type="button">Ask to rejoin</button>
+        <button id="btn-rejoin-no" class="secondary" type="button">No thanks</button>
+      </div>
+      <p class="rejoin-offer-status hidden" id="rejoin-offer-status"></p>
+    </div>
+
+    <!-- Reserved hole for the 300x250 ad. The ad itself is a NATIVE view
+         floating over the WebView (same as the bottom banner), so it takes up
+         no space in this layout of its own -- this empty box is what stops the
+         score rows from sitting underneath it. Placed between the result and
+         the scores, never directly above Next Round: an ad touching the button
+         players tap every single round is an accidental-click risk Google
+         treats as a policy problem, not a style preference. Hidden entirely
+         for anyone who bought Remove Ads, so they get the space back. -->
+    <div id="round-result-ad" class="round-result-ad hidden"></div>
+
+    <!-- data-fit-list: on a short screen this list scrolls inside its own
+         box (never below ~2 rows) so the buttons under it stay visible. -->
+    <div id="round-result-hands" class="reveal-rows" data-fit-list="92"></div>
+
+    <!-- Opens the shared #overlay-scorecard sheet straight onto its "By
+         round" tab -- a sheet rather than an inline expansion, so this
+         already-tall round-result panel doesn't get taller/more cluttered. -->
+    <button id="btn-open-full-scorecard-rr" class="link-btn" type="button">See full scorecard</button>
+
+    <div id="round-maxscore-row" class="round-maxscore-row hidden">
+      <label for="round-maxscore-select">Change Max Score</label>
+      <select id="round-maxscore-select"></select>
+    </div>
+    <!-- Why a max-score change was refused, if it was (Oct 2026). The change
+         is now sent the moment it is picked, so a refusal needs somewhere to
+         be said -- #game-error sits on the table, hidden under this panel. -->
+    <p id="round-maxscore-status" class="hint round-maxscore-status" aria-live="polite"></p>
+
+    <!-- "Start Now" rather than "Next Round" since Sept 2026: the round
+         advances on its own after a countdown, so this button is the host's
+         skip-the-wait override, not the only way forward. -->
+    <button id="btn-next-round" class="primary hidden">Start Now</button>
+    <button id="btn-see-final-result" class="primary hidden">See Final Result <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 3h10v2h3a1 1 0 0 1 1 1c0 3-2 5-4.5 5.3A5.5 5.5 0 0 1 13 15.9V18h3v2H8v-2h3v-2.1A5.5 5.5 0 0 1 7.5 11.3C5 11 3 9 3 6a1 1 0 0 1 1-1h3V3Zm0 4H5c.2 1.5 1.2 2.6 2 3V7Zm10 0v3c.8-.4 1.8-1.5 2-3h-2Z"/></svg></button>
+    <button id="btn-leave-round-result" class="secondary leave-btn">Leave Game</button>
+    <p id="round-result-hint" class="hint"></p>
+  </div>
+</div>
+
+<div id="overlay-rules" class="overlay hidden">
+  <div class="card-panel rules-panel">
+    <span class="art art-book popup-art" aria-hidden="true"></span>
+    <h2>Game Rules</h2>
+    <div class="rules-body">
+      <div class="rules-item">
+        <div class="rules-heading">🎯 Goal</div>
+        <p>Score as few points as possible. When your total points reach the elimination score, you're out. The last player still standing wins.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">🃏 Card Values</div>
+        <p>Ace = 1, number cards = face value, face cards (J/Q/K) = 10. Each round, one rank is picked as the Joker — Jokers and that rank are worth 0 points and can replace any card.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">🔄 Your Turn</div>
+        <p>Discard one card (or a group of the same rank) from your hand. If it matches the open card's rank &mdash; or the open card is this round's Joker &mdash; that's it, turn over. Otherwise you'll automatically draw one card from the stock pile as a penalty for not matching. Try to keep your hand's total value as low as possible.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">🔥 +2 Chain</div>
+        <p>Discarding a 2 forces the next player to draw 2 penalty cards — unless they also discard a 2, which stacks the chain higher (+4, +6...). Whoever can't continue it draws the full penalty.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">📣 Declaring</div>
+        <p>Once your hand value is 5 or less, you can declare "Least Count!" If your total really is the lowest at the table, every other player scores their own hand value as penalty points. If you're wrong, you take the penalty instead.</p>
+      </div>
+      <div class="rules-item">
+        <div class="rules-heading">Elimination &amp; Winning</div>
+        <p>Points carry over every round. Cross the elimination score (chosen before the game, e.g. 100/200) and you're eliminated. Play continues until only one player remains — they win!</p>
+      </div>
+    </div>
+    <button id="btn-close-rules" class="secondary">Close</button>
+  </div>
+</div>
+
+<!-- #overlay-scores and its "See full scorecard" link were merged into
+     #overlay-scorecard below -- one sheet, two tabs, no stacking. -->
+
+<!-- Full round-by-round scorecard, its own separate screen (not an inline
+     expansion) opened from either the Scores overlay above or the
+     round-result screen's own "See full scorecard" link -- both point at
+     this same overlay/table so there's only ever one to keep in sync.
+     Players as rows (capped at 10, so this axis never needs to scroll),
+     rounds as columns (a long game scrolls sideways instead, with the
+     player-name column frozen via CSS position:sticky so it stays visible
+     while scrolling sideways). -->
+<!-- Scorecard sheet (Sept 2026) -- replaces the old #overlay-scores and
+     #overlay-full-scorecard pair.
+     Those were two separate dialogs showing the same standings, and the
+     second opened ON TOP of the first (both left open), which is two taps,
+     two backdrops, and the overlay-on-overlay stacking that caused the
+     backdrop bug fixed in an earlier pass. Measured at 360x800 they filled
+     37% and 36% of the screen with ~252px of dead space above and below,
+     because .card-panel has a max-width but no width, so a four-player
+     table collapsed to a 158px sliver.
+     One bottom sheet, full width, ~80% height, with a segmented toggle
+     instead of a second overlay. Geometry follows the chat sheet, which
+     already solves the on-screen-keyboard case. -->
+<div id="overlay-scorecard" class="overlay sheet-overlay hidden">
+  <div class="sheet-panel">
+    <div class="sheet-head">
+      <h2>Scorecard</h2>
+      <button id="btn-close-scorecard" class="icon-btn" type="button" aria-label="Close scorecard">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="segmented scorecard-tabs">
+      <button class="seg active" id="seg-scorecard-totals" type="button">Totals</button>
+      <button class="seg" id="seg-scorecard-rounds" type="button">By round</button>
+    </div>
+    <div class="sheet-body">
+      <div id="scorecard-totals"></div>
+      <div id="scorecard-rounds" class="hidden">
+        <p class="scorecard-hint hidden" id="scorecard-swipe-hint">swipe for more rounds →</p>
+        <div class="scorecard-scroll">
+          <table id="scorecard-table"></table>
+        </div>
+      </div>
+    </div>
+    <p class="sheet-foot" id="scorecard-foot"></p>
+  </div>
+</div>
+
+<div id="overlay-my-stats" class="overlay hidden">
+  <div class="card-panel with-art">
+    <span class="art art-chart popup-art" aria-hidden="true"></span>
+    <h2>My stats</h2>
+    <div id="my-stats-body"></div>
+    <button id="btn-close-my-stats" class="secondary">Close</button>
+  </div>
+</div>
+
+<div id="overlay-gameover" class="overlay hidden">
+  <div class="card-panel with-art">
+    <!-- v2 (Oct 2026): a 3D trophy between two party poppers, over the
+         confetti. The title is just the words ("Bhavana wins!"). -->
+    <div class="gameover-art" aria-hidden="true"><span class="art art-popper go-popper left"></span><span class="art art-trophy go-trophy"></span><span class="art art-popper go-popper right"></span></div>
+    <h1 id="gameover-title">Game over</h1>
+    <!-- Your rating change (Nov 2026), counted up by renderGameOverRatings(). -->
+    <div id="gameover-rating" class="go-rating-card hidden"></div>
+    <div id="gameover-body" data-fit-list="110"></div>
+    <button id="btn-new-game" class="primary hidden">Play Again (same room)</button>
+    <button id="btn-leave-gameover" class="secondary leave-btn">Leave Room</button>
+    <p id="gameover-hint" class="hint"></p>
+  </div>
+</div>
+
+<div id="draw-reveal" class="draw-reveal hidden">
+  <div class="draw-reveal-box">
+    <div class="draw-reveal-label" id="draw-reveal-label">You drew...</div>
+    <div id="draw-reveal-cards" class="draw-reveal-cards"></div>
+  </div>
+</div>
+
+<!-- Tap-to-close target behind the chat sheet. Deliberately transparent
+     since Sept 2026 -- it used to dim the table to 50% black, which meant
+     you couldn't follow the game while chatting. The reference sheet
+     (Instagram comments) doesn't dim either. See .chat-backdrop. -->
+<div id="chat-backdrop" class="chat-backdrop hidden"></div>
+<div id="chat-panel" class="chat-panel hidden">
+  <div class="chat-drag-handle"></div>
+  <div class="chat-header">
+    <span><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg> Table Chat</span>
+    <button id="btn-chat-close" class="tiny" aria-label="Close chat"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
+  </div>
+  <div id="chat-messages" class="chat-messages"></div>
+  <!-- GIF picker removed (Sept 2026) -- see app.js for the reasoning
+       (self-hosted meme library never made it to GitHub, plus the content
+       was Telugu-only and not a fair Remove Ads perk for a wider audience).
+       May come back later with broader content. -->
+  <!-- Name chips, shown only while an @ is being typed, so it costs no
+       height the rest of the time. -->
+  <div id="chat-mention-bar" class="mention-bar hidden"></div>
+  <div class="chat-input-row">
+    <!-- enterkeyhint="send" turns the Android keyboard's Enter key into a
+         Send key, and autocomplete/autocorrect off stops Gboard's
+         suggestion strip from growing mid-sentence, which changes the
+         keyboard's height and forces the sheet to reposition while you're
+         typing. -->
+    <input id="chat-input" type="text" maxlength="300" placeholder="Say something..."
+           enterkeyhint="send" autocomplete="off" autocapitalize="sentences" />
+    <button id="btn-chat-send" class="tiny primary" aria-label="Send message"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg></button>
+  </div>
+</div>
+
+<!-- ==================================================================
+     Group chat -- FAB + bottom sheet (Sept 2026)
+
+     Same shape as the table chat above, and deliberately the SAME CSS
+     classes (.chat-fab / .chat-backdrop / .chat-panel), so there is one
+     definition of how a chat sheet looks and behaves. app.js also reuses
+     the table chat's positionChatSheet() for this panel rather than
+     carrying a second copy of the keyboard maths -- that function took
+     several rounds of screen recordings to get right on a real Android
+     WebView, and having two of them would mean fixing everything twice.
+     See activeChatPanelId in app.js.
+
+     Only the ids differ, which is what lets renderGroupChat() and
+     sendGroupChat() stay exactly as they were.
+     ================================================================== -->
+<div id="group-chat-fab" class="chat-fab group-chat-fab hidden">
+  <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg><span id="group-chat-unread" class="badge hidden">0</span>
+</div>
+
+<div id="group-chat-backdrop" class="chat-backdrop hidden"></div>
+<div id="group-chat-panel" class="chat-panel hidden">
+  <div class="chat-drag-handle"></div>
+  <div class="chat-header">
+    <span><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1-.2 1.3-.8 2.6-1.6 3.6a.5.5 0 0 0 .5.8c1.8-.3 3.4-1 4.7-2 1 .3 2.2.5 3.3.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3Z"/></svg> Group Chat</span>
+    <button id="btn-group-chat-close" class="tiny" aria-label="Close chat"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
+  </div>
+  <ul id="group-chat-list" class="chat-messages group-chat-list"></ul>
+  <p id="group-chat-empty" class="hint group-chat-empty">No messages yet — say when you're free.</p>
+  <div id="group-chat-mention-bar" class="mention-bar hidden"></div>
+  <div class="chat-input-row group-chat-row">
+    <input id="input-group-chat" type="text" maxlength="300" placeholder="Message the group"
+           autocomplete="off" autocapitalize="sentences" enterkeyhint="send" />
+    <button id="btn-group-chat-send" class="tiny primary" aria-label="Send message"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9Z"/></svg></button>
+  </div>
+</div>
+
+<!-- Group leaderboard, opened from the trophy icon in a group lobby.
+     Wins first, then better (lower) average score -- see standingsToList in
+     server.js for the exact ordering. -->
+<div id="overlay-standings" class="overlay hidden">
+  <div class="card-panel with-art">
+    <span class="art art-trophy popup-art" aria-hidden="true"></span>
+    <h2>Leaderboard</h2>
+    <ul id="lobby-standings" class="standings-list" data-fit-list="120"></ul>
+    <p id="lobby-standings-empty" class="hint hidden">No games yet — the first result lands here.</p>
+    <button id="btn-close-standings" class="secondary">Close</button>
+  </div>
+</div>
+
+<!-- Group management, opened from the "..." on a group row on the LANDING
+     screen. Deliberately separate from playing: creating, renaming and
+     deleting a group are things you do to the group, not things you do at
+     the table. Rename/Delete are shown only to the group's creator. -->
+<!-- ==================================================================
+     Group overflow menu -- WhatsApp-style (Sept 2026)
+
+     A plain list dropping from the three dots at top right, not a centred
+     card of chunky full-width buttons. Options were right, the presentation
+     wasn't.
+
+     POSITIONING, and why it's `fixed` rather than anchored to the button:
+     this project already tried anchoring a dropdown to a topbar control once
+     (the profile menu) and went through several rounds of position/z-index/
+     overflow bugs before giving up and using a centred modal -- see the
+     comment on #profile-menu-panel. Pinning to the VIEWPORT instead gets the
+     same visual result with no anchoring maths to get wrong and no parent
+     overflow to escape: the topbar is always in the same place, so top-right
+     is always top-right.
+     ================================================================== -->
+<div id="group-menu-backdrop" class="menu-backdrop hidden"></div>
+<div id="group-menu" class="menu-sheet hidden" role="menu">
+  <button class="menu-row" id="btn-group-share" type="button" role="menuitem">Invite to group</button>
+  <button class="menu-row" id="btn-group-copy" type="button" role="menuitem">Copy invite link</button>
+  <button class="menu-row hidden" id="btn-group-rename" type="button" role="menuitem">Rename group</button>
+  <button class="menu-row" id="btn-group-remove" type="button" role="menuitem">Remove from my list</button>
+  <button class="menu-row danger hidden" id="btn-group-delete" type="button" role="menuitem">Delete group</button>
+</div>
+
+<!-- Small centred dialogs for the two actions that need a second step.
+     WhatsApp does the same: the overflow list itself never contains inputs
+     or confirmations, it just launches them. -->
+<div id="group-rename-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel">
+    <h2>Rename group</h2>
+    <input id="input-group-rename" type="text" maxlength="30" placeholder="New name" />
+    <p id="group-menu-error" class="error"></p>
+    <div class="dialog-actions">
+      <button id="btn-group-rename-cancel" class="secondary" type="button">Cancel</button>
+      <button id="btn-group-rename-save" class="primary" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Fixed lengths, not a free number field. A predictable end date is the
+     whole point of the countdown, and free entry invites someone typing 365
+     -- which turns the marathon back into a leaderboard decided in week two,
+     the exact thing it exists to prevent. -->
+<!-- Table nickname. Changes what this table sees for this game only; the
+     saved profile name and the group marathon board both keep the real one. -->
+<!-- Two states in one dialog (Sept 2026). The server will not remove a
+     player mid-round, so a leave tapped during a hand is QUEUED -- and the
+     only sign of that used to be a line of text written with setGameError(),
+     which the very next state push wiped (it clears the error line on every
+     turn change). So the queue worked and looked like it hadn't: no
+     indication, and no way to change your mind.
+     Second state below is shown once a leave is already queued; app.js
+     swaps the text and the button labels. -->
+<div id="leave-game-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel with-art">
+    <span class="art art-door popup-art" aria-hidden="true"></span>
+    <h2 id="leave-game-title">Leave this game?</h2>
+    <p class="hint" id="leave-game-text">You'll forfeit the game and go back to the menu. The others carry on without you.</p>
+    <div class="dialog-actions">
+      <!-- Gold for staying, red words for leaving (Oct 2026): gold is the
+           good thing in this app, and leaving costs you the game. -->
+      <button id="btn-leave-game-cancel" class="primary" type="button">Stay</button>
+      <button id="btn-leave-game-confirm" class="secondary leave-btn" type="button">Leave</button>
+    </div>
+  </div>
+</div>
+
+<div id="table-name-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel">
+    <h2>How you appear here</h2>
+    <p class="hint">Just for this game — your saved name and the group leaderboard don't change.</p>
+    <input id="input-table-name" type="text" maxlength="20" placeholder="e.g. Batman" autocomplete="off" />
+    <p id="table-name-error" class="error"></p>
+
+    <div class="dialog-actions">
+      <button id="btn-table-name-cancel" class="secondary" type="button">Cancel</button>
+      <button id="btn-table-name-save" class="primary" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="marathon-start-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel with-art">
+    <span class="art art-trophy popup-art" aria-hidden="true"></span>
+    <h2>Start a marathon</h2>
+    <!-- No longer promises "a permanent line on the champions list": the
+         champions view was removed from the group screen, and copy shouldn't
+         promise a screen that isn't there. -->
+    <p class="hint">Points reset now. Whoever leads when it ends takes the crown.</p>
+    <div class="segmented" id="marathon-days-tabs">
+      <button type="button" class="seg active" data-days="7">7 days</button>
+      <button type="button" class="seg" data-days="14">14 days</button>
+      <button type="button" class="seg" data-days="30">30 days</button>
+    </div>
+    <p id="marathon-start-error" class="error"></p>
+    <div class="dialog-actions">
+      <button id="btn-marathon-cancel" class="secondary" type="button">Cancel</button>
+      <button id="btn-marathon-confirm" class="primary" type="button">Start</button>
+    </div>
+  </div>
+</div>
+
+<div id="group-delete-dialog" class="overlay hidden">
+  <div class="card-panel dialog-panel with-art">
+    <span class="art art-bin popup-art" aria-hidden="true"></span>
+    <h2>Delete group?</h2>
+    <p class="hint" id="group-delete-text">This removes the group and its marathon for everyone. It can't be undone.</p>
+    <div class="dialog-actions">
+      <button id="btn-group-delete-cancel" class="secondary" type="button">Cancel</button>
+      <button id="btn-group-delete-confirm" class="danger" type="button">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script type="module" src="firebase-init.js"></script>
+<script src="admob-init.js?v=analytics-2026-11-22" defer></script>
+<script type="module" src="revenuecat-init.js"></script>
+<script src="app.js?v=analytics-2026-11-23" defer></script>
+<!-- Fit-to-screen (Oct 2026). Runs after app.js (defer keeps the order) and
+     only reads/sets layout: it picks how tight each screen's spacing needs
+     to be so the whole screen fits the phone it is on. See the top of the
+     file for how it works. -->
+<script src="layout.js?v=fit-2026-10-24" defer></script>
+</body>
+</html>
