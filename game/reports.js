@@ -72,7 +72,13 @@ function fmtMoney(micros, cur) {
   if (!ok(micros)) return DASH;
   const v = micros / 1e6;
   const sym = SYMBOL[cur] || (cur ? esc(cur) + '&nbsp;' : '');
-  const dp = v === 0 ? 0 : v < 1 ? 2 : v < 20 ? 1 : 0;
+  // Two significant figures below 1 ($0.0044, $0.18), so a small amount
+  // never shows as 0.00.
+  let dp = v === 0 ? 0 : v >= 20 ? 0 : v >= 1 ? 2 : 2;
+  if (v > 0 && v < 1) {
+    const sig = Number(v.toPrecision(2)).toString();
+    dp = Math.min(6, Math.max(2, (sig.split('.')[1] || '').length));
+  }
   return sym + v.toLocaleString('en-IN', { minimumFractionDigits: dp, maximumFractionDigits: dp });
 }
 function fmtDur(secs) {
@@ -363,6 +369,30 @@ function cameBack(M, w) {
   }
   return { v: n, n };
 }
+// Of everyone who played in the 30 days before the period, the share who
+// played again in it -- the number notifications are meant to raise.
+function returning(M, w) {
+  const base = new Set();
+  for (const r of rowsIn(M, { from: w.from - 30 * DAY_MS, to: w.from })) base.add(r.uid);
+  const back = new Set();
+  for (const r of rowsIn(M, w)) if (base.has(r.uid)) back.add(r.uid);
+  return { v: ratio(back.size, base.size), n: base.size, a: back.size };
+}
+// Games to a winner against bots only, or with other people at the table.
+function gamesKind(multi) {
+  return (M, w) => {
+    const s = new Set();
+    for (const r of rowsIn(M, w)) if (r.key && r.multi === multi) s.add(r.key);
+    return { v: s.size, n: s.size };
+  };
+}
+// Connections that dropped mid-game and never came back, per 100 games (only
+// games recorded with the split: back within a minute / later / never).
+function droppedPer100(M, w) {
+  const gs = gamesEnded(M, w).filter((g) => g.lostQuick != null);
+  const never = sumOf(gs, (g) => Math.max(0, (g.lostConnections || 0) - (g.lostQuick || 0) - (g.lostLate || 0)));
+  return { v: gs.length ? (100 * never) / gs.length : null, n: gs.length };
+}
 function gamesToWinner(M, w) {
   const s = new Set();
   for (const r of rowsIn(M, w)) if (r.key) s.add(r.key);
@@ -518,7 +548,7 @@ function changeText(tile, v, u) {
     return d === 0 ? '0' : sign(d) + Math.abs(d) + (Math.abs(d) === 1 ? ' pt' : ' pts');
   }
   if ((tile.kind === 'count' || tile.kind === 'rate') && u < 10) {
-    const d = Math.round(v - u);
+    const d = Math.round(v) - Math.round(u);
     return d === 0 ? '0' : sign(d) + Math.abs(d);
   }
   if (u === 0) return v > 0 ? 'new' : '0';
@@ -529,12 +559,15 @@ function changeText(tile, v, u) {
 // The twelve dashboard tiles.
 const TILES = [
   { id: 'active', grp: 'users', label: 'Active players', kind: 'count', better: 'up', src: 'act', f: activePlayers },
+  { id: 'ret', grp: 'users', label: 'Returning players', kind: 'pct', better: 'up', src: 'act', f: returning, link: 'users-bringback' },
   { id: 'new', grp: 'users', label: 'New users', kind: 'count', better: 'up', src: 'act', f: newUsers },
   { id: 'v2p', grp: 'users', label: 'First visit &rarr; played (same day)', kind: 'pct', better: 'up', src: 'acct', f: visitorsPlayed },
   { id: 'back', grp: 'users', label: 'Came back after a break', kind: 'count', better: 'up', src: 'act', f: cameBack },
   { id: 'games', grp: 'games', label: 'Games to a winner', kind: 'count', better: 'up', src: 'act', f: gamesToWinner },
+  { id: 'botg', grp: 'games', label: 'Bot games', kind: 'count', better: 'up', src: 'act', f: gamesKind(false) },
+  { id: 'pplg', grp: 'games', label: 'Games with friends &amp; groups', kind: 'count', better: 'up', src: 'act', f: gamesKind(true) },
   { id: 'fin', grp: 'games', label: 'Players who finished', kind: 'pct', better: 'up', src: 'live', f: playersFinished },
-  { id: 'lost', grp: 'games', label: 'Lost connections / 100 games', kind: 'rate', better: 'down', src: 'live', f: lostPer100 },
+  { id: 'lost', grp: 'games', label: 'Dropped &amp; never came back / 100 games', kind: 'rate', better: 'down', src: 'live', f: droppedPer100 },
   { id: 'nobody', grp: 'games', label: 'Friends rooms nobody joined', kind: 'pct', better: 'down', src: 'live', f: roomsNobody },
   { id: 'rev', grp: 'ads', label: 'Ad revenue', kind: 'money', better: 'up', src: 'live', f: revenue },
   { id: 'banner', grp: 'ads', label: 'Banner loaded', kind: 'pct', better: 'up', src: 'live', f: bannerLoaded },
@@ -544,12 +577,15 @@ const TILES = [
 // What to look at when a tile is unusual.
 const HINTS = {
   active: { bad: 'Check Render for a restart or errors; then Users &rsaquo; Growth &amp; active users.', good: 'Worth finding what brought them (a post, a festival, an invite wave).' },
+  ret: { bad: 'Fewer of the last 30 days&rsquo; players came back &ndash; Users &rsaquo; Players to bring back has the list.', good: 'More players than usual came back.' },
+  botg: { bad: 'Fewer bot games than usual.', good: 'More bot games than usual.' },
+  pplg: { bad: 'Fewer games with friends &ndash; check that invite links and rooms work.', good: 'More games with friends than usual.' },
   new: { bad: 'Fewer new people found the game &ndash; check the Play Store listing and recent posts.', good: 'Worth finding what brought them (a post, an invite wave).' },
   v2p: { bad: 'New visitors are not starting a game &ndash; check the home screen and the first minute.', good: 'More new visitors started playing at once.' },
   back: { bad: 'Fewer old players returned.', good: 'Old players are returning &ndash; see Users &rsaquo; Retention &amp; churn.' },
   games: { bad: 'Check Render for a restart or errors, then Games &rsaquo; Games played &amp; completion.', good: 'More games than usual.' },
   fin: { bad: 'More players walked out &ndash; Games &rsaquo; Games played &amp; completion shows in which round.', good: 'Fewer players walked out.' },
-  lost: { bad: 'Check Render for a restart or a slow server around the busy hours.', good: 'Fewer dropped connections.' },
+  lost: { bad: 'More players dropped and never came back &ndash; check Render for a restart or a slow server around the busy hours.', good: 'Fewer dropped connections.' },
   nobody: { bad: 'Friends are not coming to rooms &ndash; check that invite links open the game.', good: 'More friends are joining rooms.' },
   rev: { bad: 'Most often the banner (below) or fewer full-screen ads; AdMob may also have had fewer ads.', good: 'Follows the growth in players.' },
   banner: { bad: 'Check Ads &rsaquo; Ads shown &amp; ad health: AdMob had no ads, or the banner broke in an update.', good: '' },
@@ -656,7 +692,14 @@ input.tab{position:absolute;opacity:0;pointer-events:none}
 .rrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:13px 14px;border-top:1px solid #205237;color:inherit;text-decoration:none}
 .rrow:first-child{border-top:0}.rrow:hover{background:#143d29}
 .rrow .arrow{color:#f2c14e;font-size:20px}
-.rname{font-size:14px;font-weight:600}.rdesc{font-size:12px;color:#8fae9c}`;
+.rname{font-size:14px;font-weight:600}.rdesc{font-size:12px;color:#8fae9c}
+a.tile{display:block;color:inherit;text-decoration:none}a.tile .k::after{content:" ›";color:#f2c14e}
+.gline{font-size:12px;color:#c9dccf;margin-top:10px;line-height:1.5}
+.dscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:10px}
+.dt{width:100%;border-collapse:collapse;font-size:12px}
+.dt th,.dt td{padding:6px 5px;border-bottom:1px solid #205237;text-align:right;white-space:nowrap}
+.dt th{color:#8fae9c;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.dt td:first-child,.dt th:first-child{text-align:left}`;
 
 const REPORT_CSS = BASE_CSS + `
 .wrap{max-width:1120px;margin:0 auto;padding:14px 14px 40px}
@@ -725,6 +768,7 @@ tr.grp td{color:#f2c14e;font-size:11px;font-weight:700;text-transform:uppercase;
 .axis{display:flex;justify-content:space-between;font-size:11px;color:#8fae9c;margin-top:4px}
 .kv{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;font-size:13px}
 .kv div:nth-child(even){text-align:right;font-weight:600}
+details.grpd{border-top:1px solid #205237;padding:8px 0}details.grpd summary{cursor:pointer;font-weight:600;font-size:14px;padding:4px 0}
 .okm{color:#7fd6a0;font-weight:700}.warnm{color:#ff8a80;font-weight:700}`;
 
 const ICONS = { dashboard: '&#128200;', users: '&#128101;', games: '&#127183;', ads: '&#128250;' };
@@ -773,15 +817,24 @@ function renderHome(M, L) {
 }
 
 // ============================== dashboard ==================================
+// The day's peak: the most online in any server run that day (a restart
+// starts its own count, so each run writes its own).
+function dayPeak(doc) {
+  let best = null;
+  const all = [doc && doc.peak].concat(doc && doc.peaks && typeof doc.peaks === 'object' ? Object.values(doc.peaks) : []);
+  for (const p of all) if (p && Number(p.n) > (best ? best.n : 0)) best = { n: Number(p.n), at: p.at };
+  return best;
+}
 function liveBlock(M, live) {
   if (!live) return '';
-  const now = M.nowMs;
+  const now = live.now || M.nowMs;
   const hh = String(ist(now).getUTCHours()).padStart(2, '0');
   const past = [1, 2, 3, 4].map((k) => M.days.get(addDays(M.today, -7 * k)))
     .filter((d) => d && d.hours && d.hours[hh] && d.hours[hh].online != null).map((d) => Number(d.hours[hh].online) || 0);
   const usualOnline = past.length ? Math.round(avgOf(past)) : null;
   const todayDoc = M.days.get(M.today) || {};
-  const peak = live.peakToday && live.peakToday.n ? live.peakToday : (todayDoc.peak || null);
+  let peak = dayPeak(todayDoc);
+  if (live.peakToday && live.peakToday.n && (!peak || live.peakToday.n >= peak.n)) peak = live.peakToday;
   const peakAt = peak && Date.parse(peak.at);
   const health = [];
   const started = Date.parse(live.startedAt || '');
@@ -824,10 +877,12 @@ function periodPanel(M, L, P) {
     const cur = measure(M, t, P.w, true);
     const usual = usualOf(M, t, P.usual);
     const state = judge(t, cur, usual);
-    const label = P.today && (t.kind === 'count' || t.kind === 'money') ? t.label + ' so far' : t.label;
+    let label = P.today && (t.kind === 'count' || t.kind === 'money') ? t.label + ' so far' : t.label;
+    if (t.id === 'ret' && cur) label += ` <span class="dim">(${cur.a} of ${cur.n})</span>`;
     const value = cur ? showValue(t, cur.v, M.currency) : DASH;
     const usualTxt = usual ? 'usual ' + showValue(t, usual.v, M.currency) : (cur ? 'no usual yet' : 'from go-live');
-    groups[t.grp].push(tileHtml(label, value, usualTxt, cur && usual ? changeText(t, cur.v, usual.v) : '', state));
+    const html = tileHtml(label, value, usualTxt, cur && usual ? changeText(t, cur.v, usual.v) : '', state);
+    groups[t.grp].push(t.link ? html.replace('<div class="tile', `<a href="${esc(L.report(t.link))}" class="tile`).replace(/<\/div>$/, '</a>') : html);
     if (state) items.push({ t, state, cur, usual, label: t.label });
   }
   const order = { bad: 0, watch: 1, good: 2 };
@@ -851,7 +906,51 @@ function periodPanel(M, L, P) {
     : '<div class="alerts"><h2>Unusual activity</h2><div class="calm">Nothing unusual &ndash; everything within its normal range.</div></div>';
   const grp = (name, href, link, tiles) => `<div class="grp"><h3>${name}<a href="${esc(href)}">${link} &rsaquo;</a></h3><div class="tiles">${tiles.join('')}</div></div>`;
   return alerts + grp('Users', L.users, 'Users reports', groups.users)
-    + grp('Games', L.games, 'Games reports', groups.games) + grp('Ads', L.ads, 'Ads reports', groups.ads);
+    + grp('Games', L.games, 'Games reports', groups.games).replace(/<\/div><\/div>$/, `</div>${gamesLine(M, P.w)}</div>`)
+    + grp('Ads', L.ads, 'Ads reports', groups.ads).replace(/<\/div><\/div>$/, `</div>${adsByGameType(M, P.w)}</div>`);
+}
+// One line that squares players with games for the period.
+function gamesLine(M, w) {
+  const rs = rowsIn(M, w);
+  if (!rs.length) return '';
+  const players = new Set(rs.map((r) => r.uid)).size;
+  const keys = new Map();
+  for (const r of rs) if (r.key) keys.set(r.key, r.multi);
+  const bots = [...keys.values()].filter((m) => !m).length;
+  const part = rs.filter((r) => !r.done).length;
+  return `<div class="gline">${players} player${players === 1 ? '' : 's'} played ${keys.size} game${keys.size === 1 ? '' : 's'} to a winner: `
+    + `${bots} against bots, ${keys.size - bots} with other people. A game with 3 people counts once`
+    + (part ? `; ${part} game${part === 1 ? ' was' : 's were'} left part-way (not counted as games to a winner).` : '.') + '</div>';
+}
+// Minutes played and the ads seen, by kind of game: is a minute of a friends
+// game worth more or less than a minute against bots?
+function adsByGameType(M, w) {
+  const KINDS = [['bots', 'Bot games', ['bots']], ['people', 'Friends &amp; groups', ['friends', 'group']], ['online', 'Online matches', ['online']], ['home', 'Home screen', ['home']]];
+  const mins = {};
+  for (const g of gamesEnded(M, w)) mins[g.mode] = (mins[g.mode] || 0) + sumOf(g.players, (p) => p.secs) / 60;
+  const ads = {};
+  for (const p of dayParts(w)) {
+    const by = (M.days.get(p.day) || {}).byPlace;
+    if (!by || typeof by !== 'object') continue;
+    for (const [place, x] of Object.entries(by)) {
+      const a = ads[place] || (ads[place] = { banner: 0, fs: 0, rw: 0, rev: 0 });
+      for (const k of ['banner', 'fs', 'rw', 'rev']) a[k] += Number(x && x[k]) || 0;
+    }
+  }
+  const rows = KINDS.map(([id, name, modes]) => {
+    const m = sumOf(modes, (k) => mins[k] || 0);
+    const a = modes.reduce((acc, k) => { const x = ads[k] || {}; ['banner', 'fs', 'rw', 'rev'].forEach((f) => { acc[f] += x[f] || 0; }); return acc; }, { banner: 0, fs: 0, rw: 0, rev: 0 });
+    return { id, name, m, a };
+  }).filter((r) => r.m > 0 || r.a.banner || r.a.fs || r.a.rw || r.a.rev);
+  if (!rows.length) {
+    return '<div class="gline">Minutes and ads by kind of game: '
+      + (M.liveStartMs == null ? 'starts with this version.' : 'nothing recorded for this period yet.') + '</div>';
+  }
+  const money = (v) => fmtMoney(v, M.currency);
+  const body = rows.map((r) => `<tr><td>${r.name}</td><td>${r.id === 'home' ? DASH : fmtInt(r.m)}</td><td>${fmtInt(r.a.banner)}</td><td>${fmtInt(r.a.fs)}</td>`
+    + `<td>${fmtInt(r.a.rw)}</td><td>${money(r.a.rev)}</td><td>${r.id !== 'home' && r.m > 0 ? money(r.a.rev / (r.m / 60)) : DASH}</td></tr>`).join('');
+  return '<div class="dscroll"><table class="dt"><tr><th>By kind of game</th><th>Minutes played</th><th>Banner shows</th><th>Full-screen</th><th>Rewarded</th><th>Revenue</th><th>Per hour played</th></tr>'
+    + body + '</table></div>';
 }
 
 function renderDashboard(M, L, live) {
@@ -866,6 +965,10 @@ function renderDashboard(M, L, live) {
     crumb: 'Check daily',
     body: `${radios}<div class="tabs">${labels}</div><div class="panels">${panels}</div>
 <div class="notes"><b>Today</b> is compared with the usual level by the same time on the same weekday; <b>Online now</b> is live.
+<b>Returning players</b> = of everyone who played in the 30 days before, the share who played in this period (tap it for the list).
+<b>Games with friends &amp; groups</b> also counts the few online matches. <b>Dropped &amp; never came back</b> leaves out players who lost the
+connection for a moment (switched apps, locked the phone) and came back. <b>By kind of game</b>: minutes are each player&rsquo;s own time in games;
+ads are counted where they were seen (a full-screen ad on the way out counts for the game just left).
 <b>Unusual</b> = about 30% or more away from usual, and big enough to matter. Red = a problem to look at, green = unusually good,
 gold = moving the wrong way, but on small numbers. Numbers marked &ldquo;from go-live&rdquo; start with this version, so they have no
 usual level for their first weeks. Numbers are up to 10 minutes old (Refresh reads them again); &ldquo;online now&rdquo; is always live.</div>`,
@@ -879,6 +982,7 @@ const REPORTS = {
     ['users-first', 'Visitors &amp; first experience', 'First visit &rarr; player, first game mode, tutorial'],
     ['users-retention', 'Retention &amp; churn', 'By joining month, who leaves and why, at risk, came back'],
     ['users-engagement', 'Engagement, friends &amp; top players', 'Games per user, friends vs solo, invites, top players'],
+    ['users-bringback', 'Players to bring back', 'Who has not played lately, by days away &ndash; the list for notifications'],
   ],
   games: [
     ['games-completion', 'Games played &amp; completion', 'Games to a winner, player results, when people walk out'],
@@ -1731,6 +1835,9 @@ function rGamesExperience(M, L) {
     ['&hellip; came back in time', per100((g) => g.takeoverBack), 'ind'],
     ['&hellip; out at the round end', per100((g) => g.takeoverOut), 'ind'],
     ['Lost connection mid-game', per100((g) => g.lostConnections)],
+    ['&hellip; back within a minute', (c) => { const gs = G(c).filter((g) => g.lostQuick != null); return gs.length ? fmtNum((100 * sumOf(gs, (g) => g.lostQuick)) / gs.length, 1) : null; }, 'ind'],
+    ['&hellip; came back later', (c) => { const gs = G(c).filter((g) => g.lostQuick != null); return gs.length ? fmtNum((100 * sumOf(gs, (g) => g.lostLate)) / gs.length, 1) : null; }, 'ind'],
+    ['&hellip; never came back', (c) => { const gs = G(c).filter((g) => g.lostQuick != null); return gs.length ? fmtNum((100 * sumOf(gs, (g) => Math.max(0, g.lostConnections - g.lostQuick - g.lostLate))) / gs.length, 1) : null; }, 'ind'],
     ['Solo games paused', per100((g) => g.soloPaused)],
   ]);
   const g30 = gamesEnded(M, last30(M));
@@ -1834,8 +1941,8 @@ function rGamesWhen(M, L) {
   }
   let peak = null;
   for (const k of M.dayKeys) {
-    const p = (M.days.get(k) || {}).peak;
-    if (p && Number(p.n) > (peak ? peak.n : 0)) peak = { n: Number(p.n), at: Date.parse(p.at) };
+    const p = dayPeak(M.days.get(k) || {});
+    if (p && p.n > (peak ? peak.n : 0)) peak = { n: p.n, at: Date.parse(p.at) };
   }
   const remindH = (hMax + 23) % 24;
   const best = total ? kv([
@@ -1925,8 +2032,14 @@ function admobHistory(M) {
   const ins = [];
   const fill = (c) => { const q = S(c, ['b'], 'req'); return q ? S(c, ['b'], 'mat') / q : null; };
   const latest = cols.filter((c) => !c.fy).slice(-1)[0];
+  const perDay = (c) => {
+    const ds = new Set(rows.filter((r) => c.months.includes(r.month) && r.u === 'b').map((r) => r.date)).size;
+    return ds ? S(c, ['b'], 'imp') / ds : null;
+  };
+  const monthsShown = cols.filter((c) => !c.fy);
+  if (monthsShown.length) ins.push('Banner shows a day: ' + monthsShown.map((c) => `${monShort(c.m)} ${fmtInt(perDay(c))}`).join(', ') + '.');
   if (closed.length && latest && ok(fill(closed[0])) && ok(fill(latest)) && fill(closed[0]) - fill(latest) >= 0.05) {
-    ins.push(`Banner fill fell from ${fmtPct(fill(closed[0]))} (${monShort(closed[0].m)}) to ${fmtPct(fill(latest))} (${monShort(latest.m)}) &ndash; AdMob had no banner for more of the requests, which costs revenue directly.`);
+    ins.push(`Fill fell from ${fmtPct(fill(closed[0]))} to ${fmtPct(fill(latest))}, but since 18 Nov the app asks AdMob again a minute after &ldquo;no ad&rdquo; and each retry counts as a request &ndash; watch banner shows a day, not fill.`);
   }
   const all = { months: [...new Set(rows.map((r) => r.month))] };
   const bE = S(all, ['b'], 'imp') ? S(all, ['b'], 'e') / S(all, ['b'], 'imp') : null;
@@ -2153,9 +2266,54 @@ function rAdsPlayers(M, L) {
   });
 }
 
+// ===================== Users: players to bring back ========================
+// Everyone who played in the last 60 days but not today, by how long they have
+// been away -- the list reminders and notifications will work from.
+const AWAY = [[1, 1, 'Played yesterday'], [2, 3, 'Away 2&ndash;3 days'], [4, 7, 'Away 4&ndash;7 days'], [8, 14, 'Away 8&ndash;14 days'],
+  [15, 30, 'Away 15&ndash;30 days'], [31, 60, 'Away 31&ndash;60 days']];
+function rUsersBringBack(M, L) {
+  const t0 = dayStart(M.today);
+  const since30 = t0 - 30 * DAY_MS;
+  const playedToday = new Set(rowsIn(M, { from: t0, to: M.nowMs + 1 }).map((r) => r.uid));
+  const pool = [...M.people.values()].filter((p) => p.lastMs && p.lastMs >= t0 - 60 * DAY_MS && p.lastMs < t0 && !playedToday.has(p.uid));
+  const away = (p) => Math.round((t0 - dayStart(dayOf(p.lastMs))) / DAY_MS);
+  const g30 = (p) => p.rows.filter((r) => r.ms >= since30 && r.done).length;
+  const groups = AWAY.map(([lo, hi, name]) => {
+    const list = pool.filter((p) => away(p) >= lo && away(p) <= hi).map((p) => ({ p, g: g30(p) }))
+      .sort((a, b) => b.g - a.g || b.p.lastMs - a.p.lastMs);
+    return { lo, hi, name, list, app: list.filter((x) => x.p.lastPlat === 'app').length };
+  });
+  const back = returning(M, { from: t0, to: M.nowMs + 1 });
+  const summary = table(['Group', 'Players', 'App', 'Website'], groups.map((g) => [g.name, fmtInt(g.list.length), fmtInt(g.app), fmtInt(g.list.length - g.app)])
+    .concat([['<b>Not played today (last 60 days)</b>', `<b>${fmtInt(pool.length)}</b>`, `<b>${fmtInt(groups.reduce((s, g) => s + g.app, 0))}</b>`,
+      `<b>${fmtInt(pool.length - groups.reduce((s, g) => s + g.app, 0))}</b>`]]));
+  const lists = groups.filter((g) => g.list.length).map((g) => `<details class="grpd"${g.lo === 1 ? ' open' : ''}><summary>${g.name} &middot; ${g.list.length} `
+    + `<span class="dim">(${g.app} app)</span></summary>` + plist(g.list.slice(0, 100).map(({ p, g: n }) => [who(p),
+      `last played ${dm(dayOf(p.lastMs))} &middot; first played ${p.firstDay ? dm(p.firstDay) : 'before the log'}`,
+      `${n} game${n === 1 ? '' : 's'} <span class="dim">in 30 days</span>`, platOf(p)]))
+    + (g.list.length > 100 ? `<div class="empty">&hellip; and ${g.list.length - 100} more.</div>` : '') + '</details>').join('');
+  const mid = groups.filter((g) => g.lo >= 4 && g.hi <= 14).reduce((s, g) => s + g.app, 0);
+  const ins = pool.length ? `${fmtInt(mid)} app players have been away 4&ndash;14 days &ndash; the best group for a first &ldquo;come back&rdquo; reminder: `
+    + 'still warm, but no longer playing every day. Players away for over a month usually need a reason (a new feature, a festival, a friend&rsquo;s invite).' : null;
+  const body = sec('Who to bring back', 'Everyone who played in the last 60 days but not today, by how long they have been away.', 'now', summary, ins)
+    + sec('The lists', 'Most games first. Tap a group to open it.', 'now', lists || '<div class="empty">Nobody &ndash; everyone has played today.</div>');
+  return reportPage(M, L, {
+    block: 'users', title: 'Players to bring back', sub: 'Who has not played lately &ndash; the list for reminders and notifications',
+    cards: [
+      [fmtInt(back.a), 'Came back today', back.n ? `of ${fmtInt(back.n)} who played in the 30 days before (${fmtPct(back.v)})` : '', ''],
+      [fmtInt(groups.slice(0, 3).reduce((s, g) => s + g.list.length, 0)), 'Away 1&ndash;7 days', 'not today', ''],
+      [fmtInt(groups.slice(3, 5).reduce((s, g) => s + g.list.length, 0)), 'Away 8&ndash;30 days', '', 'down'],
+      [fmtInt(groups[5].list.length), 'Away 31&ndash;60 days', '', 'down'],
+    ],
+    body,
+    notes: '<b>Away</b> = days since their last game (India time). <b>App</b> / <b>Website</b> = where they last played; notifications can reach app players only. '
+      + '<b>Games in 30 days</b> = finished games in the last 30 days. Names are as players typed them; the grey code is the start of their account id.',
+  });
+}
+
 // ================================ pages =====================================
 const REPORT_FNS = {
-  'users-growth': rUsersGrowth, 'users-first': rUsersFirst, 'users-retention': rUsersRetention, 'users-engagement': rUsersEngagement,
+  'users-growth': rUsersGrowth, 'users-first': rUsersFirst, 'users-retention': rUsersRetention, 'users-engagement': rUsersEngagement, 'users-bringback': rUsersBringBack,
   'games-completion': rGamesCompletion, 'games-modes': rGamesModes, 'games-experience': rGamesExperience, 'games-when': rGamesWhen,
   'ads-revenue': rAdsRevenue, 'ads-shown': rAdsShown, 'ads-players': rAdsPlayers,
 };
