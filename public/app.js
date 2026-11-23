@@ -1308,10 +1308,16 @@
     let prevHand = [];
     let newRank = null;
     let recheck = null;
+    let awaitingGo = false;    // round 1: the bots wait for Next after your move
+    let curSit = null;         // round 2: this turn's situation, to score your move
+    // A light tint, not the old tutorial's near-black: the table must stay
+    // readable while a rule is explained (Mani, Nov 2026).
+    const LIGHT_SPOT = '0 0 0 2px #ffd666, 0 0 18px 3px rgba(255,200,80,0.45), 0 0 0 200vmax rgba(4,12,9,0.16)';
     const el = (id) => document.getElementById(id);
     const raf = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16));
     const RANK_WORD = { A: 'an Ace', J: 'a Jack', Q: 'a Queen', K: 'a King', 8: 'an 8' };
     const aRank = (r) => RANK_WORD[r] || ('a ' + r);
+    const NUM_WORD = { 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six' };
     const pluralRank = (r) => ({ A: 'Aces', J: 'Jacks', Q: 'Queens', K: 'Kings' }[r] || (r + 's'));
     const rankName = (r) => ({ A: 'Ace', J: 'Jack', Q: 'Queen', K: 'King' }[r] || r);
     const isMine = (g) => !!g && g.currentPlayer === myPlayerId && !g.roundOver && !g.gameOver;
@@ -1422,16 +1428,43 @@
       if (m.n > 1) return { bad: false, text: `Good: ${m.n} cards out, one in.` };
       return null;
     }
-    function situation(g) {
-      const bits = [];
-      if (turnNo === 1) bits.push(`New cards, and this round the joker is the ${jokerOf(g)}. You play now: I will only tell you what is happening.`);
+    // Round 2: what is happening, as far as it matters for this move, and
+    // the question. The answer is theirs -- and recorded (tutorial_move), so
+    // the reports show which rules players understand.
+    function classify(g) {
+      const gs = groups(handOf(g), g);
+      const has = (r) => gs.find((x) => x.r === r);
+      const count = (x) => (x.n === 1 ? aRank(x.r) : (NUM_WORD[x.n] || x.n) + ' ' + pluralRank(x.r));
       const order = g.turnOrder || [];
       const before = order[(order.indexOf(myPlayerId) + order.length - 1) % order.length];
-      if (g.chainCount > 0) bits.push(`${nameOf(before)} threw a 2 at you: +${2 * g.chainCount} cards.`);
-      else if (g.openCard) bits.push(`The open card is ${aRank(g.openCard.rank)}${g.openCard.rank === jokerOf(g) ? ' (a joker)' : ''}.`);
-      bits.push(`Your cards add up to ${g.yourHandValue}.`);
-      bits.push('Your move.');
-      return bits.join(' ');
+      const ask = 'What is your best move?';
+      if (g.chainCount > 0) {
+        return has('2')
+          ? { code: 'chain2', text: `${nameOf(before)} threw a 2 at you, and you have a 2. ${ask}` }
+          : { code: null, text: `${nameOf(before)} threw a 2 at you, and you have no 2: take the ${2 * g.chainCount} cards.` };
+      }
+      if (g.yourHandValue <= 5) return { code: 'call', text: `Your cards add up to ${g.yourHandValue}. ${ask}` };
+      const open = g.openCard && g.openCard.rank;
+      const match = open && open !== jokerOf(g) ? has(open) : null;
+      if (match) return { code: 'match', text: `The open card is ${aRank(open)}, and you have ${count(match)}. ${ask}` };
+      const high = gs.slice().sort((a, b) => b.v - a.v)[0];
+      const multi = gs.filter((x) => x.n > 1).sort((a, b) => b.v - a.v)[0];
+      if (multi && high && multi.v >= high.v - 4) return { code: 'group', text: `The open card is ${aRank(open)}. You have ${count(multi)}. ${ask}` };
+      return { code: 'plain', text: `The open card is ${aRank(open)}. ${ask}` };
+    }
+    function situation(g) {
+      curSit = classify(g);
+      const first = turnNo === 1 && g.roundNumber === 2
+        ? `Round 2: new cards, and this round the joker is the ${jokerOf(g)}. You play now. ` : '';
+      return first + curSit.text;
+    }
+    // Was it the best move for the situation? (The same yardstick as the tips.)
+    function rightMove(sit, m, s) {
+      if (sit === 'call') return m.k === 'call';
+      if (sit === 'chain2') return m.k === 'throw' && m.r === '2';
+      if (sit === 'match') return m.k === 'throw' && !!s.open && m.r === s.open.rank;
+      const b = best(s);
+      return m.k === 'throw' && (b.v == null || m.v >= b.v - 4);
     }
 
     // ---- the spotlight, the finger and the words (as in the old tutorial) ----
@@ -1510,6 +1543,8 @@
       box.classList.remove('hidden');
       el('coach-step').textContent = label;
       el('coach-text').innerHTML = html;
+      const skipBtn = el('coach-skip');      // just Next: leaving is the game's own leave button
+      if (skipBtn) skipBtn.classList.add('hidden');
       const next = el('coach-next');
       next.textContent = o.nextLabel || 'Next';
       next.classList.toggle('hidden', !o.next);
@@ -1539,6 +1574,7 @@
           spot.style.top = Math.round(area.top) + 'px';
           spot.style.width = Math.round(area.width) + 'px';
           spot.style.height = Math.round(area.height) + 'px';
+          spot.style.boxShadow = LIGHT_SPOT;
           spot.classList.remove('hidden');
         } else spot.classList.add('hidden');
         const pts = visible(targets(shown.point));
@@ -1626,10 +1662,13 @@
         afterText = a ? (typeof a === 'function' ? a(g) : a) : null;
         afterAt = turnNo === 2 ? 'new' : null;
         beats = null;
-        if (afterText) words('Round 1 of 2 · I show you', esc(afterText), { spot: afterAt });
-        else silence();
+        if (afterText) {
+          awaitingGo = true;
+          words('Round 1 of 2 · I show you', esc(afterText), { next: true, spot: afterAt });
+        } else { silence(); go(); }
         return;
       }
+      if (g.roundNumber === 1) go();   // a free turn in round 1: nothing to wait for
       if (snap) {
         const m = snap.m;
         if (m.k === 'throw') {
@@ -1639,8 +1678,12 @@
           m.v = thrown.reduce((t, c) => t + cardPoints(c, jokerOf(snap.g)), 0);
         }
         tip = tipFor(m, snap);
+        if (snap.g && snap.g.roundNumber === 2 && curSit && curSit.code) {
+          try { trackOnServer({ e: 'tutorial_move', s: curSit.code, ok: rightMove(curSit.code, m, snap) }); } catch (e) { /* never */ }
+        }
         snap = null;
       } else tip = null;
+      curSit = null;
       if (tip) words(g.roundNumber === 1 ? 'Round 1 of 2' : 'Round 2 of 2 · you play',
         tipHtml(tip), { top: true });
       else silence();
@@ -1690,6 +1733,7 @@
       }
     }
     function later() { clearTimeout(recheck); recheck = setTimeout(() => onState(latestGame), 450); }
+    function go() { awaitingGo = false; try { socket.emit('tutorial_go'); } catch (e) { /* the hold ends on its own */ } }
 
     function onState(g) {
       if (!active || !g) return;
@@ -1697,7 +1741,14 @@
         roundSeen = g.roundNumber; turnNo = 0; wasMyTurn = false; beats = null; tip = null; snap = null; resultStage = 0;
         silence();
       }
-      if (g.roundOver || g.gameOver) { wasMyTurn = false; roundOver(g); return; }
+      if (g.roundOver || g.gameOver) {
+        // Your Least Count call ended the round: that decision counts too.
+        if (wasMyTurn && snap && snap.m && snap.m.k === 'call' && snap.g && snap.g.roundNumber === 2 && curSit && curSit.code) {
+          try { trackOnServer({ e: 'tutorial_move', s: curSit.code, ok: rightMove(curSit.code, snap.m, snap) }); } catch (e) { /* never */ }
+          snap = null; curSit = null;
+        }
+        wasMyTurn = false; roundOver(g); return;
+      }
       if (busy()) { silence(); later(); return; }
       const mine = isMine(g);
       if (mine && !wasMyTurn) { prevHand = handOf(g).slice(); myTurnBegins(g); }
@@ -1709,8 +1760,11 @@
 
     function finish() {
       active = false;
+      awaitingGo = false;
       clearTimeout(recheck);
       silence();
+      try { const sp = el('coach-spot'); if (sp) sp.style.boxShadow = ''; } catch (e) { /* none */ }
+      try { const sk = el('coach-skip'); if (sk) sk.classList.remove('hidden'); } catch (e) { /* none */ }
       try { window.removeEventListener('resize', onResize); } catch (e) { /* none */ }
       const real = el('btn-tut2-real');
       if (real) real.classList.add('hidden');
@@ -1739,11 +1793,13 @@
       isActive: () => active,
       begin() {
         active = true; finished = false; roundSeen = 0; turnNo = 0; wasMyTurn = false; beats = null; tip = null; snap = null; resultStage = 0;
+        awaitingGo = false; curSit = null;
         try { window.addEventListener('resize', onResize); } catch (e) { /* no window */ }
       },
       onState,
       next() {
         if (!active) return;
+        if (awaitingGo) { silence(); go(); return; }
         if (resultStage === 1) {
           resultStage = 2;
           words('Round 1 of 2 · I show you', esc('Ready for round 2? This time you play on your own: I will only tell you what is happening. Tap Start Now.'),
