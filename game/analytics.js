@@ -436,6 +436,11 @@ function createAnalytics(opts) {
         inc(['tutorial', 'skipped']);
         if (uid) put(['tutorialBy', uid], 'skipped');
         break;
+      // The new tutorial's round 2: each decision, by the rule it tests, and
+      // whether the player made the best move -- do they understand the rules?
+      case 'tutorial_move':
+        if (['match', 'group', 'plain', 'chain2', 'call'].includes(ev.s)) inc(['tutorial', 'moves', ev.s, ev.ok === true ? 'right' : 'wrong']);
+        break;
       case 'install_prompt_shown': inc(['install', 'shown']); break;
       case 'install_prompt_accepted': inc(['install', 'accepted']); break;
       case 'ad': adEvent(uid, ev, place); break;
