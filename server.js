@@ -1795,6 +1795,7 @@ const RATE_LIMITS = {
   admin_check: { max: 10, windowMs: 60000 },
   admin_link: { max: 10, windowMs: 60000 },
   track: { max: 120, windowMs: 60000 },
+  tutorial_go: { max: 30, windowMs: 60000 },
   get_my_stats: { max: 10, windowMs: 30000 },
   get_player_stats: { max: 20, windowMs: 30000 },
   // Changing the max score on the round result. A player trying a few values
@@ -3291,7 +3292,10 @@ function addTwoCounts(room, state) {
 //                         -- the app only says what is happening.
 // ===========================================================================
 const TUTORIAL_MAX_SCORE = 100;
-const TUTORIAL_BOT_MS = 2300;   // slower than a normal bot: time to see what it threw
+const TUTORIAL_BOT_MS = 3000;   // slower than a normal bot: time to see what it threw
+// Round 1: after the learner's move the bots wait until the coach's words have
+// been read (the app sends tutorial_go on Next) -- or this long at most.
+const TUTORIAL_HOLD_MS = 30000;
 function tutorialPlan(you, b1, b2) {
   // Each card at most twice -- three players play with two decks.
   const R1 = {
@@ -3504,6 +3508,10 @@ function scheduleTurnTimer(room) {
     const currentId = room.game.currentPlayer();
     const currentPlayerRecord = room.players.get(currentId);
   if (currentPlayerRecord && currentPlayerRecord.isBot) {
+    if (room.tutorial && room.tutorial.hold) {
+      room.turnTimer = setTimeout(() => { room.tutorial.hold = false; scheduleTurnTimer(room); }, TUTORIAL_HOLD_MS);
+      return;
+    }
     room.turnTimer = setTimeout(() => runBotTurn(room), room.tutorial ? TUTORIAL_BOT_MS : botMoveMsFor(room, currentId));
     return;
   }
@@ -4164,6 +4172,19 @@ io.on('connection', (socket) => {
     } catch (e) {
       ack && ack({ ok: false, error: e.message });
     }
+  });
+
+  // The tutorial coach's Next after a move in round 1: the bots may play now.
+  socket.on('tutorial_go', () => {
+    try {
+      if (isRateLimited(socket, 'tutorial_go')) return;
+      const entry = socketIndex.get(socket.id);
+      const room = entry && rooms.get(entry.roomCode);
+      if (!room || !room.tutorial || !room.tutorial.hold) return;
+      room.tutorial.hold = false;
+      clearTurnTimer(room);
+      scheduleTurnTimer(room);
+    } catch (e) { /* the hold ends on its own */ }
   });
 
   // The tutorial game (see tutorialPlan). Same start as a bot game.
@@ -5335,6 +5356,8 @@ io.on('connection', (socket) => {
       if (!entry) throw new Error('Not in a room.');
       room.game.playTurn(entry.playerId, cardIds || []);
       clearAbsenceStrikes(room, entry.playerId);
+      // Tutorial round 1: the bots wait while the learner reads what just happened.
+      if (room.tutorial && room.game.roundNumber === 1) room.tutorial.hold = true;
       revealDrawIfAny(room);
       emitLogBasedReactions(room, roomCode);
       checkLowCardReaction(room, roomCode, entry.playerId);
