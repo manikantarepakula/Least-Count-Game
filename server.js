@@ -1188,7 +1188,7 @@ function knockedOutOnScore(room, playerId) {
 
 function recordPartialActivity(room, playerId, opts) {
   try {
-    if (!db || !room || !room.game) return;
+    if (!db || !room || !room.game || room.tutorial) return;
     if (room.game.gameOver || room.statsRecorded) return;  // the real recorder owns this game
     if (!Array.isArray(room.game.roundHistory) || room.game.roundHistory.length < 1) return;
     const player = room.players.get(playerId);
@@ -1344,6 +1344,7 @@ function settledBeforeTheEnd(room) {
 // still "in" left. opts.notifySocketId: see sendRatingUpdate.
 // Never throws: it runs from round-end and leave paths that must not break.
 function recordRatings(room, opts) {
+  if (room && room.tutorial) return Promise.resolve();   // the tutorial never counts
   return recordRatingsNow(room, opts).catch((e) => {
     console.error('[Rating] failed:', e && e.message);
   });
@@ -1439,7 +1440,7 @@ async function recordRatingsNow(room, opts) {
 // dodge a losing game.
 function rateAbandonedGame(room) {
   const g = room.game;
-  if (!g || g.gameOver || room.ratingsRecorded) return;
+  if (!g || g.gameOver || room.ratingsRecorded || room.tutorial) return;
   const gone = g.activePlayers().filter((pid) => {
     const p = room.players.get(pid);
     return p && !p.isBot;
@@ -1454,7 +1455,7 @@ function rateAbandonedGame(room) {
 }
 
 async function recordGameResult(room, ratingOpts) {
-  if (!db || !room.game || !room.game.gameOver || room.statsRecorded) return;
+  if (!db || !room.game || !room.game.gameOver || room.statsRecorded || room.tutorial) return;
   room.statsRecorded = true;
   // The rating runs alongside the stats, once per game, on its own guard.
   recordRatings(room, ratingOpts);
@@ -3270,6 +3271,98 @@ function addTwoCounts(room, state) {
 // with every seat already filled by real strangers instead of one player
 // waiting in a lobby -- and starts the game immediately (no lobby step at
 // all, matching how create_solo_room skips it too).
+// ===========================================================================
+// THE TUTORIAL GAME (Nov 2026) -- a real game against two bots, two rounds.
+//
+// Mani: every rule comes up twice in one game -- "for the 1st instance you
+// will tell exactly the rule and for the 2nd instance, tell the situation and
+// leave the play to the player". So the rounds are arranged (which cards each
+// player gets, the open card, the joker, what you pick up) and the bots throw
+// what the lesson needs, in order. Everything else is the real game: 13 cards,
+// real rules and scoring, the real screens. The learner has no turn clock,
+// rounds start when they tap Start Now, and nothing counts: no stats, ratings
+// or reports. Max score 100: the bots go over it after round 2, so the very
+// first game ends with "You won".
+//
+// Round 1 (you start)   : match the 7 -> three 10s (pick up one) -> a 2 back
+//                         -> pair of Kings -> pair of 9s -> pair of Queens ->
+//                         Least Count at 5 (the 8s are jokers).
+// Round 2 (Bot 1 starts): the same moments with new cards (the 5s are jokers)
+//                         -- the app only says what is happening.
+// ===========================================================================
+const TUTORIAL_MAX_SCORE = 100;
+const TUTORIAL_BOT_MS = 2300;   // slower than a normal bot: time to see what it threw
+function tutorialPlan(you, b1, b2) {
+  // Each card at most twice -- three players play with two decks.
+  const R1 = {
+    you: ['7S', '10S', '10H', '10D', '2C', '8D', 'KC', 'KD', 'QS', 'QH', '9C', '9D', 'AS'],
+    b1: ['3D', '6S', 'JS', '7C', '6D', 'KS', 'QC', 'JC', '9S', 'JD', 'KD', 'QS', '10D'],
+    b2: ['5C', '2H', 'KH', '9H', 'QD', '10C', 'KS', 'QH', 'JH', '10S', '9C', 'JS', 'KC'],
+    open: '7H', joker: '8',
+    draws: ['4H', 'AH', '3S', 'AD', '4D', 'AC', '3H', '4S', '3C', 'AS'],
+  };
+  const R2 = {
+    you: ['QS', '6C', '6H', '6D', '2D', '5H', 'JC', 'JD', '9S', '9H', 'KS', '3C', 'AD'],
+    b1: ['7D', '8C', '10H', '7C', '6S', 'QC', 'KD', 'QH', 'JS', '10S', '9C', 'KC', 'QD'],
+    b2: ['QD', '4D', '2C', 'JH', 'KH', '9D', '10D', 'KS', 'QS', 'JC', '10C', '9C', 'KD'],
+    open: '4S', joker: '5',
+    draws: ['AC', '3H', 'AH', '4C', 'AS', '3S', '4H', '3D', 'AD', '4D'],
+  };
+  // The pile the bots draw from: what is left of two decks, high cards on
+  // top, so the bots' hands stay big and they go over 100 after round 2.
+  // No 2s (a stray +2 would derail the lesson) and no jokers.
+  const VAL = { A: 1, J: 10, Q: 10, K: 10 };
+  const stockFor = (R) => {
+    const left = {};
+    for (const r of ['A', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']) {
+      for (const su of ['S', 'H', 'D', 'C']) left[r + su] = 2;
+    }
+    for (const c of [...R.you, ...R.b1, ...R.b2, R.open, ...R.draws]) if (left[c] > 0) left[c] -= 1;
+    const pile = [];
+    for (const [c, n] of Object.entries(left)) {
+      const r = c.slice(0, -1);
+      if (r === R.joker) continue;
+      for (let i = 0; i < n; i++) pile.push(c);
+    }
+    const v = (c) => VAL[c.slice(0, -1)] || Number(c.slice(0, -1));
+    return pile.sort((a, b) => v(a) - v(b));      // the last card is drawn first
+  };
+  const round = (R) => ({
+    hands: { [you]: R.you, [b1]: R.b1, [b2]: R.b2 }, open: R.open, joker: R.joker,
+    stock: stockFor(R), draws: { [you]: R.draws },
+  });
+  return {
+    preset: { 1: round(R1), 2: round(R2) },
+    // What each bot throws on its turns, in order ('penalty' = takes a +2).
+    bots: {
+      1: { [b1]: ['3', '6', 'penalty', 'J', '7', '6'], [b2]: ['5', '2', 'K', '9', 'Q', '10'] },
+      2: { [b1]: ['7', '8', '10', 'penalty', '7', '6', 'Q'], [b2]: ['Q', '4', '2', 'J', 'K', '9', '10'] },
+    },
+  };
+}
+// A bot's turn in the tutorial: the next throw from its script; off the
+// script (the learner played differently in round 2), the safe move. Never a
+// Least Count call -- the learner is the one who calls.
+function tutorialBotMove(room, game, pid) {
+  const plans = room.tutorial.bots[game.roundNumber] || {};
+  const plan = plans[pid] || [];
+  const next = plan.length ? plan.shift() : null;
+  const hand = game.hands[pid] || [];
+  if (game.chainCount > 0) {
+    const two = next === '2' && hand.find((c) => c.rank === '2');
+    game.playTurn(pid, two ? [two.id] : []);
+    return;
+  }
+  const pick = next && next !== 'penalty' && hand.find((c) => c.rank === next && !game._isJokerCard(c));
+  if (pick) { game.playTurn(pid, [pick.id]); return; }
+  // Off the script: a beginner's throw -- the LOWEST card, never a 2 or a
+  // joker. The bots' hands stay big (the pile gives them high cards), so a
+  // longer round 2 still ends with both of them over the max score.
+  const keep = hand.filter((c) => !game._isJokerCard(c) && c.rank !== '2');
+  keep.sort((a, b) => cardValue(a, game.roundJokerRank) - cardValue(b, game.roundJokerRank));
+  game.playTurn(pid, keep.length ? [keep[0].id] : game.autoPickDiscard(pid));
+}
+
 function startMatchedRoom(entries) {
   const code = makeRoomCode();
   const hostPlayerId = entries[0].playerId; // arbitrary but consistent -- first to queue "hosts" (next-round max-score changes etc.)
@@ -3411,9 +3504,11 @@ function scheduleTurnTimer(room) {
     const currentId = room.game.currentPlayer();
     const currentPlayerRecord = room.players.get(currentId);
   if (currentPlayerRecord && currentPlayerRecord.isBot) {
-    room.turnTimer = setTimeout(() => runBotTurn(room), botMoveMsFor(room, currentId));
+    room.turnTimer = setTimeout(() => runBotTurn(room), room.tutorial ? TUTORIAL_BOT_MS : botMoveMsFor(room, currentId));
     return;
   }
+  // The tutorial: a learner takes as long as they need -- no clock at all.
+  if (room.tutorial) { room.turnDeadline = null; return; }
   // A human seat that missed ABSENCE_STRIKES turns in a row moves at bot pace
   // until they tap "I'm back" (or the round ends and the seat is emptied), so
   // the others aren't made to sit through 15 empty seconds every lap waiting
@@ -3442,7 +3537,18 @@ function runBotTurn(room) {
   const player = room.players.get(pid);
   if (!player || !player.isBot) return; // safety: turn moved on some other way already
 
-  try {
+  let scripted = false;
+  if (room.tutorial) {
+    try {
+      tutorialBotMove(room, game, pid);
+      revealDrawIfAny(room);
+      emitLogBasedReactions(room, room.code);
+      scripted = true;
+    } catch (e) {
+      console.error(`Tutorial bot turn failed for room ${room.code}:`, e.message);
+    }
+  }
+  if (!scripted) try {
     noteBotTurn(room, pid);
     const myValue = handValue(game.hands[pid] || [], game.roundJokerRank);
     // Each character decides for itself. Capped at DECLARE_MAX_VALUE, so a
@@ -3612,6 +3718,8 @@ function startNextRound(room, eliminationScore) {
 function scheduleAutoNextRound(room) {
   clearAutoNextRoundTimer(room);
   if (!room || !room.game) return;
+  // The tutorial explains the result first; round 2 starts when they tap.
+  if (room.tutorial) return;
   if (!room.game.roundOver || room.game.gameOver) return;
   // Somebody eliminated this round has asked to come back and the host hasn't
   // answered. Dealing now would strand that decision against a game that has
@@ -4049,6 +4157,46 @@ io.on('connection', (socket) => {
       // Per-round counters for the bots' anti-stall overrides (see
       // botDeclareThreshold). Reset with the deal, or a patient bot would
       // inherit last round's turn count and give up being patient immediately.
+      resetBotTurnCounts(room);
+      beginStartSequence(room, code);
+
+      ack && ack({ ok: true, roomCode: code, playerId, sessionToken: ensureSessionToken(room.players.get(playerId)), chatHistory: room.chatHistory });
+    } catch (e) {
+      ack && ack({ ok: false, error: e.message });
+    }
+  });
+
+  // The tutorial game (see tutorialPlan). Same start as a bot game.
+  socket.on('create_tutorial_room', async ({ name, firebaseIdToken, platform } = {}, ack) => {
+    try {
+      if (isRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created too quickly. Please wait a moment.');
+      if (isIpRateLimited(socket, 'create_solo_room')) throw new Error('Too many rooms created from this network too quickly. Please wait a moment.');
+      const cleanName = (name || '').trim().slice(0, 20) || 'You';
+      const verifiedUid = await verifyFirebaseToken(firebaseIdToken);
+      const code = makeRoomCode();
+      const playerId = makePlayerId();
+      const room = {
+        code, hostPlayerId: playerId, players: new Map(), order: [], phase: 'lobby', game: null,
+        turnTimer: null, turnDeadline: null, autoNextTimer: null, autoNextRoundAt: null,
+        dealTimer: null, revealTimer: null, chatHistory: [], statsRecorded: false,
+        allHumansDisconnectedAt: null, botDifficulty: 'easy', mode: 'tutorial',
+      };
+      room.players.set(playerId, { name: cleanName, socketId: socket.id, connected: true, isBot: false, firebaseUid: verifiedUid, platform: cleanPlatform(platform) });
+      room.order.push(playerId);
+      addBotToRoom(room);
+      addBotToRoom(room);
+      const [b1, b2] = room.order.slice(1);
+      const plan = tutorialPlan(playerId, b1, b2);
+      room.tutorial = { bots: plan.bots };
+      rooms.set(code, room);
+      socketIndex.set(socket.id, { roomCode: code, playerId });
+      socket.join(code);
+
+      clearAllRejoinRequests(room);
+      room.game = new LeastCountGame(room.order.slice(), TUTORIAL_MAX_SCORE);
+      room.game.preset = plan.preset;
+      resetRatingState(room);
+      room.game.startRound();
       resetBotTurnCounts(room);
       beginStartSequence(room, code);
 
