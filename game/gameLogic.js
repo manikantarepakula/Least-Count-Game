@@ -113,6 +113,10 @@ class LeastCountGame {
     this.roundHistory = [];
     this.roundNumber = 0;
     this.dealerIndex = -1;
+    // The tutorial's arranged rounds (Nov 2026): { [roundNumber]: { hands,
+    // open, joker, stock, draws } } -- see startRound(). Null in every real game.
+    this.preset = null;
+    this.presetDraws = null;
     this.log = [];
     this.roundOver = true;
     this.gameOver = false;
@@ -471,6 +475,7 @@ class LeastCountGame {
 
     this.hands = {};
     for (const id of active) this.hands[id] = [];
+    this.presetDraws = null;
 
     let cursor = 0;
     let idx = this.dealerIndex;
@@ -480,6 +485,34 @@ class LeastCountGame {
       order.push(this.playerIds[idx]);
     }
     this.turnOrder = order;
+
+    // THE TUTORIAL'S ARRANGED ROUND. Same rules, same 13 cards each -- only
+    // which cards: every hand, the open card, the joker and the pile are set
+    // so each lesson comes up when it should. `draws` are the cards a player
+    // picks up, in order (the bots draw from the pile as usual).
+    const plan = this.preset && this.preset[this.roundNumber];
+    if (plan) {
+      const make = (code) => {
+        const m = /^(10|[2-9AJQK])([SHDC])$/.exec(String(code));
+        if (!m) throw new Error('Bad preset card ' + code);
+        return makeCard(m[1], m[2], 0);
+      };
+      for (const id of order) this.hands[id] = (plan.hands[id] || []).map(make);
+      const open = make(plan.open);
+      this.discardPile = [open];
+      this.roundJokerRank = plan.joker;
+      this.jokerRevealCard = makeCard(plan.joker, 'H', 1);
+      this.stock = (plan.stock || []).map(make);
+      this.presetDraws = {};
+      for (const id of Object.keys(plan.draws || {})) this.presetDraws[id] = plan.draws[id].map(make);
+      this.numDecks = numDecks;
+      this.currentTurnIndex = 0;
+      this.chainCount = open.rank === '2' ? 1 : 0;
+      this.roundOver = false;
+      this.lastRoundResult = null;
+      this.discardHistory = {};
+      return this.getPublicState();
+    }
 
     for (let r = 0; r < 13; r++) {
       for (const id of order) {
@@ -567,7 +600,10 @@ class LeastCountGame {
 
   _drawFromStock(count) {
     const drawn = [];
+    // Tutorial: the cards arranged for this player come first (see startRound).
+    const planned = this.presetDraws && this.presetDraws[this.currentPlayer()];
     for (let i = 0; i < count; i++) {
+      if (planned && planned.length) { drawn.push(planned.shift()); continue; }
       if (this.stock.length === 0) this._reshuffleDiscardIntoStock();
       if (this.stock.length === 0) break;
       const card = this.stock.pop();
