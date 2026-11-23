@@ -27,6 +27,8 @@ const dayOf = (ms) => new Date(ms + IST_MS).toISOString().slice(0, 10);
 const hourOf = (ms) => new Date(ms + IST_MS).toISOString().slice(11, 13);
 const iso = (ms) => new Date(ms).toISOString();
 const AD_TYPES = new Set(['banner', 'fs', 'rw']);
+// Where an ad was seen: in which kind of game, or outside games (home screen).
+const AD_PLACES = new Set(['bots', 'friends', 'group', 'online', 'home']);
 
 function createAnalytics(opts) {
   const o = opts || {};
@@ -35,6 +37,7 @@ function createAnalytics(opts) {
   const now = o.now || (() => Date.now());
   const log = o.log || console;
   const startedAt = now();
+  const runId = Math.floor(startedAt / 1000).toString(36);   // this server run
 
   let buf = {};                      // day -> nested { __inc } / { __set } leaves
   const lastFullScreenAt = new Map(); // account id -> when their last full-screen ad showed
@@ -143,7 +146,7 @@ function createAnalytics(opts) {
       botLevel: g.playerIds.length > hs.length ? (room.botDifficulty || null) : null,
       tableSize: g.playerIds.length, humans: hs.length, bots: g.playerIds.length - hs.length,
       rounds: 0, lastRound: 0, calls: [], takeovers: 0, takeoverBack: 0, takeoverOut: 0,
-      lostConnections: 0, soloPaused: 0, midJoins: 0, midJoinsAd: 0, rejoins: 0, rejoinsAd: 0, players: {}, done: false,
+      lostConnections: 0, lostQuick: 0, lostLate: 0, soloPaused: 0, midJoins: 0, midJoinsAd: 0, rejoins: 0, rejoinsAd: 0, players: {}, done: false,
     };
     for (const pid of hs) entryFor(room, pid, { joinedRound: 1 });
     const rs = room.rstats;
@@ -196,7 +199,7 @@ function createAnalytics(opts) {
       tableSize: s.tableSize, humans: s.humans, bots: s.bots,
       winner: outcome === 'winner' ? (winner && winner.isBot ? 'bot' : 'person') : null,
       calls: s.calls, takeovers: s.takeovers, takeoverBack: s.takeoverBack, takeoverOut: s.takeoverOut,
-      lostConnections: s.lostConnections, soloPaused: s.soloPaused,
+      lostConnections: s.lostConnections, lostQuick: s.lostQuick, lostLate: s.lostLate, soloPaused: s.soloPaused,
       midJoins: s.midJoins, midJoinsAd: s.midJoinsAd, rejoins: s.rejoins, rejoinsAd: s.rejoinsAd,
       penalty: { cards: ds.cards || 0, sum: ds.sum || 0, eightPlus: ds.eightPlus || 0, chains: ds.chains || 0, longestChain: ds.longestChain || 0 },
       reshuffles: (g && g.reshuffleCount) || 0,
@@ -245,7 +248,17 @@ function createAnalytics(opts) {
     if (!s || !g || s.done || g.gameOver || !e || e.result) return;
     s.lostConnections += 1;
     e.lost += 1;
+    e.lostAt = now();
     leftAfterAd(e.uid);
+  });
+  // Their connection came back (same seat): within a minute, or later. A drop
+  // that never comes back is lostConnections - lostQuick - lostLate.
+  const reconnected = guard((room, pid) => {
+    const s = room.ana;
+    const e = s && s.players[pid];
+    if (!s || s.done || !e || !e.lostAt) return;
+    if (now() - e.lostAt <= 60 * 1000) s.lostQuick += 1; else s.lostLate += 1;
+    e.lostAt = null;
   });
   // Missed-turn takeovers: 'start' (bot took the seat) / 'back' (they came back).
   const takeover = guard((room, pid, kind) => {
@@ -370,7 +383,7 @@ function createAnalytics(opts) {
     inc(['invites']);
     if (room && room.rstats) room.rstats.invites += 1;
   });
-  function adEvent(uid, ev) {
+  function adEvent(uid, ev, place) {
     const t = AD_TYPES.has(ev.t) ? ev.t : null;
     const a = typeof ev.a === 'string' && /^[a-zA-Z]{2,16}$/.test(ev.a) ? ev.a : null;
     if (!t || !a) return;
@@ -385,6 +398,11 @@ function createAnalytics(opts) {
       if (typeof ev.c === 'string' && /^[A-Z]{3}$/.test(ev.c)) put(['currency'], ev.c);
     }
     if ((a === 'impression' || a === 'shown') && uid) inc(['adsBy', uid]);
+    // By where it was seen: banner shows, full-screen and rewarded shows, and
+    // what they earned, per kind of game (or the home screen).
+    const where = AD_PLACES.has(place) ? place : 'home';
+    if ((t === 'banner' && a === 'impression') || (t !== 'banner' && a === 'shown')) inc(['byPlace', where, t]);
+    if (a === 'paid') inc(['byPlace', where, 'rev'], Math.max(0, Math.min(1e9, Math.round(Number(ev.v) || 0))));
     if (t === 'banner' && (a === 'loaded' || a === 'failed')) {
       inc(['hours', hh, a === 'loaded' ? 'bLoaded' : 'bFailed']);
       bannerWindow.push({ at, ok: a === 'loaded' });
@@ -396,7 +414,7 @@ function createAnalytics(opts) {
     if (t === 'fs' && a === 'skip') inc(['ads', 'fs', ev.why === 'soon' ? 'skipSoon' : 'skipNotReady']);
     if (t === 'fs' && a === 'dismissed' && Number(ev.ms) >= 0 && Number(ev.ms) < 5000) inc(['ads', 'fs', 'quickClose']);
   }
-  const track = guard((uid, platform, ev, room) => {
+  const track = guard((uid, platform, ev, room, place) => {
     if (!ev || typeof ev.e !== 'string') return;
     switch (ev.e) {
       case 'invite_shared':
@@ -420,7 +438,7 @@ function createAnalytics(opts) {
         break;
       case 'install_prompt_shown': inc(['install', 'shown']); break;
       case 'install_prompt_accepted': inc(['install', 'accepted']); break;
-      case 'ad': adEvent(uid, ev); break;
+      case 'ad': adEvent(uid, ev, place); break;
       default: break;
     }
   });
@@ -439,7 +457,7 @@ function createAnalytics(opts) {
     if (peak.day !== day) peak = { day, n: 0, at: null };
     if (n > peak.n) {
       peak = { day, n, at: iso(at) };
-      put(['peak'], { n, at: peak.at });
+      put(['peaks', runId], { n, at: peak.at });
     }
     for (const k of Object.keys(hourMax)) if (!k.startsWith(day)) delete hourMax[k];
   });
@@ -455,7 +473,7 @@ function createAnalytics(opts) {
   }
 
   return {
-    gameStarted, roundEnded, gameFinished, playerLeft, lostConnection, takeover, soloPaused, midGameJoin, rejoined, adSeat,
+    gameStarted, roundEnded, gameFinished, playerLeft, lostConnection, reconnected, takeover, soloPaused, midGameJoin, rejoined, adSeat,
     roomCreated, friendJoined, botAdded, roomClosed, inviteShared,
     searchEnded, opened, track, sample, liveInfo, flush,
     // for tests
