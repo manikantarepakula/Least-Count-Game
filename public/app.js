@@ -1272,6 +1272,549 @@
       },
     };
   })();
+  // ==================================================================
+  // TUTORIAL v2 (Nov 2026) -- a real game against two bots, two rounds.
+  //
+  // Mani: every rule comes up twice in one game -- the first time it is
+  // explained exactly, the second time only the situation is told and the
+  // play is left to the player. The server deals arranged rounds and the bots
+  // throw what the lesson needs (see tutorialPlan in server.js); this side is
+  // the coach on top of the REAL game screen: the same spotlight, finger and
+  // words as the old tutorial.
+  //
+  //   Round 1 -- I show you: at each of your turns the coach explains the rule
+  //              that has just come up and only the right move is allowed.
+  //   Round 2 -- you play: the coach says what is happening, nothing more,
+  //              and after a costly move a one-line tip.
+  //
+  // For now it starts only from the test link (?tutorial=new); the old
+  // tutorial stays for everyone else until this one is approved.
+  // ==================================================================
+  const TutorialV2 = (() => {
+    const DONE_KEY = 'leastcount_tutorial_done';
+    let active = false;
+    let roundSeen = 0;
+    let wasMyTurn = false;
+    let turnNo = 0;            // your turns so far this round
+    let beats = null;          // round 1: this turn's beats (null = play freely)
+    let beat = 0;
+    let afterText = null;      // the line after your move, while the bots play
+    let afterAt = null;
+    let nudgeText = null;
+    let resultStage = 0;       // round 1 result: 0 none, 1 scores, 2 Start Now
+    let finished = false;
+    let snap = null;           // round 2: the table just before your move
+    let tip = null;            // round 2: about your last move
+    let prevHand = [];
+    let newRank = null;
+    let recheck = null;
+    const el = (id) => document.getElementById(id);
+    const raf = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16));
+    const RANK_WORD = { A: 'an Ace', J: 'a Jack', Q: 'a Queen', K: 'a King', 8: 'an 8' };
+    const aRank = (r) => RANK_WORD[r] || ('a ' + r);
+    const pluralRank = (r) => ({ A: 'Aces', J: 'Jacks', Q: 'Queens', K: 'Kings' }[r] || (r + 's'));
+    const rankName = (r) => ({ A: 'Ace', J: 'Jack', Q: 'Queen', K: 'King' }[r] || r);
+    const isMine = (g) => !!g && g.currentPlayer === myPlayerId && !g.roundOver && !g.gameOver;
+    const busy = () => startSeqActive || revealPhaseActive;
+    const handOf = (g) => (g && g.yourHand) || [];
+    const jokerOf = (g) => (g && g.roundJokerRank) || null;
+    const isJoker = (c, g) => c.rank === 'JOKER' || c.rank === jokerOf(g);
+    const nameOf = (pid) => {
+      const p = latestRoom && latestRoom.players && latestRoom.players.find((x) => x.playerId === pid);
+      return p ? String(p.name || 'A bot').replace(/^\u{1F916}\s*/u, '') : 'A bot';
+    };
+
+    // ---- round 1: what the coach says at each of your turns ----
+    // `pick` waits for those cards to be picked; `move` waits for the move
+    // (Discard, the 2 itself during a +2, or Least Count!); the others have a
+    // Next button. `at` is what the spotlight is on.
+    const R1 = {
+      1: [
+        { say: 'Welcome to Least Count! This is a real game against two bots, in 2 rounds. Round 1: I show you each rule as it comes up. Round 2: you play on your own.' },
+        { at: 'hand', say: 'These are your 13 cards. Every card has points: J, Q and K are 10, an Ace is 1, the others are their number.' },
+        { at: 'joker', say: (g) => `Every round has a joker. This round it is the ${jokerOf(g)}: jokers are worth 0 points, and they stay in your hand.` },
+        { at: 'value', say: (g) => `Together your cards are worth ${g.yourHandValue} points. The fewest points wins, so your job is to bring this number down.` },
+        { at: 'open', say: 'This is the open card: a 7. Every turn you throw cards onto it.' },
+        { pick: '7', say: 'You have a 7 too. Tap your 7.' },
+        { move: 'discard', say: 'Now tap Discard.' },
+      ],
+      2: [
+        { pick: '10', say: 'The bots threw too, and the open card is now a 5. Same cards go out together: tap your 10s and all three are picked.' },
+        { move: 'discard', say: 'Tap Discard: three cards out in one turn.' },
+      ],
+      3: [
+        { move: 'chain2', say: 'Bot 2 threw a 2 at you! A 2 means: pick up 2 cards, unless you throw a 2 back, which passes it on. You have a 2: tap it.' },
+      ],
+      4: [
+        { at: 'open', say: 'Bot 1 had no 2, so it picked up 4 cards (every 2 adds two more). Then Bot 2 threw a King.' },
+        { pick: 'K', say: 'You have two Kings, the same rank as the open card. Tap them.' },
+        { move: 'discard', say: 'Discard: both go out, and a match is free.' },
+      ],
+      5: [
+        { pick: '9', say: 'A 9 is open, and you have two 9s. You know this one!' },
+        { move: 'discard', say: 'Discard.' },
+      ],
+      6: [
+        { pick: 'Q', say: 'A Queen is open, and you have two Queens.' },
+        { move: 'discard', say: 'Discard.' },
+      ],
+      7: [
+        { at: 'value', say: (g) => `Your cards add up to just ${g.yourHandValue} points (the ${jokerOf(g)} is a joker, worth 0). At 5 points or less you can call LEAST COUNT.` },
+        { move: 'declare', say: 'If nobody has fewer points than you, you score 0 and the others add theirs. Tap Least Count!' },
+      ],
+    };
+    const AFTER = {
+      1: 'Your 7 matched the open card, so you picked up nothing. A match is free!',
+      2: () => `Your 10s did not match the 5, so you picked up one card${newRank ? ': this ' + newRank : ''}. Still a great trade: 30 points out, only ${newRank || 'a few'} in.`,
+      3: 'Passed on! Now Bot 1 has to throw a 2 or pick up 4 cards.',
+      4: 'Two cards out, nothing picked up.',
+      5: 'Free again!',
+      6: (g) => `Look at your points now: ${g.yourHandValue}.`,
+    };
+    // Does this turn look the way the lesson expects? If not (a reconnect, an
+    // unexpected card), the coach steps back and the turn is played freely.
+    function fits(list, g) {
+      const hand = handOf(g);
+      return list.every((b) => {
+        if (b.pick) return hand.some((c) => c.rank === b.pick);
+        if (b.move === 'chain2') return g.chainCount > 0 && hand.some((c) => c.rank === '2');
+        if (b.move === 'declare') return g.chainCount === 0 && g.yourHandValue <= 5;
+        return true;
+      });
+    }
+
+    // ---- round 2: the situation, and a tip after a costly move ----
+    function groups(hand, g) {
+      const m = new Map();
+      for (const c of hand) {
+        if (isJoker(c, g)) continue;
+        if (!m.has(c.rank)) m.set(c.rank, { r: c.rank, n: 0, v: 0 });
+        const x = m.get(c.rank);
+        x.n += 1;
+        x.v += cardPoints(c, jokerOf(g));
+      }
+      return [...m.values()];
+    }
+    function best(s) {
+      const gs = groups(s.hand, s.g);
+      if (s.chain > 0) return gs.some((x) => x.r === '2') ? { k: 'throw', r: '2' } : { k: 'penalty' };
+      if (s.value <= 5) return { k: 'call' };
+      const openJoker = s.open && (s.open.rank === 'JOKER' || s.open.rank === jokerOf(s.g));
+      const match = s.open && gs.find((x) => x.r === s.open.rank);
+      if (match) return { k: 'throw', r: match.r, free: true };
+      const high = gs.slice().sort((a, b) => b.v - a.v)[0];
+      return high ? { k: 'throw', r: high.r, v: high.v, n: high.n, free: !!openJoker } : { k: 'penalty' };
+    }
+    function tipFor(m, s) {
+      const b = best(s);
+      if (b.k === 'call' && m.k !== 'call') return { bad: true, text: `You had ${s.value} points: you could have called LEAST COUNT.` };
+      if (s.chain > 0 && b.r === '2' && m.k === 'penalty') return { bad: true, text: 'You had a 2: throwing it back would have passed the cards on.' };
+      if (m.k !== 'throw') return null;
+      const openJoker = s.open && (s.open.rank === 'JOKER' || s.open.rank === jokerOf(s.g));
+      const free = s.chain > 0 || (s.open && m.r === s.open.rank) || openJoker;
+      if (b.free && b.r !== m.r && !free) return { bad: true, text: `Your ${rankName(b.r)} matched the open card: throwing it would have been free (no pick-up).` };
+      if (!free && b.v != null && m.v + 4 < b.v) {
+        return { bad: true, text: b.n > 1 ? `Throw your highest cards first: your ${pluralRank(b.r)} were worth ${b.v} points.`
+          : `Throw your highest cards first: your ${rankName(b.r)} was worth ${b.v} points.` };
+      }
+      if (s.chain > 0) return { bad: false, text: 'Passed it on!' };
+      if (free) return { bad: false, text: 'A match: free!' };
+      if (m.n > 1) return { bad: false, text: `Good: ${m.n} cards out, one in.` };
+      return null;
+    }
+    function situation(g) {
+      const bits = [];
+      if (turnNo === 1) bits.push(`New cards, and this round the joker is the ${jokerOf(g)}. You play now: I will only tell you what is happening.`);
+      const order = g.turnOrder || [];
+      const before = order[(order.indexOf(myPlayerId) + order.length - 1) % order.length];
+      if (g.chainCount > 0) bits.push(`${nameOf(before)} threw a 2 at you: +${2 * g.chainCount} cards.`);
+      else if (g.openCard) bits.push(`The open card is ${aRank(g.openCard.rank)}${g.openCard.rank === jokerOf(g) ? ' (a joker)' : ''}.`);
+      bits.push(`Your cards add up to ${g.yourHandValue}.`);
+      bits.push('Your move.');
+      return bits.join(' ');
+    }
+
+    // ---- the spotlight, the finger and the words (as in the old tutorial) ----
+    function overlayEls() {
+      let spot = el('coach-spot');
+      if (!spot) {
+        spot = document.createElement('div');
+        spot.id = 'coach-spot'; spot.className = 'coach-spot hidden'; spot.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(spot);
+      }
+      let finger = el('coach-finger');
+      if (!finger) {
+        finger = document.createElement('div');
+        finger.id = 'coach-finger'; finger.className = 'coach-finger hidden'; finger.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(finger);
+      }
+      return { spot, finger };
+    }
+    function visible(list) {
+      return (list || []).filter((n) => {
+        if (!n || !n.getBoundingClientRect) return false;
+        const r = n.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+    }
+    function around(list) {
+      let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+      list.forEach((n) => {
+        const x = n.getBoundingClientRect();
+        l = Math.min(l, x.left); t = Math.min(t, x.top); r = Math.max(r, x.right); b = Math.max(b, x.bottom);
+      });
+      return { left: l, top: t, width: r - l, height: b - t };
+    }
+    function pile(id) { const n = el(id); return [n && n.closest ? (n.closest('.pile-group') || n) : n]; }
+    function tiles(r) {
+      return Array.prototype.filter.call(document.querySelectorAll('#hand .card'), (c) => {
+        const k = c.querySelector && c.querySelector('.corner-rank');
+        return !!k && k.textContent === r;
+      });
+    }
+    function cards() { return Array.prototype.slice.call(document.querySelectorAll('#hand .card')); }
+    function targets(what) {
+      if (!what) return [];
+      if (what === 'hand') return cards();
+      if (what === 'value') return [el('hand-value-pill')];
+      if (what === 'open') return pile('open-card-slot');
+      if (what === 'joker') return pile('joker-indicator');
+      if (what === 'discard') return [el('btn-discard')];
+      if (what === 'declare') return [el('btn-declare')];
+      if (what === 'chain2') return tiles('2');
+      if (what === 'new') return newRank ? tiles(newRank) : [];
+      if (what === 'result') { const o = el('overlay-round-result'); return [o && (o.querySelector('.card-panel') || o)]; }
+      if (what === 'nextround') return [el('btn-next-round')];
+      if (what.indexOf('rank:') === 0) return tiles(what.slice(5));
+      return [];
+    }
+    function clearTarget() { document.querySelectorAll('.coach-target').forEach((n) => n.classList.remove('coach-target')); }
+    function hideMarks() {
+      const { spot, finger } = overlayEls();
+      spot.classList.add('hidden');
+      finger.classList.add('hidden');
+      clearTarget();
+    }
+    function floatCoach() {
+      const box = el('coach');
+      try { if (box && box.parentNode !== document.body) document.body.appendChild(box); } catch (e) { /* stays */ }
+      if (box) box.classList.add('floating');
+      return box;
+    }
+    // Words, and where to look: spot = what to light up, point = what to tap.
+    let shown = { spot: null, point: null, top: false };
+    function words(label, html, opts) {
+      const o = opts || {};
+      const box = floatCoach();
+      if (!box) return;
+      box.classList.remove('hidden');
+      el('coach-step').textContent = label;
+      el('coach-text').innerHTML = html;
+      const next = el('coach-next');
+      next.textContent = o.nextLabel || 'Next';
+      next.classList.toggle('hidden', !o.next);
+      shown = { spot: o.spot || null, point: o.point || null, top: !!o.top };
+      placeSoon();
+    }
+    function silence() {
+      const box = el('coach');
+      if (box) box.classList.add('hidden');
+      hideMarks();
+      shown = { spot: null, point: null, top: false };
+    }
+    function place() {
+      if (!active) return;
+      try {
+        const { spot, finger } = overlayEls();
+        const coach = el('coach');
+        const H = window.innerHeight;
+        clearTarget();
+        const focus = visible(targets(shown.spot));
+        let area = null;
+        if (focus.length) {
+          const r = around(focus);
+          const pad = 7;
+          area = { left: r.left - pad, top: r.top - pad, width: r.width + pad * 2, height: r.height + pad * 2 };
+          spot.style.left = Math.round(area.left) + 'px';
+          spot.style.top = Math.round(area.top) + 'px';
+          spot.style.width = Math.round(area.width) + 'px';
+          spot.style.height = Math.round(area.height) + 'px';
+          spot.classList.remove('hidden');
+        } else spot.classList.add('hidden');
+        const pts = visible(targets(shown.point));
+        let fingerAbove = false, fingerBelow = false;
+        if (pts.length) {
+          const r = around(pts);
+          fingerBelow = r.top + r.height + 58 < H;
+          fingerAbove = !fingerBelow;
+          finger.textContent = fingerBelow ? '\u{1F446}' : '\u{1F447}';
+          finger.classList.toggle('down', fingerAbove);
+          finger.style.left = Math.round(r.left + r.width / 2) + 'px';
+          finger.style.top = Math.round(fingerBelow ? r.top + r.height + 4 : r.top - 4) + 'px';
+          finger.classList.remove('hidden');
+          pts.forEach((p) => { if (!p.classList.contains('card')) p.classList.add('coach-target'); });
+        } else finger.classList.add('hidden');
+        if (!coach) return;
+        coach.style.top = '';
+        coach.style.bottom = '';
+        if (shown.top) { coach.style.top = '64px'; return; }
+        if (area) {
+          const above = area.top;
+          const below = H - (area.top + area.height);
+          if (above >= below) {
+            let edge = area.top - 10 - (fingerAbove ? 48 : 0);
+            const held = visible(cards());
+            if (held.length) {
+              const h = around(held);
+              if (area.top >= h.top + h.height) edge = Math.min(edge, h.top - 8);
+            }
+            coach.style.bottom = Math.round(H - edge) + 'px';
+          } else {
+            coach.style.top = Math.round(area.top + area.height + 10 + (fingerBelow ? 48 : 0)) + 'px';
+          }
+          const c = coach.getBoundingClientRect();
+          if (c.top < 8) { coach.style.bottom = ''; coach.style.top = '8px'; }
+        } else coach.style.top = '28%';
+      } catch (e) { /* the words still show; only the pointing is lost */ }
+    }
+    function placeSoon() { raf(() => raf(place)); setTimeout(place, 350); setTimeout(place, 800); }
+    function onResize() { if (active) placeSoon(); }
+    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const tipHtml = (t) => (t.bad
+      ? `<span style="color:#f2c14e;font-weight:700">Tip: ${esc(t.text)}</span>`
+      : `<span style="color:#7fd6a0;font-weight:700">${esc(t.text)}</span>`);
+
+    // ---- showing a round-1 beat ----
+    function showBeat() {
+      const b = beats && beats[beat];
+      if (!b) return;
+      const g = latestGame;
+      const text = nudgeText || (typeof b.say === 'function' ? b.say(g) : b.say);
+      let spotOn = b.at || null;
+      let pointAt = null;
+      if (b.pick) { spotOn = 'rank:' + b.pick; pointAt = spotOn; }
+      if (b.move === 'discard') { spotOn = 'discard'; pointAt = 'discard'; }
+      if (b.move === 'chain2') { spotOn = 'chain2'; pointAt = 'chain2'; }
+      if (b.move === 'declare') { spotOn = 'declare'; pointAt = 'declare'; }
+      words('Round 1 of 2 · I show you', esc(text), { next: !b.pick && !b.move, spot: spotOn, point: pointAt });
+    }
+    function showFree(g) {
+      const t = tip ? tipHtml(tip) + '<br>' : '';
+      words(g.roundNumber === 1 ? 'Round 1 of 2' : 'Round 2 of 2 · you play', t + esc(situation(g)), { top: true });
+    }
+
+    // ---- the game, as it happens ----
+    function myTurnBegins(g) {
+      turnNo += 1;
+      afterText = null; afterAt = null; nudgeText = null;
+      if (g.roundNumber === 1 && R1[turnNo] && fits(R1[turnNo], g)) {
+        beats = R1[turnNo];
+        beat = 0;
+        showBeat();
+      } else {
+        beats = null;
+        showFree(g);
+      }
+    }
+    function myMoveMade(g) {
+      // What came in: the card(s) now in the hand that were not before.
+      const before = new Set(prevHand.map((c) => c.id));
+      const added = handOf(g).filter((c) => !before.has(c.id));
+      newRank = added.length === 1 ? added[0].rank : null;
+      if (g.roundNumber === 1 && beats) {
+        const a = AFTER[turnNo];
+        afterText = a ? (typeof a === 'function' ? a(g) : a) : null;
+        afterAt = turnNo === 2 ? 'new' : null;
+        beats = null;
+        if (afterText) words('Round 1 of 2 · I show you', esc(afterText), { spot: afterAt });
+        else silence();
+        return;
+      }
+      if (snap) {
+        const m = snap.m;
+        if (m.k === 'throw') {
+          const thrown = snap.hand.filter((c) => (m.ids || []).indexOf(c.id) !== -1);
+          m.r = m.r || (thrown[0] && thrown[0].rank);
+          m.n = thrown.length || 1;
+          m.v = thrown.reduce((t, c) => t + cardPoints(c, jokerOf(snap.g)), 0);
+        }
+        tip = tipFor(m, snap);
+        snap = null;
+      } else tip = null;
+      if (tip) words(g.roundNumber === 1 ? 'Round 1 of 2' : 'Round 2 of 2 · you play',
+        tipHtml(tip), { top: true });
+      else silence();
+    }
+    function roundOver(g) {
+      if (g.gameOver) { gameOver(g); return; }
+      if (g.roundNumber !== 1 || resultStage) return;
+      // After the call and the reveal, when the scorecard is up.
+      const o = el('overlay-round-result');
+      if (!o || o.classList.contains('hidden')) { later(); return; }
+      resultStage = 1;
+      const bots = (g.turnOrder || []).filter((id) => id !== myPlayerId);
+      const s = bots.map((id) => (g.scores || {})[id]).filter((x) => x != null);
+      words('Round 1 of 2 · I show you', esc(`You won round 1! You score 0, and the bots add the points left in their hands${s.length ? ` (${s.join(' and ')})` : ''}. Nobody gets more than 75 in one round. Careful: call when someone has fewer points than you, and YOU get 75. Reach ${g.eliminationScore} and you are out; the last player left wins.`),
+        { next: true, spot: 'result' });
+    }
+    function gameOver(g) {
+      if (finished) return;
+      const o = el('overlay-gameover');
+      if (!o || o.classList.contains('hidden')) { later(); return; }
+      finished = true;
+      silence();
+      try { localStorage.setItem(DONE_KEY, '1'); } catch (e) { /* session only */ }
+      try { logAnalytics('tutorial_completed', { v: 2 }); } catch (e) { /* never */ }
+      const again = el('btn-new-game');
+      if (again) again.classList.add('hidden');
+      const hint = el('gameover-hint');
+      if (hint) hint.textContent = g.winner === myPlayerId
+        ? 'That was your first game, and you won it. You know the whole game now!'
+        : 'That was your first game. You know the whole game now!';
+      const leave = el('btn-leave-gameover');
+      if (leave) {
+        leave.textContent = 'Back to home';
+        leave.onclick = () => { finish(); leaveRoom({ noAd: true }); };
+      }
+      let real = el('btn-tut2-real');
+      if (!real && leave && leave.parentNode) {
+        real = document.createElement('button');
+        real.id = 'btn-tut2-real';
+        real.className = 'primary';
+        real.textContent = 'Play a real game vs bots';
+        leave.parentNode.insertBefore(real, leave);
+      }
+      if (real) {
+        real.classList.remove('hidden');
+        real.onclick = () => { finish(); leaveRoom({ noAd: true, then: () => startSoloGame() }); };
+      }
+    }
+    function later() { clearTimeout(recheck); recheck = setTimeout(() => onState(latestGame), 450); }
+
+    function onState(g) {
+      if (!active || !g) return;
+      if (g.roundNumber !== roundSeen) {
+        roundSeen = g.roundNumber; turnNo = 0; wasMyTurn = false; beats = null; tip = null; snap = null; resultStage = 0;
+        silence();
+      }
+      if (g.roundOver || g.gameOver) { wasMyTurn = false; roundOver(g); return; }
+      if (busy()) { silence(); later(); return; }
+      const mine = isMine(g);
+      if (mine && !wasMyTurn) { prevHand = handOf(g).slice(); myTurnBegins(g); }
+      else if (!mine && wasMyTurn) myMoveMade(g);
+      else if (mine && beats) placeSoon();
+      if (mine) prevHand = handOf(g).slice();
+      wasMyTurn = mine;
+    }
+
+    function finish() {
+      active = false;
+      clearTimeout(recheck);
+      silence();
+      try { window.removeEventListener('resize', onResize); } catch (e) { /* none */ }
+      const real = el('btn-tut2-real');
+      if (real) real.classList.add('hidden');
+      const leave = el('btn-leave-gameover');
+      if (leave) { leave.textContent = 'Leave Room'; leave.onclick = leaveRoom; }
+    }
+
+    // ---- the moves: round 1 allows only the lesson's move ----
+    const cur = () => (beats ? beats[beat] : null);
+    function nudge() {
+      if (!active || !beats) return;
+      const b = cur();
+      if (!b) return;
+      nudgeText = b.pick ? `Tap the ${b.pick === '10' ? '10s' : pluralRank(b.pick)} the finger points at.`
+        : (b.move ? 'Not yet: ' + (typeof b.say === 'function' ? b.say(latestGame) : b.say) : null);
+      showBeat();
+      nudgeText = null;
+    }
+    function pickedRank() {
+      const hand = handOf(latestGame);
+      const ranks = [...selectedIds].map((id) => { const c = hand.find((x) => x.id === id); return c ? c.rank : null; });
+      return ranks.length && ranks.every((r) => r === ranks[0]) ? ranks[0] : null;
+    }
+
+    return {
+      isActive: () => active,
+      begin() {
+        active = true; finished = false; roundSeen = 0; turnNo = 0; wasMyTurn = false; beats = null; tip = null; snap = null; resultStage = 0;
+        try { window.addEventListener('resize', onResize); } catch (e) { /* no window */ }
+      },
+      onState,
+      next() {
+        if (!active) return;
+        if (resultStage === 1) {
+          resultStage = 2;
+          words('Round 1 of 2 · I show you', esc('Ready for round 2? This time you play on your own: I will only tell you what is happening. Tap Start Now.'),
+            { spot: 'nextround', point: 'nextround' });
+          return;
+        }
+        const b = cur();
+        if (!b || b.pick || b.move) return;
+        beat += 1;
+        showBeat();
+      },
+      skip() {
+        if (!active) return;
+        try { logAnalytics('tutorial_skipped', { v: 2, round: roundSeen, turn: turnNo }); } catch (e) { /* never */ }
+        try { localStorage.setItem(DONE_KEY, '1'); } catch (e) { /* session only */ }
+        finish();
+        leaveRoom({ noAd: true });
+      },
+      allowPick(rank) {
+        if (!active || !beats) return true;
+        const b = cur();
+        if (b && b.pick === rank) return true;
+        return !!(b && b.move === 'discard' && pickedRank() === rank);   // un-picking it again
+      },
+      onSelect() {
+        if (!active || !beats) return;
+        const b = cur();
+        if (b && b.pick && pickedRank() === b.pick) { beat += 1; showBeat(); return; }
+        if (b && b.move === 'discard' && !pickedRank()) { beat = Math.max(0, beat - 1); showBeat(); return; }
+        placeSoon();
+      },
+      allowDiscard() {
+        if (!active || !beats) return true;
+        const b = cur();
+        return !!(b && b.move === 'discard' && pickedRank() && beats[beat - 1] && beats[beat - 1].pick === pickedRank());
+      },
+      allowChainTwo() { if (!active || !beats) return true; const b = cur(); return !!(b && b.move === 'chain2'); },
+      allowDeclare() { if (!active || !beats) return true; const b = cur(); return !!(b && b.move === 'declare'); },
+      allowPenalty() { return !active || !beats; },
+      nudge,
+      // Round 2 (and any free turn): the table just before the move, for the tip.
+      noteMove(m) {
+        if (!active || beats) return;
+        const g = latestGame;
+        if (!g) return;
+        snap = { m, g, hand: handOf(g).slice(), open: g.openCard, chain: g.chainCount || 0, value: g.yourHandValue };
+      },
+    };
+  })();
+  // Is a lesson running (either tutorial)? Quietens the commentary, the
+  // dealt-a-2 note and the other extras that would talk over the coach.
+  function lessonOn() {
+    return (Tutorial.isActive && Tutorial.isActive()) || TutorialV2.isActive();
+  }
+  // The new tutorial game, from the test link (?tutorial=new) for now.
+  async function startTutorialV2() {
+    const name = getPlayerName() || 'You';
+    const firebaseIdToken = await currentFirebaseIdToken();
+    socket.emit('create_tutorial_room', { name, firebaseIdToken, platform: CLIENT_PLATFORM }, (res) => {
+      if (!res || !res.ok) return setLandingError((res && res.error) || 'Could not start the tutorial. Try again.');
+      try { logAnalytics('tutorial_started', { v: 2 }); } catch (e) { /* never */ }
+      saveSession(res.roomCode, res.playerId, res.sessionToken);
+      loadChatHistory(res.chatHistory);
+      TutorialV2.begin();
+      showScreen('screen-game');
+    });
+  }
+  const TUTORIAL_V2_LINK = (() => {
+    try { return new URLSearchParams(window.location.search).get('tutorial') === 'new'; } catch (e) { return false; }
+  })();
+
   let selectedIds = new Set();
   let chatUnread = 0;
   let timerInterval = null;
@@ -6208,6 +6751,15 @@
         });
       };
       if (close && close.parentNode) close.parentNode.insertBefore(btn, close);
+      // The new tutorial, on test (Nov 2026): admins can try it from here, in
+      // the app as well as on the website (?tutorial=new).
+      const tut = document.createElement('button');
+      tut.id = 'btn-admin-tutorial2';
+      tut.type = 'button';
+      tut.className = 'secondary profile-stats-btn';
+      tut.textContent = 'New tutorial (test)';
+      tut.onclick = () => { if (typeof closeProfileMenu === 'function') closeProfileMenu(); startTutorialV2(); };
+      if (close && close.parentNode) close.parentNode.insertBefore(tut, close);
     });
   }
   function closeProfileMenu() {
@@ -6354,8 +6906,8 @@
   (function wireCoachButtons() {
     const next = document.getElementById('coach-next');
     const skip = document.getElementById('coach-skip');
-    if (next) next.onclick = () => Tutorial.next();
-    if (skip) skip.onclick = () => Tutorial.skip();
+    if (next) next.onclick = () => (TutorialV2.isActive() ? TutorialV2.next() : Tutorial.next());
+    if (skip) skip.onclick = () => (TutorialV2.isActive() ? TutorialV2.skip() : Tutorial.skip());
   })();
 
   // ------------------------------------------------------------------
@@ -6426,6 +6978,7 @@
       // behind an unlabelled icon. That is the worst possible place to put a
       // wall: before anyone has seen a single card.
       box.classList.add('hidden');
+      if (TUTORIAL_V2_LINK) { startTutorialV2(); return; }   // the new tutorial, on test
       logAnalytics('tutorial_started');
       Tutorial.start();
     };
@@ -8596,6 +9149,8 @@
   // Selecting a grouped tile selects/deselects every card in that rank-group
   // together (they're always discarded as a set anyway, matching-rank or not).
   function toggleSelectGroup(group) {
+    // The new tutorial's round 1 allows only the lesson's cards.
+    if (TutorialV2.isActive() && !TutorialV2.allowPick(group.rank)) { TutorialV2.nudge(); return; }
     const allSelected = group.cards.every((c) => selectedIds.has(c.id));
     // Sound goes AFTER the selection changes, and guarded -- same rule as
     // the discard and declare handlers. Played first (as it was), a throw in
@@ -8618,6 +9173,7 @@
     // The lesson moves on the moment the right cards are picked (and points
     // at them again if they are not). Never in a real game.
     if (Tutorial.isActive()) Tutorial.onSelect();
+    if (TutorialV2.isActive()) TutorialV2.onSelect();
   }
 
   function submitChainTwo(card) {
@@ -8628,6 +9184,10 @@
     // failed with an error and the lesson could never advance. Every learner
     // who reached step 6 was stuck there (GA4, Oct 2026: 10 started, 0 finished).
     if (Tutorial.tryDiscard([card.id])) return;
+    if (TutorialV2.isActive()) {
+      if (!TutorialV2.allowChainTwo()) { TutorialV2.nudge(); return; }
+      TutorialV2.noteMove({ k: 'throw', ids: [card.id], r: '2' });
+    }
     socket.emit('play_turn', { roomCode: myRoomCode, cardIds: [card.id] }, (res) => {
       if (!res.ok) setGameError(res.error);
       else setGameError('');
@@ -8647,6 +9207,10 @@
     // no server to emit to, so the emit below would be answered with an
     // error. Checked first, before anything else reads game state.
     if (Tutorial.tryDiscard(ids)) return;
+    if (TutorialV2.isActive()) {
+      if (!TutorialV2.allowDiscard(ids)) { TutorialV2.nudge(); return; }
+      TutorialV2.noteMove({ k: 'throw', ids });
+    }
 
     // ------------------------------------------------------------------
     // THE MOVE GOES FIRST. Nothing decorative may sit in front of it.
@@ -8697,6 +9261,10 @@
 
   document.getElementById('btn-declare').onclick = () => {
     if (Tutorial.tryDeclare()) return;   // see the note on the discard handler
+    if (TutorialV2.isActive()) {
+      if (!TutorialV2.allowDeclare()) { TutorialV2.nudge(); return; }
+      TutorialV2.noteMove({ k: 'call' });
+    }
 
     // Declare emits first for the same reason as discard: a sound must never
     // be able to swallow the single most consequential tap in the game.
@@ -8712,6 +9280,10 @@
     // Step 6 offers this as one of its two choices, so the tutorial handles it
     // rather than letting it reach a server that has no game to apply it to.
     if (Tutorial.tryDiscard([])) return;
+    if (TutorialV2.isActive()) {
+      if (!TutorialV2.allowPenalty()) { TutorialV2.nudge(); return; }
+      TutorialV2.noteMove({ k: 'penalty' });
+    }
     socket.emit('play_turn', { roomCode: myRoomCode, cardIds: [] }, (res) => {
       if (!res.ok) setGameError(res.error);
     });
@@ -9847,7 +10419,7 @@
     if (!prev || !next || !isDiwali()) return;
     try {
       if (next.roundOver || prev.roundOver || prev.roundNumber !== next.roundNumber) return;
-      if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
+      if (lessonOn()) return;
       const pc = prev.handCounts || {};
       const nc = next.handCounts || {};
       // 2. A 2 thrown: a chain started, or grew.
@@ -10476,6 +11048,7 @@
     // reached). Before, it asked "forfeit the game?", logged a game_left for a
     // game that never existed, and sent a leave to the server for no room.
     if (Tutorial.isActive()) { Tutorial.skip(); return; }
+    if (TutorialV2.isActive()) { TutorialV2.skip(); return; }
     const t = document.getElementById('leave-game-title');
     const p = document.getElementById('leave-game-text');
     const cancel = document.getElementById('btn-leave-game-cancel');
@@ -11728,7 +12301,7 @@
   function maybeShowDealtTrump(game) {
     try {
       if (!game || game.roundOver) return;
-      if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
+      if (lessonOn()) return;
       if (trumpNoteRound === game.roundNumber) return;
       const g = (latestGame && latestGame.roundNumber === game.roundNumber) ? latestGame : game;
       const twos = (g.yourHand || []).filter((c) => c.rank === '2').length;
@@ -11910,7 +12483,7 @@
   function cmCanShow() {
     if (!commentaryOn || !latestGame || latestGame.roundOver) return false;
     if (startSeqActive || revealPhaseActive) return false;
-    if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return false;
+    if (lessonOn()) return false;
     const call = document.getElementById('declare-callout');
     if (call && !call.classList.contains('hidden')) return false;
     // Docked over the turn strip, a line waits out your own turn: the strip
@@ -12010,7 +12583,7 @@
   function commentaryObserve(prev, next) {
     try {
       if (!next || !Array.isArray(next.turnOrder)) return;
-      if (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive()) return;
+      if (lessonOn()) return;
       if (cmRound.number !== next.roundNumber) {
         cmRound = { number: next.roundNumber, streak: {}, low: {}, said: {}, turns: 0 };
         cbNewRound(next);
@@ -12576,7 +13149,7 @@
   function cbBrief(g) {
     try {
       const quiet = !commentaryOn || !g || g.roundOver || g.currentPlayer !== myPlayerId
-        || (typeof Tutorial !== 'undefined' && Tutorial.isActive && Tutorial.isActive())
+        || lessonOn()
         || cbWatching(g) || g.chainCount > 0 || startSeqActive || revealPhaseActive;
       const text = quiet ? null : cbPick(g);
       // A new "since your last turn" starts now, said or not.
@@ -12947,9 +13520,10 @@
     showScreen('screen-game');
     markHasPlayed();   // they are in a game; never offer the tutorial again
     renderGame(game);
-    // No tutorial hook here: the tutorial is entirely client-side and never
-    // receives server state, so a game_state arriving mid-lesson can only
-    // mean a real game is running -- in which case the tutorial is over.
+    // The OLD tutorial is entirely client-side and never receives server
+    // state. The new one (TutorialV2) IS a real game: its coach reads every
+    // update, after the table is drawn.
+    TutorialV2.onState(game);
 
     if (pendingStartReveal) {
       pendingStartReveal = false;
@@ -12964,5 +13538,7 @@
   // initial screen
   if (!(myRoomCode && myPlayerId)) {
     showScreen('screen-landing');
+    // The new tutorial's test link: straight into it.
+    if (TUTORIAL_V2_LINK) setTimeout(() => { if (!(myRoomCode && myPlayerId)) startTutorialV2(); }, 600);
   }
 })();
