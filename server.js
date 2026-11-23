@@ -786,7 +786,7 @@ async function reportModel(req) {
   }
   let auth = null;
   try { auth = admin.auth(); } catch (e) { auth = null; }
-  await Reports.refreshStore(reportsStore, { db, auth, now: () => Date.now(), force });
+  await Reports.refreshStore(reportsStore, { db, auth, now: () => Date.now(), force, exclude: adminUids() });
   return reportsStore.model;
 }
 function reportLinks(req, path) {
