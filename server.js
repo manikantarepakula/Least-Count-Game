@@ -815,7 +815,7 @@ async function sendAdminPage(req, res, render) {
 }
 // What the server sees right now, for the dashboard's live panel.
 function liveNow() {
-  return Object.assign(liveCounts(), Analytics.liveInfo());
+  return Object.assign(liveCounts(), Analytics.liveInfo(), { now: Date.now() });
 }
 app.get('/api/admin', (req, res) => sendAdminPage(req, res, (M) => Reports.renderHome(M, reportLinks(req, '/api/admin'))));
 app.get('/api/admin/dashboard', (req, res) => sendAdminPage(req, res,
@@ -5002,6 +5002,7 @@ io.on('connection', (socket) => {
       // symptom. Only replay the sequence (or resend state) when this is a
       // genuinely NEW connection for this player, not a same-socket ping.
       const isFreshReconnect = p.socketId !== socket.id || !p.connected;
+      if (!p.connected) Analytics.reconnected(room, playerId);
       p.socketId = socket.id;
       // If this reconnecting player is the host and someone's currently
       // waiting to be let in, re-send the banner -- otherwise a host who
@@ -5437,6 +5438,7 @@ io.on('connection', (socket) => {
       // exists at all.
       recordPartialActivity(room, playerId, { leaving: true });
       Analytics.playerLeft(room, playerId);
+      if (socket.data) { socket.data.lastMode = room.mode || 'friends'; socket.data.lastModeAt = Date.now(); }
 
       // Only ask the game engine to remove the player if the game is still
       // going - if it already ended (e.g. because the last leave dropped the
@@ -5718,7 +5720,11 @@ io.on('connection', (socket) => {
       if (data.ready) await data.ready;
       const entry = socketIndex.get(socket.id);
       const room = entry ? rooms.get(entry.roomCode) : null;
-      Analytics.track(data.uid || null, data.platform || 'unknown', ev, room);
+      // Where it happened: the kind of game they are in -- or the one they
+      // just left (the full-screen ad on the way out comes after leaving).
+      const place = room ? (room.mode || 'friends')
+        : (data.lastMode && Date.now() - (data.lastModeAt || 0) < 3 * 60 * 1000 ? data.lastMode : 'home');
+      Analytics.track(data.uid || null, data.platform || 'unknown', ev, room, place);
     } catch (e) { /* analytics never gets in the way */ }
   });
 
