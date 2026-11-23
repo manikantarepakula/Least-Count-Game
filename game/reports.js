@@ -160,7 +160,7 @@ async function listAccounts(auth) {
 
 // Brings the store up to date (at most every 10 minutes unless forced) and
 // rebuilds the numbers. One load at a time; others wait for it.
-async function refreshStore(store, { db, auth, now, force, log }) {
+async function refreshStore(store, { db, auth, now, force, log, exclude }) {
   const t = now();
   const L = log || console;
   if (!force && store.model && t - store.at < CACHE_MS) return store;
@@ -193,7 +193,7 @@ async function refreshStore(store, { db, auth, now, force, log }) {
     }
     store.errors = errors;
     store.at = t;
-    store.model = buildModel(store, t);
+    store.model = buildModel(store, t, { exclude });
   })();
   try { await store.loading; } finally { store.loading = null; }
   return store;
@@ -204,14 +204,17 @@ const FINISHED = new Set(['won', 'knocked-out', 'still-in']);
 const toEnd = (g) => g.outcome === 'winner' || g.outcome === 'all-knocked-out';
 const MODE_NAMES = { bots: 'Bots', friends: 'Friends room', online: 'Online match', group: 'Groups' };
 
-function buildModel(store, nowMs) {
+function buildModel(store, nowMs, opts) {
+  // Accounts left out of every number: your own (ADMIN_UIDS) -- testing is
+  // not playing.
+  const skip = (opts && opts.exclude instanceof Set) ? opts.exclude : new Set();
   const today = dayOf(nowMs);
   const curMonth = today.slice(0, 7);
 
   // ---- activity rows and people ----
   const rows = [];
   for (const r of store.activity.values()) {
-    if (!r || !r.uid || typeof r.at !== 'string') continue;
+    if (!r || !r.uid || typeof r.at !== 'string' || skip.has(r.uid)) continue;
     const ms = Date.parse(r.at);
     if (Number.isNaN(ms)) continue;
     const day = dayOf(ms);
@@ -242,6 +245,7 @@ function buildModel(store, nowMs) {
     if (r.done) p.done += 1;
   }
   for (const [uid, d] of store.users) {
+    if (skip.has(uid)) continue;
     const games = Number(d && d.gamesPlayed) || 0;
     const p = people.get(uid);
     if (p) {
@@ -266,8 +270,8 @@ function buildModel(store, nowMs) {
 
   // The roll-forward, by the same rules as the deployed Users page.
   const um = UserAnalytics.buildUserMonths({
-    activity: [...store.activity.values()],
-    users: [...store.users.entries()].map(([uid, d]) => Object.assign({ uid }, d)),
+    activity: [...store.activity.values()].filter((r) => r && !skip.has(r.uid)),
+    users: [...store.users.entries()].filter(([uid]) => !skip.has(uid)).map(([uid, d]) => Object.assign({ uid }, d)),
     now: nowMs,
   });
 
@@ -277,7 +281,9 @@ function buildModel(store, nowMs) {
     const startMs = Date.parse(g && g.startedAt);
     const endMs = Date.parse(g && g.endedAt);
     if (Number.isNaN(startMs) || Number.isNaN(endMs)) continue;
-    games.push(Object.assign({}, g, { startMs, endMs, month: monthOf(endMs), players: Array.isArray(g.players) ? g.players : [] }));
+    const players = (Array.isArray(g.players) ? g.players : []).filter((pl) => !(pl && skip.has(pl.uid)));
+    if (Array.isArray(g.players) && g.players.length && !players.length) continue;   // only your own test game
+    games.push(Object.assign({}, g, { startMs, endMs, month: monthOf(endMs), players }));
   }
   games.sort((a, b) => a.endMs - b.endMs);
   const rooms = [];
@@ -315,7 +321,7 @@ function buildModel(store, nowMs) {
     }
   }
 
-  const accounts = Array.isArray(store.accounts) ? store.accounts.slice().sort((a, b) => a.created - b.created) : null;
+  const accounts = Array.isArray(store.accounts) ? store.accounts.filter((a) => !skip.has(a.uid)).sort((a, b) => a.created - b.created) : null;
   let currency = null;
   for (const k of dayKeys) if (days.get(k) && typeof days.get(k).currency === 'string') currency = days.get(k).currency;
 
@@ -1233,27 +1239,18 @@ function rUsersGrowth(M, L) {
     if (r.app) x.app.add(r.uid);
     if (r.web) x.web.add(r.uid);
   }
-  const moved = new Map();
-  for (const p of M.people.values()) {
-    let sawWeb = false;
-    for (const r of p.rows) {
-      if (r.web) sawWeb = true;
-      if (r.app) { if (sawWeb) moved.set(r.month, (moved.get(r.month) || 0) + 1); break; }
-    }
-  }
   const stay = (m, kind) => {
     const nm = shiftMonth(m, 1);
     const x = plat.get(m);
     if (!x || nm > M.curMonth || !x[kind].size) return null;
     const nx = plat.get(nm);
     const kept = nx ? [...x[kind]].filter((u) => nx.any.has(u)).length : 0;
-    return { r: kept / x[kind].size, partial: nm === M.curMonth };
+    return { r: kept / x[kind].size, partial: nm === M.curMonth, n: x[kind].size };
   };
   const stayCell = (kind) => (c) => { if (c.fy) return null; const s = stay(c.m, kind); return s ? fmtPct(s.r) + (s.partial ? '*' : '') : null; };
   const pv = mtable(cols, [
     ['Active in the app', (c) => (c.fy ? null : fmtInt((plat.get(c.m) || { app: new Set() }).app.size))],
     ['Active on the website', (c) => (c.fy ? null : fmtInt((plat.get(c.m) || { web: new Set() }).web.size))],
-    ['Moved website &rarr; app', (c) => fmtInt(sumOf(c.months, (m) => moved.get(m) || 0))],
     ['Stay next month: app', stayCell('app')],
     ['Stay next month: website', stayCell('web')],
   ]);
@@ -1270,11 +1267,13 @@ function rUsersGrowth(M, L) {
   }
   const nb = lc ? newBy([lc.month]) : null;
   const ins2 = nb && nb.all ? `The app brought ${fmtPct(ratio(nb.app, nb.all))} of ${monShort(lc.month)}&rsquo;s new users.` : null;
-  const sa = lc ? stay(lc.month, 'app') : null;
-  const sw = lc ? stay(lc.month, 'web') : null;
-  const ins3 = sa && sw ? (sw.r < sa.r
-    ? `Website players come back less often (${fmtPct(sw.r)} vs ${fmtPct(sa.r)} in the app) &rarr; keep moving them to the app.`
-    : `Website players come back as often as app players (${fmtPct(sw.r)} vs ${fmtPct(sa.r)}).`) : null;
+  // Only a month whose NEXT month is over (a month still running says little).
+  const fullM = shiftMonth(M.curMonth, -2);
+  const sa = stay(fullM, 'app');
+  const sw = stay(fullM, 'web');
+  const ins3 = sa && sw && sa.n >= 10 && sw.n >= 10 ? (sw.r < sa.r
+    ? `Website players come back less often: ${fmtPct(sw.r)} of ${sw.n} website players played again the next month, against ${fmtPct(sa.r)} of ${sa.n} app players (${monShort(fullM)} &rarr; ${monShort(shiftMonth(fullM, 1))}) &rarr; keep moving them to the app.`
+    : `Website players come back as often as app players: ${fmtPct(sw.r)} of ${sw.n} vs ${fmtPct(sa.r)} of ${sa.n} (${monShort(fullM)} &rarr; ${monShort(shiftMonth(fullM, 1))}).`) : null;
   const body = sec('Active users roll-forward', 'Opening + new + came back &minus; became inactive = closing, each month.', 'now', rf, ins1)
     + grid2(sec('New users &amp; where they come from', 'App vs website, each month (where their first game was).', 'now', np, ins2),
       sec('App vs website', 'Who plays where, who moved to the app, and who comes back the next month.', 'now', pv, ins3));
@@ -1291,7 +1290,9 @@ function rUsersGrowth(M, L) {
       + '<b>New</b> = their first game ever. <b>Came back</b> = played before, but not in the month before. '
       + '<b>Churn %</b> = became inactive &divide; opening. <b>FY</b> = the closed months of the financial year so far; the current month follows it. '
       + '* = the month is not over yet. The first month of the log has no opening (the month before it was not logged). '
-      + 'On a phone the older months are hidden to fit; the laptop shows them all.',
+      + 'On a phone the older months are hidden to fit; the laptop shows them all. '
+      + '<b>Moving from the website to the app</b> cannot be seen yet: installing the app gives a new account, so a website player who moves '
+      + 'shows up as a new app user and a lost website player (this inflates both new users and churn a little). Your own accounts (ADMIN_UIDS) are left out.',
   });
 }
 
@@ -1321,8 +1322,9 @@ function rUsersFirst(M, L) {
   if (!M.accounts) top = '<div class="empty">The sign-in accounts could not be read, so first visits are not known right now.</div>';
   else if (!lv || !lv.n) top = `<div class="empty">No first visits recorded for ${monthLabel(lcM)}.</div>`;
   else {
-    top = funnel([['First-time visitors', lv.n], ['Played at least one round', lv.played], ['Finished their first game', lv.finished],
-      ['Came back another day (within 7 days)', lv.back7], [`Played again in ${monShort(M.curMonth)} (so far)`, lv.next]]);
+    top = funnel([['First-time visitors', lv.n], ['Played at least one round', lv.played],
+      ['Came back another day (within 7 days)', lv.back7], [`Played again in ${monShort(M.curMonth)} (so far)`, lv.next]])
+      + '<div style="margin-top:10px">' + kv([['Finished their first game', `${lv.finished} of ${lv.played} players <span class="dim">(${fmtPct(ratio(lv.finished, lv.played))})</span>`]]) + '</div>';
   }
   const ins1 = lv && lv.n ? (ratio(lv.played, lv.n) < 0.5
     ? `<b>${Math.round((1 - lv.played / lv.n) * 10)} in 10</b> first-time visitors never played a round &ndash; the biggest leak. The home screen and the first minute matter most.`
@@ -1358,8 +1360,29 @@ function rUsersFirst(M, L) {
   for (const p of fresh) tg[tut.get(p.uid) || 'none'].push(p);
   const tutRows = [['Did the tutorial', tg.done], ['Skipped it / said no', tg.skipped], ['Not offered (or not seen)', tg.none]]
     .filter(([, l]) => l.length).map(([n, l]) => [n, ...outcome(l)]);
+  // How new players' first games end (from go-live): the result, and for
+  // those who walked out, after how many rounds.
+  const firsts = fresh.map((p) => { const gl = M.gamesBy.get(p.uid); return gl && gl.length ? gl[0] : null; }).filter(Boolean);
+  let firstHtml = notYet(M, 'no first games recorded yet');
+  let firstIns = null;
+  if (firsts.length) {
+    const n = firsts.length;
+    const res = (f) => cnt(firsts, ({ pl }) => f(pl)) / n;
+    const walked = firsts.filter(({ pl }) => pl.result === 'walked-out');
+    firstHtml = hbars([
+      ['Won', res((pl) => pl.result === 'won')],
+      ['Knocked out (played it through)', res((pl) => pl.result === 'knocked-out' || pl.result === 'still-in')],
+      ['Walked out before finishing round 1', res((pl) => pl.result === 'walked-out' && pl.rounds <= 0)],
+      ['Walked out after rounds 1&ndash;2', res((pl) => pl.result === 'walked-out' && pl.rounds >= 1 && pl.rounds <= 2)],
+      ['Walked out later', res((pl) => pl.result === 'walked-out' && pl.rounds >= 3)],
+      ['Out for missed turns', res((pl) => pl.result === 'missed-turns')],
+    ]) + `<div class="empty">${n} new player${n === 1 ? '' : 's'} since go-live.</div>`;
+    const early = cnt(walked, ({ pl }) => pl.rounds <= 2);
+    if (n >= 10 && early / n >= 0.2) firstIns = `${fmtPct(early / n)} of new players walk out of their first game within 2 rounds &ndash; make the first game shorter and easier (max score 100, easy bots).`;
+  }
   const body = sec(`From first visit to regular player &ndash; ${monthLabel(lcM)}`, 'Every step a new person goes through, and how many make it.', 'now', top, ins1)
     + sec('Each month', 'The same steps, month by month (by the month of the first visit).', 'now', M.accounts ? monthly : '<div class="empty">Not available right now.</div>')
+    + sec('How first games end', 'New players&rsquo; very first game: did they play it through, or walk out &ndash; and when?', 'live', firstHtml, firstIns)
     + grid2(sec('First game mode', 'What new players started with, and how it went.', 'live',
       modeRows.length ? table(['Started with', 'New users', 'Finished 1st game', 'Back in 7 days'], modeRows) : notYet(M, 'no new players with a recorded first game yet')),
     sec('Tutorial', 'Did the guided tutorial help new players?', 'live',
@@ -1375,7 +1398,8 @@ function rUsersFirst(M, L) {
     body,
     notes: '<b>First-time visitor</b> = the first time the game was opened on a phone or in a browser (the date its sign-in account was made). '
       + '<b>Finished their first game</b> = played it to the end (won, or knocked out). <b>Back in 7 days</b> = played again on another day within a week of the first game; '
-      + 'in the tables below only players whose first game is a week old count. * = still filling. <b>From go-live</b> sections start filling from the deploy day.',
+      + 'in the tables below only players whose first game is a week old count. * = still filling. <b>From go-live</b> sections start filling from the deploy day. '
+      + 'Before 22 Nov a new player knocked out by the bots who then left was saved as &ldquo;left part-way&rdquo;, so <b>Finished their first game</b> reads low for earlier months.',
   });
 }
 
@@ -1545,7 +1569,7 @@ function rUsersEngagement(M, L) {
     if (!mm || nm > cur) return null;
     const nx = pm.get(nm) || new Map();
     const base = [...mm.entries()].filter(([, x]) => x.multi === multi);
-    return base.length ? { r: base.filter(([u]) => nx.has(u)).length / base.length, partial: nm === cur } : null;
+    return base.length ? { r: base.filter(([u]) => nx.has(u)).length / base.length, partial: nm === cur, n: base.length } : null;
   };
   const dayDocs = (months) => M.dayKeys.filter((k) => months.includes(k.slice(0, 7))).map((k) => M.days.get(k) || {});
   const invitedIn = (months) => {
@@ -1568,11 +1592,14 @@ function rUsersEngagement(M, L) {
       return s.n ? fmtNum(inv / s.n, 2) : null;
     }],
   ]);
-  const so = stayBy(lcM, true);
-  const sb = stayBy(lcM, false);
-  const socIns = so && sb ? (so.r > sb.r
-    ? `Players who play with other people come back more often (${fmtPct(so.r)} vs ${fmtPct(sb.r)}) &rarr; make inviting friends easy.`
-    : `Bots-only players come back as often as social players (${fmtPct(sb.r)} vs ${fmtPct(so.r)}).`) : null;
+  const fullM = shiftMonth(cur, -2);
+  const so = stayBy(fullM, true);
+  const sb = stayBy(fullM, false);
+  const span = `${monShort(fullM)} &rarr; ${monShort(shiftMonth(fullM, 1))}`;
+  const socIns = so && sb && so.n >= 10 && sb.n >= 10 ? (so.r > sb.r
+    ? `Players who play with other people come back more often: ${fmtPct(so.r)} of ${so.n} vs ${fmtPct(sb.r)} of ${sb.n} bots-only players (${span}) &rarr; make inviting friends easy.`
+    : `Bots-only players come back as often as social players: ${fmtPct(sb.r)} of ${sb.n} vs ${fmtPct(so.r)} of ${so.n} (${span}).`)
+    : (so && sb ? `Too few bots-only players to compare yet (${sb.n} in ${monShort(fullM)}).` : null);
   const tp = new Map();
   for (const r of rowsIn(M, last30(M))) {
     let x = tp.get(r.uid);
