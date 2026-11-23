@@ -1380,9 +1380,33 @@ function rUsersFirst(M, L) {
     const early = cnt(walked, ({ pl }) => pl.rounds <= 2);
     if (n >= 10 && early / n >= 0.2) firstIns = `${fmtPct(early / n)} of new players walk out of their first game within 2 rounds &ndash; make the first game shorter and easier (max score 100, easy bots).`;
   }
+  // The new tutorial's round 2: every decision, by rule, right or wrong.
+  const RULES = [['match', 'Match the open card (free)'], ['group', 'Throw same cards together'], ['plain', 'Throw your highest card'],
+    ['chain2', 'Answer a 2 with a 2'], ['call', 'Call Least Count at 5 or less']];
+  const tm = {};
+  for (const k of M.dayKeys) {
+    const mv = ((M.days.get(k) || {}).tutorial || {}).moves;
+    if (!mv || typeof mv !== 'object') continue;
+    for (const [code, x] of Object.entries(mv)) {
+      const t = tm[code] || (tm[code] = { right: 0, wrong: 0 });
+      t.right += Number(x && x.right) || 0;
+      t.wrong += Number(x && x.wrong) || 0;
+    }
+  }
+  const practiceRows = RULES.filter(([code]) => tm[code] && tm[code].right + tm[code].wrong > 0).map(([code, label]) => {
+    const t = tm[code];
+    const n = t.right + t.wrong;
+    return [label, fmtInt(n), fmtInt(t.right), pctSpan(t.right / n)];
+  });
+  const weakest = RULES.filter(([code]) => tm[code] && tm[code].right + tm[code].wrong >= 5)
+    .map(([code, label]) => [label, tm[code].right / (tm[code].right + tm[code].wrong)]).sort((a, b) => a[1] - b[1])[0];
+  const practiceIns = weakest && weakest[1] < 0.7
+    ? `Players get &ldquo;${weakest[0]}&rdquo; right only ${fmtPct(weakest[1])} of the time &ndash; make that lesson clearer in round 1.` : null;
   const body = sec(`From first visit to regular player &ndash; ${monthLabel(lcM)}`, 'Every step a new person goes through, and how many make it.', 'now', top, ins1)
     + sec('Each month', 'The same steps, month by month (by the month of the first visit).', 'now', M.accounts ? monthly : '<div class="empty">Not available right now.</div>')
     + sec('How first games end', 'New players&rsquo; very first game: did they play it through, or walk out &ndash; and when?', 'live', firstHtml, firstIns)
+    + sec('Tutorial practice &ndash; do they understand the rules?', 'In the new tutorial&rsquo;s round 2 players decide alone. Each situation, by the rule it tests: how often they made the best move.', 'live',
+      practiceRows.length ? table(['Rule', 'Times', 'Right', 'Right %'], practiceRows) : notYet(M, 'nobody has played the new tutorial yet'), practiceIns)
     + grid2(sec('First game mode', 'What new players started with, and how it went.', 'live',
       modeRows.length ? table(['Started with', 'New users', 'Finished 1st game', 'Back in 7 days'], modeRows) : notYet(M, 'no new players with a recorded first game yet')),
     sec('Tutorial', 'Did the guided tutorial help new players?', 'live',
